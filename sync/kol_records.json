@@ -1,8 +1,22 @@
 {
-  "exported_at": "2026-08-11 14:37:37",
-  "total_records": 99,
+  "exported_at": "2026-08-12 11:10:17",
+  "total_records": 100,
   "kol_count": 2,
   "kol_records": [
+    {
+      "id": 100,
+      "kol_name": "wu2198",
+      "platform": "微博",
+      "content": "【8月11日盘中】下午两市明显回软，说明B反过程中，缺乏资金追高。预计明天还有整理，明白666",
+      "extracted_viewpoints": "",
+      "related_assets": "上证指数,创业板指,沪深300ETF,创业板ETF",
+      "record_date": "2026-08-11 14:59",
+      "created_at": "2026-08-12 11:09:14",
+      "position_size": 3,
+      "position_action": "持有",
+      "position_note": "两市回软=缺乏追高资金，预计明天还有整理",
+      "image_path": ""
+    },
     {
       "id": 99,
       "kol_name": "wu2198",
@@ -14,7 +28,8 @@
       "created_at": "2026-08-11 14:37:35",
       "position_size": 3,
       "position_action": "持有",
-      "position_note": "VIP：B反风控线3741-3767连线，破则新调整"
+      "position_note": "VIP：B反风控线3741-3767连线，破则新调整",
+      "image_path": "assets/wu2198_20260811_1433_vip.jpg"
     },
     {
       "id": 98,
@@ -27,7 +42,8 @@
       "created_at": "2026-08-11 14:37:35",
       "position_size": 3,
       "position_action": "持有",
-      "position_note": "3767→3967反击200点，回撤合理"
+      "position_note": "3767→3967反击200点，回撤合理",
+      "image_path": ""
     },
     {
       "id": 97,
@@ -40,7 +56,8 @@
       "created_at": "2026-08-11 14:37:35",
       "position_size": 3,
       "position_action": "持有",
-      "position_note": "大盘5连阳后回撤合理，B反趋势没坏"
+      "position_note": "大盘5连阳后回撤合理，B反趋势没坏",
+      "image_path": ""
     },
     {
       "id": 96,
@@ -53,7 +70,8 @@
       "created_at": "2026-08-11 14:37:35",
       "position_size": 3,
       "position_action": "持有",
-      "position_note": "宇树科技自研率超90%，关注机器人产业链"
+      "position_note": "宇树科技自研率超90%，关注机器人产业链",
+      "image_path": ""
     },
     {
       "id": 95,
@@ -66,7 +84,8 @@
       "created_at": "2026-08-11 14:37:35",
       "position_size": 3,
       "position_action": "持有",
-      "position_note": "创业板下午3550-3600取向，收复3590则明天看3686"
+      "position_note": "创业板下午3550-3600取向，收复3590则明天看3686",
+      "image_path": ""
     },
     {
       "id": 94,
@@ -79,7 +98,8 @@
       "created_at": "2026-08-11 11:21:29",
       "position_size": 3,
       "position_action": "持有",
-      "position_note": "等待3590有效收复后才考虑加仓，只做确定性行情"
+      "position_note": "等待3590有效收复后才考虑加仓，只做确定性行情",
+      "image_path": ""
     },
     {
       "id": 93,
@@ -92,7 +112,8 @@
       "created_at": "2026-08-11 11:21:29",
       "position_size": 3,
       "position_action": "持有",
-      "position_note": "创业板多空争夺3590关键位"
+      "position_note": "创业板多空争夺3590关键位",
+      "image_path": ""
     },
     {
       "id": 92,
@@ -105,7 +126,8 @@
       "created_at": "2026-08-11 11:21:29",
       "position_size": 3,
       "position_action": "持有",
-      "position_note": "科技局部上涨：存储/CPO/电容/交换机"
+      "position_note": "科技局部上涨：存储/CPO/电容/交换机",
+      "image_path": ""
     },
     {
       "id": 91,
@@ -118,7 +140,8 @@
       "created_at": "2026-08-11 11:21:29",
       "position_size": 3,
       "position_action": "持有",
-      "position_note": "创业板收复3590后向上拓展空间"
+      "position_note": "创业板收复3590后向上拓展空间",
+      "image_path": ""
     },
     {
       "id": 87,
@@ -131,7 +154,8 @@
       "created_at": "2026-08-11 09:42:30",
       "position_size": 3,
       "position_action": "持有",
-      "position_note": "3米持有，医药轮动：创新药→生物制品→中药/化学制药/胰岛素"
+      "position_note": "3米持有，医药轮动：创新药→生物制品→中药/化学制药/胰岛素",
+      "image_path": ""
     },
     {
       "id": 90,
@@ -144,7 +168,8 @@
       "created_at": "2026-08-11 11:21:29",
       "position_size": 3,
       "position_action": "持有",
-      "position_note": "医药全面扩散：中药+生物制品+化学制药"
+      "position_note": "医药全面扩散：中药+生物制品+化学制药",
+      "image_path": ""
     },
     {
       "id": 89,
@@ -157,7 +182,8 @@
       "created_at": "2026-08-11 11:21:29",
       "position_size": 3,
       "position_action": "持有",
-      "position_note": "AI合成生物赛道，已有连续2个20cm龙头"
+      "position_note": "AI合成生物赛道，已有连续2个20cm龙头",
+      "image_path": ""
     },
     {
       "id": 88,
@@ -170,7 +196,8 @@
       "created_at": "2026-08-11 11:21:29",
       "position_size": 3,
       "position_action": "持有",
-      "position_note": "MLCC+电容板块涨幅领先"
+      "position_note": "MLCC+电容板块涨幅领先",
+      "image_path": ""
     },
     {
       "id": 86,
@@ -183,7 +210,8 @@
       "created_at": "2026-08-11 09:29:30",
       "position_size": 3,
       "position_action": "持有",
-      "position_note": "3米持有，大盘看3982/3996，区间3922-3986"
+      "position_note": "3米持有，大盘看3982/3996，区间3922-3986",
+      "image_path": ""
     },
     {
       "id": 85,
@@ -196,7 +224,8 @@
       "created_at": "2026-08-11 09:14:01",
       "position_size": 3,
       "position_action": "持有",
-      "position_note": "大盘收3966.59收复3856和3956，明天看3982/3996"
+      "position_note": "大盘收3966.59收复3856和3956，明天看3982/3996",
+      "image_path": ""
     },
     {
       "id": 84,
@@ -209,7 +238,8 @@
       "created_at": "2026-08-11 09:14:01",
       "position_size": 3,
       "position_action": "持有",
-      "position_note": "电池材料六氟磷酸锂领涨"
+      "position_note": "电池材料六氟磷酸锂领涨",
+      "image_path": ""
     },
     {
       "id": 83,
@@ -222,7 +252,8 @@
       "created_at": "2026-08-11 09:14:01",
       "position_size": 3,
       "position_action": "持有",
-      "position_note": "下午关注3956多空争夺"
+      "position_note": "下午关注3956多空争夺",
+      "image_path": ""
     },
     {
       "id": 82,
@@ -235,7 +266,8 @@
       "created_at": "2026-08-11 09:14:01",
       "position_size": 3,
       "position_action": "持有",
-      "position_note": "B反是过程不是三两天，选热点是关键"
+      "position_note": "B反是过程不是三两天，选热点是关键",
+      "image_path": ""
     },
     {
       "id": 81,
@@ -248,7 +280,8 @@
       "created_at": "2026-08-11 09:14:01",
       "position_size": 3,
       "position_action": "持有",
-      "position_note": "电容材料领涨电容调整，关注风字头"
+      "position_note": "电容材料领涨电容调整，关注风字头",
+      "image_path": ""
     },
     {
       "id": 80,
@@ -261,7 +294,8 @@
       "created_at": "2026-08-11 09:14:01",
       "position_size": 3,
       "position_action": "持有",
-      "position_note": "创业板和科创50领跌，风格分化"
+      "position_note": "创业板和科创50领跌，风格分化",
+      "image_path": ""
     },
     {
       "id": 79,
@@ -274,7 +308,8 @@
       "created_at": "2026-08-11 09:14:01",
       "position_size": 3,
       "position_action": "持有",
-      "position_note": "多空激烈争夺3956关键位"
+      "position_note": "多空激烈争夺3956关键位",
+      "image_path": ""
     },
     {
       "id": 78,
@@ -287,7 +322,8 @@
       "created_at": "2026-08-11 09:14:01",
       "position_size": 3,
       "position_action": "持有",
-      "position_note": "老登股推动指数试3966.36，多空争夺3956"
+      "position_note": "老登股推动指数试3966.36，多空争夺3956",
+      "image_path": ""
     },
     {
       "id": 77,
@@ -300,7 +336,8 @@
       "created_at": "2026-08-11 09:14:01",
       "position_size": 3,
       "position_action": "持有",
-      "position_note": "生物制品2只20cm连板，化学制药4只连板，赚钱效应点燃"
+      "position_note": "生物制品2只20cm连板，化学制药4只连板，赚钱效应点燃",
+      "image_path": ""
     },
     {
       "id": 76,
@@ -313,7 +350,8 @@
       "created_at": "2026-08-11 09:14:01",
       "position_size": 3,
       "position_action": "持有",
-      "position_note": "大盘收复3956后下一目标3982/3996"
+      "position_note": "大盘收复3956后下一目标3982/3996",
+      "image_path": ""
     },
     {
       "id": 75,
@@ -326,7 +364,8 @@
       "created_at": "2026-08-11 09:14:01",
       "position_size": 3,
       "position_action": "持有",
-      "position_note": "创新药冲高，生物制品连拉2个20cm"
+      "position_note": "创新药冲高，生物制品连拉2个20cm",
+      "image_path": ""
     },
     {
       "id": 74,
@@ -339,7 +378,8 @@
       "created_at": "2026-08-11 09:14:01",
       "position_size": 3,
       "position_action": "持有",
-      "position_note": "碳酸锂技术面构筑反弹"
+      "position_note": "碳酸锂技术面构筑反弹",
+      "image_path": ""
     },
     {
       "id": 73,
@@ -352,7 +392,8 @@
       "created_at": "2026-08-11 09:14:01",
       "position_size": 3,
       "position_action": "持有",
-      "position_note": "延续B反看3956，支撑线3741-3767连线为风控线"
+      "position_note": "延续B反看3956，支撑线3741-3767连线为风控线",
+      "image_path": ""
     },
     {
       "id": 72,
@@ -365,20 +406,8 @@
       "created_at": "2026-08-11 09:14:01",
       "position_size": 3,
       "position_action": "持有",
-      "position_note": "日韩股市上涨，外围偏暖"
-    },
-    {
-      "id": 71,
-      "kol_name": "wu2198",
-      "platform": "微博",
-      "content": "【8月7日收盘】【仅TA的真爱粉可见】按日线图看，符合前面3741点及3767二次反击点，所给大家分析的B反预期。",
-      "extracted_viewpoints": "",
-      "related_assets": "上证指数,创业板指,沪深300ETF",
-      "record_date": "2026-08-07 15:25",
-      "created_at": "2026-08-11 09:14:01",
-      "position_size": 3,
-      "position_action": "持有",
-      "position_note": "日线符合3741/3767二次反击B反预期"
+      "position_note": "日韩股市上涨，外围偏暖",
+      "image_path": ""
     },
     {
       "id": 70,
@@ -391,7 +420,22 @@
       "created_at": "2026-08-11 09:14:01",
       "position_size": 3,
       "position_action": "持有",
-      "position_note": "创业板盘中试3613.87但收3563未收复3590，B反结构未变"
+      "position_note": "创业板盘中试3613.87但收3563未收复3590，B反结构未变",
+      "image_path": ""
+    },
+    {
+      "id": 71,
+      "kol_name": "wu2198",
+      "platform": "微博",
+      "content": "【8月7日收盘】【仅TA的真爱粉可见】按日线图看，符合前面3741点及3767二次反击点，所给大家分析的B反预期。",
+      "extracted_viewpoints": "",
+      "related_assets": "上证指数,创业板指,沪深300ETF",
+      "record_date": "2026-08-07 15:25",
+      "created_at": "2026-08-11 09:14:01",
+      "position_size": 3,
+      "position_action": "持有",
+      "position_note": "日线符合3741/3767二次反击B反预期",
+      "image_path": ""
     },
     {
       "id": 69,
@@ -404,7 +448,8 @@
       "created_at": "2026-08-11 09:14:01",
       "position_size": 3,
       "position_action": "持有",
-      "position_note": "建议关注生物制品板块日线周线"
+      "position_note": "建议关注生物制品板块日线周线",
+      "image_path": ""
     },
     {
       "id": 68,
@@ -417,7 +462,8 @@
       "created_at": "2026-08-11 09:14:01",
       "position_size": 3,
       "position_action": "持有",
-      "position_note": "挂单未成尾盘不动，半仓反复折腾"
+      "position_note": "挂单未成尾盘不动，半仓反复折腾",
+      "image_path": ""
     },
     {
       "id": 67,
@@ -430,7 +476,8 @@
       "created_at": "2026-08-11 09:14:01",
       "position_size": 3,
       "position_action": "持有",
-      "position_note": "大盘盘中试3938.45，继续看3956"
+      "position_note": "大盘盘中试3938.45，继续看3956",
+      "image_path": ""
     },
     {
       "id": 66,
@@ -443,7 +490,8 @@
       "created_at": "2026-08-11 09:14:01",
       "position_size": 3,
       "position_action": "持有",
-      "position_note": "老登股思路：先药后酒，维持6月底判断"
+      "position_note": "老登股思路：先药后酒，维持6月底判断",
+      "image_path": ""
     },
     {
       "id": 65,
@@ -456,7 +504,8 @@
       "created_at": "2026-08-11 09:14:01",
       "position_size": 3,
       "position_action": "持有",
-      "position_note": "创新药涨停潮，关注生物制品板块"
+      "position_note": "创新药涨停潮，关注生物制品板块",
+      "image_path": ""
     },
     {
       "id": 64,
@@ -469,7 +518,8 @@
       "created_at": "2026-08-11 09:14:01",
       "position_size": 3,
       "position_action": "持有",
-      "position_note": "MLCC龙头反弹63%，电子布龙头4天反弹45%"
+      "position_note": "MLCC龙头反弹63%，电子布龙头4天反弹45%",
+      "image_path": ""
     },
     {
       "id": 52,
@@ -482,7 +532,8 @@
       "created_at": "2026-08-06 14:20:14",
       "position_size": 3,
       "position_action": "持有",
-      "position_note": "市场调整压力加大，3米底仓不动，观察3486能否守住"
+      "position_note": "市场调整压力加大，3米底仓不动，观察3486能否守住",
+      "image_path": ""
     },
     {
       "id": 63,
@@ -495,7 +546,8 @@
       "created_at": "2026-08-11 09:14:01",
       "position_size": 3,
       "position_action": "持有",
-      "position_note": "大盘看3956，创业板看3686"
+      "position_note": "大盘看3956，创业板看3686",
+      "image_path": ""
     },
     {
       "id": 62,
@@ -508,7 +560,8 @@
       "created_at": "2026-08-11 09:14:01",
       "position_size": 3,
       "position_action": "持有",
-      "position_note": "电池材料连续反弹"
+      "position_note": "电池材料连续反弹",
+      "image_path": ""
     },
     {
       "id": 61,
@@ -521,7 +574,8 @@
       "created_at": "2026-08-11 09:14:01",
       "position_size": 3,
       "position_action": "减仓(兑现)",
-      "position_note": "兑现2米合计约11%，降至3米，半仓反复折腾"
+      "position_note": "兑现2米合计约11%，降至3米，半仓反复折腾",
+      "image_path": ""
     },
     {
       "id": 60,
@@ -534,7 +588,8 @@
       "created_at": "2026-08-11 09:14:01",
       "position_size": 3,
       "position_action": "持有",
-      "position_note": "3160抄底→收复3590→上看3686"
+      "position_note": "3160抄底→收复3590→上看3686",
+      "image_path": ""
     },
     {
       "id": 59,
@@ -547,7 +602,8 @@
       "created_at": "2026-08-11 09:14:01",
       "position_size": 3,
       "position_action": "持有",
-      "position_note": "存储芯片急跌50-60%后放量反弹"
+      "position_note": "存储芯片急跌50-60%后放量反弹",
+      "image_path": ""
     },
     {
       "id": 58,
@@ -560,7 +616,8 @@
       "created_at": "2026-08-11 09:14:01",
       "position_size": 3,
       "position_action": "持有",
-      "position_note": "大盘3876-3956区间，关注CPO持续力"
+      "position_note": "大盘3876-3956区间，关注CPO持续力",
+      "image_path": ""
     },
     {
       "id": 57,
@@ -573,7 +630,8 @@
       "created_at": "2026-08-11 09:14:01",
       "position_size": 3,
       "position_action": "持有",
-      "position_note": "大盘上午收3919，下午方向不变"
+      "position_note": "大盘上午收3919，下午方向不变",
+      "image_path": ""
     },
     {
       "id": 56,
@@ -586,7 +644,8 @@
       "created_at": "2026-08-11 09:14:01",
       "position_size": 3,
       "position_action": "持有",
-      "position_note": "创业板3590前有反复，B反趋势不变"
+      "position_note": "创业板3590前有反复，B反趋势不变",
+      "image_path": ""
     },
     {
       "id": 55,
@@ -599,7 +658,8 @@
       "created_at": "2026-08-11 09:14:01",
       "position_size": 3,
       "position_action": "持有",
-      "position_note": "B反判断得到市场验证"
+      "position_note": "B反判断得到市场验证",
+      "image_path": ""
     },
     {
       "id": 54,
@@ -612,7 +672,8 @@
       "created_at": "2026-08-11 09:14:01",
       "position_size": 3,
       "position_action": "持有",
-      "position_note": "创业板等待收复3590向3686扩展"
+      "position_note": "创业板等待收复3590向3686扩展",
+      "image_path": ""
     },
     {
       "id": 53,
@@ -625,7 +686,8 @@
       "created_at": "2026-08-11 09:14:01",
       "position_size": 3,
       "position_action": "持有",
-      "position_note": "关注CPO、存储芯片、创新药力度"
+      "position_note": "关注CPO、存储芯片、创新药力度",
+      "image_path": ""
     },
     {
       "id": 12,
@@ -638,7 +700,8 @@
       "created_at": "2026-08-06 10:38:03",
       "position_size": 3,
       "position_action": "持有",
-      "position_note": "3米持有，今日重点是创业板指突破3590"
+      "position_note": "3米持有，今日重点是创业板指突破3590",
+      "image_path": ""
     },
     {
       "id": 11,
@@ -651,7 +714,8 @@
       "created_at": "2026-08-06 10:20:51",
       "position_size": 3,
       "position_action": "持有",
-      "position_note": "3米持有，大盘收复3886，下一目标3956"
+      "position_note": "3米持有，大盘收复3886，下一目标3956",
+      "image_path": ""
     },
     {
       "id": 10,
@@ -664,7 +728,8 @@
       "created_at": "2026-08-06 10:13:41",
       "position_size": 3,
       "position_action": "持有",
-      "position_note": "3米持有，CPO板块新旧切换，新龙红盘"
+      "position_note": "3米持有，CPO板块新旧切换，新龙红盘",
+      "image_path": ""
     },
     {
       "id": 9,
@@ -677,7 +742,8 @@
       "created_at": "2026-08-06 10:04:15",
       "position_size": 3,
       "position_action": "持有",
-      "position_note": "3米持有，B反趋势不变但过程有波折"
+      "position_note": "3米持有，B反趋势不变但过程有波折",
+      "image_path": ""
     },
     {
       "id": 8,
@@ -690,7 +756,8 @@
       "created_at": "2026-08-06 09:44:47",
       "position_size": 3,
       "position_action": "持有",
-      "position_note": "3米持有，关注电池材料个别转红"
+      "position_note": "3米持有，关注电池材料个别转红",
+      "image_path": ""
     },
     {
       "id": 7,
@@ -703,7 +770,8 @@
       "created_at": "2026-08-06 09:44:10",
       "position_size": 3,
       "position_action": "持有",
-      "position_note": "3米持有，强调放量才能成龙头，无量会被砸"
+      "position_note": "3米持有，强调放量才能成龙头，无量会被砸",
+      "image_path": ""
     },
     {
       "id": 51,
@@ -716,7 +784,8 @@
       "created_at": "2026-08-06 11:48:13",
       "position_size": null,
       "position_action": "",
-      "position_note": ""
+      "position_note": "",
+      "image_path": ""
     },
     {
       "id": 6,
@@ -729,7 +798,8 @@
       "created_at": "2026-08-06 09:41:35",
       "position_size": 3,
       "position_action": "持有",
-      "position_note": "3米半仓，支撑上移至3336/3300，关注大盘3886收复"
+      "position_note": "3米半仓，支撑上移至3336/3300，关注大盘3886收复",
+      "image_path": ""
     },
     {
       "id": 5,
@@ -742,7 +812,8 @@
       "created_at": "2026-08-06 09:04:17",
       "position_size": 3,
       "position_action": "减仓",
-      "position_note": "从6米减至3米，半仓反复折腾"
+      "position_note": "从6米减至3米，半仓反复折腾",
+      "image_path": ""
     },
     {
       "id": 50,
@@ -755,7 +826,8 @@
       "created_at": "2026-08-06 11:48:13",
       "position_size": null,
       "position_action": "",
-      "position_note": ""
+      "position_note": "",
+      "image_path": ""
     },
     {
       "id": 49,
@@ -768,7 +840,8 @@
       "created_at": "2026-08-06 11:48:13",
       "position_size": 3,
       "position_action": "持有",
-      "position_note": "维持3米底仓"
+      "position_note": "维持3米底仓",
+      "image_path": ""
     },
     {
       "id": 48,
@@ -781,7 +854,8 @@
       "created_at": "2026-08-06 11:48:13",
       "position_size": null,
       "position_action": "",
-      "position_note": ""
+      "position_note": "",
+      "image_path": ""
     },
     {
       "id": 47,
@@ -794,7 +868,8 @@
       "created_at": "2026-08-06 11:48:13",
       "position_size": null,
       "position_action": "",
-      "position_note": ""
+      "position_note": "",
+      "image_path": ""
     },
     {
       "id": 46,
@@ -807,7 +882,8 @@
       "created_at": "2026-08-06 11:48:13",
       "position_size": 3,
       "position_action": "减仓",
-      "position_note": "兑现滞涨科技+SoC，关注电池"
+      "position_note": "兑现滞涨科技+SoC，关注电池",
+      "image_path": ""
     },
     {
       "id": 45,
@@ -820,7 +896,8 @@
       "created_at": "2026-08-06 11:48:13",
       "position_size": null,
       "position_action": "",
-      "position_note": ""
+      "position_note": "",
+      "image_path": ""
     },
     {
       "id": 44,
@@ -833,7 +910,8 @@
       "created_at": "2026-08-06 11:48:13",
       "position_size": null,
       "position_action": "",
-      "position_note": ""
+      "position_note": "",
+      "image_path": ""
     },
     {
       "id": 43,
@@ -846,7 +924,8 @@
       "created_at": "2026-08-06 11:48:13",
       "position_size": null,
       "position_action": "",
-      "position_note": ""
+      "position_note": "",
+      "image_path": ""
     },
     {
       "id": 42,
@@ -859,7 +938,8 @@
       "created_at": "2026-08-06 11:48:13",
       "position_size": null,
       "position_action": "",
-      "position_note": ""
+      "position_note": "",
+      "image_path": ""
     },
     {
       "id": 41,
@@ -872,7 +952,8 @@
       "created_at": "2026-08-06 11:48:13",
       "position_size": null,
       "position_action": "",
-      "position_note": ""
+      "position_note": "",
+      "image_path": ""
     },
     {
       "id": 40,
@@ -885,7 +966,8 @@
       "created_at": "2026-08-06 11:48:13",
       "position_size": 5,
       "position_action": "减仓",
-      "position_note": "兑现存储芯片"
+      "position_note": "兑现存储芯片",
+      "image_path": ""
     },
     {
       "id": 39,
@@ -898,7 +980,8 @@
       "created_at": "2026-08-06 11:48:13",
       "position_size": null,
       "position_action": "",
-      "position_note": ""
+      "position_note": "",
+      "image_path": ""
     },
     {
       "id": 38,
@@ -911,7 +994,8 @@
       "created_at": "2026-08-06 11:48:13",
       "position_size": null,
       "position_action": "",
-      "position_note": ""
+      "position_note": "",
+      "image_path": ""
     },
     {
       "id": 4,
@@ -924,7 +1008,8 @@
       "created_at": "2026-08-05 16:51:31",
       "position_size": 0,
       "position_action": "",
-      "position_note": ""
+      "position_note": "",
+      "image_path": ""
     },
     {
       "id": 37,
@@ -937,7 +1022,8 @@
       "created_at": "2026-08-06 11:48:13",
       "position_size": 6,
       "position_action": "持有",
-      "position_note": "维持6米"
+      "position_note": "维持6米",
+      "image_path": ""
     },
     {
       "id": 36,
@@ -950,7 +1036,8 @@
       "created_at": "2026-08-06 11:48:13",
       "position_size": null,
       "position_action": "",
-      "position_note": ""
+      "position_note": "",
+      "image_path": ""
     },
     {
       "id": 35,
@@ -963,7 +1050,8 @@
       "created_at": "2026-08-06 11:48:13",
       "position_size": null,
       "position_action": "",
-      "position_note": ""
+      "position_note": "",
+      "image_path": ""
     },
     {
       "id": 34,
@@ -976,7 +1064,8 @@
       "created_at": "2026-08-06 11:48:13",
       "position_size": null,
       "position_action": "",
-      "position_note": ""
+      "position_note": "",
+      "image_path": ""
     },
     {
       "id": 33,
@@ -989,7 +1078,8 @@
       "created_at": "2026-08-06 11:48:13",
       "position_size": null,
       "position_action": "",
-      "position_note": ""
+      "position_note": "",
+      "image_path": ""
     },
     {
       "id": 32,
@@ -1002,7 +1092,8 @@
       "created_at": "2026-08-06 11:48:13",
       "position_size": null,
       "position_action": "",
-      "position_note": ""
+      "position_note": "",
+      "image_path": ""
     },
     {
       "id": 31,
@@ -1015,7 +1106,8 @@
       "created_at": "2026-08-06 11:48:13",
       "position_size": null,
       "position_action": "",
-      "position_note": ""
+      "position_note": "",
+      "image_path": ""
     },
     {
       "id": 30,
@@ -1028,7 +1120,8 @@
       "created_at": "2026-08-06 11:48:13",
       "position_size": null,
       "position_action": "",
-      "position_note": ""
+      "position_note": "",
+      "image_path": ""
     },
     {
       "id": 29,
@@ -1041,7 +1134,8 @@
       "created_at": "2026-08-06 11:48:13",
       "position_size": 6,
       "position_action": "加仓",
-      "position_note": "SoC+滞涨科技+存储"
+      "position_note": "SoC+滞涨科技+存储",
+      "image_path": ""
     },
     {
       "id": 28,
@@ -1054,7 +1148,8 @@
       "created_at": "2026-08-06 11:48:13",
       "position_size": null,
       "position_action": "",
-      "position_note": ""
+      "position_note": "",
+      "image_path": ""
     },
     {
       "id": 27,
@@ -1067,7 +1162,8 @@
       "created_at": "2026-08-06 11:48:13",
       "position_size": null,
       "position_action": "",
-      "position_note": ""
+      "position_note": "",
+      "image_path": ""
     },
     {
       "id": 26,
@@ -1080,7 +1176,8 @@
       "created_at": "2026-08-06 11:48:13",
       "position_size": null,
       "position_action": "",
-      "position_note": ""
+      "position_note": "",
+      "image_path": ""
     },
     {
       "id": 25,
@@ -1093,7 +1190,8 @@
       "created_at": "2026-08-06 11:48:13",
       "position_size": null,
       "position_action": "",
-      "position_note": ""
+      "position_note": "",
+      "image_path": ""
     },
     {
       "id": 24,
@@ -1106,20 +1204,8 @@
       "created_at": "2026-08-06 11:48:13",
       "position_size": null,
       "position_action": "",
-      "position_note": ""
-    },
-    {
-      "id": 3,
-      "kol_name": "wu2198",
-      "platform": "微博/公众号",
-      "content": "【8月4日核心观点】1）大盘指数观察3786-3856之间取向，大趋势调整格局未变，短线积累反弹力量。2）创业板从3280反击，需收复3400关口，收复3456后B反会明朗，目标3590方向。3）个人持仓6米（3滞涨科技，1存储，2米SoC），A杀后搏B反弹。4）交换机板块主力预计会自救。5）创业板指数自3280反击到3510，构筑B反迹象明显。6）市场存量资金在折腾。7）创业板收3488.97，收复3486，B反弹结构明朗很多。",
-      "extracted_viewpoints": "【8月4日核心观点】1）大盘指数观察3786-3856之间取向，大趋势调整格局未变，短线积累反弹力量\n2）创业板从3280反击，需收复3400关口，收复3456后B反会明朗，目标3590方向\n3）个人持仓6米（3滞涨科技，1存储，2米SoC），A杀后搏B反弹\n4）交换机板块主力预计会自救\n5）创业板指数自3280反击到3510，构筑B反迹象明显\n6）市场存量资金在折腾\n7）创业板收3488.97，收复3486，B反弹结构明朗很多",
-      "related_assets": "上证指数,创业板指,芯片ETF,通信ETF,计算机ETF",
-      "record_date": "2026-08-04",
-      "created_at": "2026-08-05 16:51:10",
-      "position_size": 0,
-      "position_action": "",
-      "position_note": ""
+      "position_note": "",
+      "image_path": ""
     },
     {
       "id": 1,
@@ -1132,7 +1218,22 @@
       "created_at": "2026-08-05 16:40:53",
       "position_size": 0,
       "position_action": "",
-      "position_note": ""
+      "position_note": "",
+      "image_path": ""
+    },
+    {
+      "id": 3,
+      "kol_name": "wu2198",
+      "platform": "微博/公众号",
+      "content": "【8月4日核心观点】1）大盘指数观察3786-3856之间取向，大趋势调整格局未变，短线积累反弹力量。2）创业板从3280反击，需收复3400关口，收复3456后B反会明朗，目标3590方向。3）个人持仓6米（3滞涨科技，1存储，2米SoC），A杀后搏B反弹。4）交换机板块主力预计会自救。5）创业板指数自3280反击到3510，构筑B反迹象明显。6）市场存量资金在折腾。7）创业板收3488.97，收复3486，B反弹结构明朗很多。",
+      "extracted_viewpoints": "【8月4日核心观点】1）大盘指数观察3786-3856之间取向，大趋势调整格局未变，短线积累反弹力量\n2）创业板从3280反击，需收复3400关口，收复3456后B反会明朗，目标3590方向\n3）个人持仓6米（3滞涨科技，1存储，2米SoC），A杀后搏B反弹\n4）交换机板块主力预计会自救\n5）创业板指数自3280反击到3510，构筑B反迹象明显\n6）市场存量资金在折腾\n7）创业板收3488.97，收复3486，B反弹结构明朗很多",
+      "related_assets": "上证指数,创业板指,芯片ETF,通信ETF,计算机ETF",
+      "record_date": "2026-08-04",
+      "created_at": "2026-08-05 16:51:10",
+      "position_size": 0,
+      "position_action": "",
+      "position_note": "",
+      "image_path": ""
     },
     {
       "id": 23,
@@ -1145,7 +1246,8 @@
       "created_at": "2026-08-06 11:48:13",
       "position_size": null,
       "position_action": "",
-      "position_note": ""
+      "position_note": "",
+      "image_path": ""
     },
     {
       "id": 22,
@@ -1158,7 +1260,8 @@
       "created_at": "2026-08-06 11:48:13",
       "position_size": null,
       "position_action": "",
-      "position_note": ""
+      "position_note": "",
+      "image_path": ""
     },
     {
       "id": 21,
@@ -1171,7 +1274,8 @@
       "created_at": "2026-08-06 11:48:13",
       "position_size": null,
       "position_action": "",
-      "position_note": ""
+      "position_note": "",
+      "image_path": ""
     },
     {
       "id": 20,
@@ -1184,7 +1288,8 @@
       "created_at": "2026-08-06 11:48:13",
       "position_size": null,
       "position_action": "",
-      "position_note": ""
+      "position_note": "",
+      "image_path": ""
     },
     {
       "id": 19,
@@ -1197,7 +1302,8 @@
       "created_at": "2026-08-06 11:48:13",
       "position_size": null,
       "position_action": "",
-      "position_note": ""
+      "position_note": "",
+      "image_path": ""
     },
     {
       "id": 18,
@@ -1210,7 +1316,8 @@
       "created_at": "2026-08-06 11:48:13",
       "position_size": null,
       "position_action": "",
-      "position_note": ""
+      "position_note": "",
+      "image_path": ""
     },
     {
       "id": 17,
@@ -1223,7 +1330,8 @@
       "created_at": "2026-08-06 11:48:13",
       "position_size": null,
       "position_action": "",
-      "position_note": ""
+      "position_note": "",
+      "image_path": ""
     },
     {
       "id": 16,
@@ -1236,7 +1344,8 @@
       "created_at": "2026-08-06 11:48:13",
       "position_size": null,
       "position_action": "",
-      "position_note": ""
+      "position_note": "",
+      "image_path": ""
     },
     {
       "id": 15,
@@ -1249,7 +1358,8 @@
       "created_at": "2026-08-06 11:48:13",
       "position_size": null,
       "position_action": "",
-      "position_note": ""
+      "position_note": "",
+      "image_path": ""
     },
     {
       "id": 14,
@@ -1262,7 +1372,8 @@
       "created_at": "2026-08-06 11:48:13",
       "position_size": null,
       "position_action": "",
-      "position_note": ""
+      "position_note": "",
+      "image_path": ""
     },
     {
       "id": 13,
@@ -1275,7 +1386,8 @@
       "created_at": "2026-08-06 11:48:13",
       "position_size": null,
       "position_action": "",
-      "position_note": ""
+      "position_note": "",
+      "image_path": ""
     },
     {
       "id": 2,
@@ -1288,7 +1400,8 @@
       "created_at": "2026-08-05 16:50:38",
       "position_size": 0,
       "position_action": "",
-      "position_note": ""
+      "position_note": "",
+      "image_path": ""
     }
   ]
 }
