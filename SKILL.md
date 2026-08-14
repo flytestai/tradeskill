@@ -102,6 +102,9 @@ SELECT * FROM kol_records WHERE kol_name='大V名称' AND content LIKE '%仅TA�
 - 查询脚本：`scripts/db_query.py`
 - 批量导入：`scripts/db_batch.py`
 - 准确率追踪：`scripts/predict_track.py`
+- 关键点位监控：`scripts/level_monitor.py`
+- 多KOL对比：`scripts/kol_compare.py`
+- 跟单回测：`scripts/backtest.py`
 
 > **数据库已启用 WAL 模式 + busy_timeout**，避免多进程读写锁死。
 
@@ -163,6 +166,44 @@ python <skill-dir>/scripts/predict_track.py --report --kol "wu2198"
 
 # 列出所有预测
 python <skill-dir>/scripts/predict_track.py --list
+```
+
+### 关键点位监控
+
+```bash
+# 监控当前价距各关键位的距离（输入当前价）
+python <skill-dir>/scripts/level_monitor.py --index 创业板指 --price 3590
+python <skill-dir>/scripts/level_monitor.py --index 上证指数 --price 3918
+
+# 列出所有监控点位
+python <skill-dir>/scripts/level_monitor.py --list
+
+# 设置/删除关键位
+python <skill-dir>/scripts/level_monitor.py --set 创业板指 --level 3540 --type 风控线 --note "破=B反失败"
+python <skill-dir>/scripts/level_monitor.py --delete 创业板指 --level 3540
+```
+
+### 多KOL对比
+
+```bash
+# 对比所有大V
+python <skill-dir>/scripts/kol_compare.py
+
+# 对比指定大V
+python <skill-dir>/scripts/kol_compare.py --kol wu2198 李大霄
+```
+
+### 跟单回测
+
+```bash
+# 满仓跟（6米=100%）
+python <skill-dir>/scripts/backtest.py --strategy full
+
+# 半仓跟（6米=50%）
+python <skill-dir>/scripts/backtest.py --strategy half
+
+# 自定义价格/仓位序列
+python <skill-dir>/scripts/backtest.py --prices prices.csv --positions positions.csv
 ```
 
 **仓位字段说明：**
