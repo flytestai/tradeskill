@@ -1,0 +1,10 @@
+interface:
+  display_name: "大V观点分析器"
+  short_description: "收录财经大V言论，多维数据验证，输出HTML分析报告与ETF操作建议"
+  icon_small: ""
+  icon_large: ""
+  category: "自定义技能"
+  built_in: false
+  enabled: true
+  default_prompt: "Use $kol-opinion-analyzer：请帮我分析这位大V的言论，结合行情、基本面、情绪面、量化指标进行交叉验证，并给出ETF操作建议。"
+  category_order: 99

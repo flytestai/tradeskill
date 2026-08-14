@@ -1,0 +1,15 @@
+# 二进制数据库文件，不纳入 git
+data/*.db
+data/*.db-journal
+data/*.db-wal
+
+# 临时脚本
+scripts/bulk_*.py
+scripts/_*.py
+
+# 生成的 HTML 报告（每次重新生成即可）
+scripts/kol_analysis_*.html
+
+# Python 缓存
+__pycache__/
+*.pyc
