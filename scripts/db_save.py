@@ -106,7 +106,9 @@ def main():
     parser.add_argument('--position-size', type=int, default=None, help='Position size (e.g. 6 for 6米)')
     parser.add_argument('--position-action', default='', help='Position action: 加仓/减仓/兑现/持有/建仓/清仓')
     parser.add_argument('--position-note', default='', help='Position note (e.g. target assets)')
-    parser.add_argument('--auto-sync', action='store_true', help='Auto export+push to GitHub after saving')
+    parser.add_argument('--auto-sync', action='store_true', default=True,
+                       help='Auto export+push to GitHub after saving (默认开启，--no-auto-sync 关闭)')
+    parser.add_argument('--no-auto-sync', action='store_true', help='禁用自动推送')
     args = parser.parse_args()
 
     db_path = args.db_path or get_default_db_path()
@@ -130,16 +132,23 @@ def main():
     # Output JSON for programmatic use
     print(f'\nJSON: {json.dumps(result, ensure_ascii=False)}')
 
-    # Auto-sync to GitHub if requested
-    if args.auto_sync:
-        print('\n[SYNC] Auto-pushing to GitHub...')
-        sync_script = os.path.join(os.path.dirname(__file__), 'sync.py')
+    # Auto-sync to GitHub (默认开启，可用 --no-auto-sync 关闭)
+    if args.auto_sync and not args.no_auto_sync:
+        print('\n[SYNC] 自动推送到 GitHub (push.sh 带重试)...')
+        push_script = os.path.join(os.path.dirname(__file__), 'push.sh')
         import subprocess
-        r = subprocess.run([sys.executable, sync_script, 'push'],
-                          capture_output=True, text=True, timeout=60)
-        print(r.stdout)
-        if r.returncode != 0:
-            print(f'[SYNC] Push may have failed (non-critical): {r.stderr}')
+        # 用 bash 运行 push.sh（带自动重试5次），忽略编码错误
+        try:
+            r = subprocess.run(['bash', push_script],
+                              capture_output=True, text=True, timeout=120,
+                              encoding='utf-8', errors='ignore')
+            out = (r.stdout or '')[-500:]
+            if out:
+                print(out)
+            if r.returncode != 0:
+                print('[SYNC] 推送失败（已重试），稍后手动: bash scripts/push.sh')
+        except Exception as e:
+            print(f'[SYNC] 推送异常: {e}')
 
 
 if __name__ == '__main__':
