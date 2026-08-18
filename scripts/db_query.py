@@ -139,40 +139,15 @@ def auto_sync_from_github():
         subprocess.run(['git', '-C', skill_dir, 'pull', '--rebase'],
                       capture_output=True, timeout=15,
                       encoding='utf-8', errors='ignore')
-        # 2. 导入 sync/kol_records.json 到数据库（幂等）
-        sync_json = os.path.join(skill_dir, 'sync', 'kol_records.json')
-        if os.path.exists(sync_json):
-            import json as _json
-            with open(sync_json, 'r', encoding='utf-8') as f:
-                data = _json.load(f)
-            records = data.get('kol_records', data if isinstance(data, list) else [])
-            if records:
-                db_path = get_default_db_path()
-                if os.path.exists(db_path):
-                    conn = sqlite3.connect(db_path, timeout=5)
-                    cur = conn.cursor()
-                    cur.execute("SELECT kol_name, record_date, substr(content,1,200) FROM kol_records")
-                    existing = set(cur.fetchall())
-                    inserted = 0
-                    for r in records:
-                        fp = (r.get('kol_name',''), r.get('record_date',''), (r.get('content','') or '')[:200])
-                        if fp in existing:
-                            continue
-                        cur.execute("""INSERT INTO kol_records
-                            (kol_name, platform, content, extracted_viewpoints, related_assets,
-                             record_date, position_size, position_action, position_note)
-                            VALUES (?,?,?,?,?,?,?,?,?)""", (
-                            r.get('kol_name',''), r.get('platform',''),
-                            r.get('content',''), r.get('extracted_viewpoints',''),
-                            r.get('related_assets',''), r.get('record_date',''),
-                            r.get('position_size'), r.get('position_action',''),
-                            r.get('position_note','')))
-                        existing.add(fp)
-                        inserted += 1
-                    conn.commit()
-                    conn.close()
-                    if inserted:
-                        print(f'[SYNC] 从 GitHub 同步 {inserted} 条新记录')
+        # 2. 调用 sync_jsonl.py import（幂等导入 JSONL）
+        sync_jsonl = os.path.join(skill_dir, 'scripts', 'sync_jsonl.py')
+        if os.path.exists(sync_jsonl):
+            r = subprocess.run([sys.executable, sync_jsonl, 'import'],
+                              capture_output=True, timeout=20,
+                              encoding='utf-8', errors='ignore')
+            out = (r.stdout or '').strip()
+            if out and '导入 0 条' not in out:
+                print(out)
     except Exception:
         pass  # 静默失败，离线也能查询
 
