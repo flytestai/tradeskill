@@ -323,8 +323,8 @@ python <skill-dir>/scripts/db_save.py \
 ### 手动同步
 
 ```bash
-# 手动推送（当前设备 → GitHub）
-python <skill-dir>/scripts/sync.py push
+# 手动推送（当前设备 → GitHub，带自动重试5次）
+bash <skill-dir>/scripts/push.sh
 
 # 手动拉取（GitHub → 当前设备）
 python <skill-dir>/scripts/sync.py pull
@@ -332,6 +332,25 @@ python <skill-dir>/scripts/sync.py pull
 # 查看同步状态
 python <skill-dir>/scripts/sync.py status
 ```
+
+### 实时自动同步（默认开启）
+
+**本 skill 已实现"保存自动推、查询自动拉"的准实时同步：**
+
+| 操作 | 自动行为 | 关闭方式 |
+|------|---------|---------|
+| 保存发言 `db_save.py` | 自动导出+推送到 GitHub | `--no-auto-sync` |
+| 查询数据 `db_query.py` | 自动 git pull + 导入新记录 | `--no-sync` |
+
+**同步链路（多设备）：**
+
+```
+设备A：保存发言 → 自动push → GitHub
+                              ↓
+设备B：查询数据 → 自动pull+导入 → 看到最新发言
+```
+
+**其他设备安装本 skill 后，每次查询 `db_query.py` 都会自动同步 GitHub 上的最新数据，无需手动操作。**
 
 ### 注意事项
 

@@ -130,6 +130,53 @@ def search_content(conn, keyword: str) -> list:
     return [dict(r) for r in rows]
 
 
+def auto_sync_from_github():
+    """自动从 GitHub 拉取最新数据（静默失败，不影响查询）"""
+    try:
+        import subprocess
+        skill_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        # 1. git pull（静默）
+        subprocess.run(['git', '-C', skill_dir, 'pull', '--rebase'],
+                      capture_output=True, timeout=15,
+                      encoding='utf-8', errors='ignore')
+        # 2. 导入 sync/kol_records.json 到数据库（幂等）
+        sync_json = os.path.join(skill_dir, 'sync', 'kol_records.json')
+        if os.path.exists(sync_json):
+            import json as _json
+            with open(sync_json, 'r', encoding='utf-8') as f:
+                data = _json.load(f)
+            records = data.get('kol_records', data if isinstance(data, list) else [])
+            if records:
+                db_path = get_default_db_path()
+                if os.path.exists(db_path):
+                    conn = sqlite3.connect(db_path, timeout=5)
+                    cur = conn.cursor()
+                    cur.execute("SELECT kol_name, record_date, substr(content,1,200) FROM kol_records")
+                    existing = set(cur.fetchall())
+                    inserted = 0
+                    for r in records:
+                        fp = (r.get('kol_name',''), r.get('record_date',''), (r.get('content','') or '')[:200])
+                        if fp in existing:
+                            continue
+                        cur.execute("""INSERT INTO kol_records
+                            (kol_name, platform, content, extracted_viewpoints, related_assets,
+                             record_date, position_size, position_action, position_note)
+                            VALUES (?,?,?,?,?,?,?,?,?)""", (
+                            r.get('kol_name',''), r.get('platform',''),
+                            r.get('content',''), r.get('extracted_viewpoints',''),
+                            r.get('related_assets',''), r.get('record_date',''),
+                            r.get('position_size'), r.get('position_action',''),
+                            r.get('position_note','')))
+                        existing.add(fp)
+                        inserted += 1
+                    conn.commit()
+                    conn.close()
+                    if inserted:
+                        print(f'[SYNC] 从 GitHub 同步 {inserted} 条新记录')
+    except Exception:
+        pass  # 静默失败，离线也能查询
+
+
 def main():
     parser = argparse.ArgumentParser(
         description='Query KOL opinion records (default: last 30 days)',
@@ -157,7 +204,12 @@ def main():
     parser.add_argument('--id', type=int, help='Get record by ID')
     parser.add_argument('--search', help='Search keyword in content')
     parser.add_argument('--json', action='store_true', help='Output as JSON')
+    parser.add_argument('--no-sync', action='store_true', help='跳过自动从GitHub同步（默认开启同步）')
     args = parser.parse_args()
+
+    # 自动从 GitHub 拉取最新数据（默认开启，可用 --no-sync 关闭）
+    if not args.no_sync:
+        auto_sync_from_github()
 
     db_path = args.db_path or get_default_db_path()
     conn = get_connection(db_path)
