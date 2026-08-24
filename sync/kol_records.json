@@ -1,6 +1,6 @@
 {
-  "exported_at": "2026-08-24 13:13:44",
-  "total_records": 459,
+  "exported_at": "2026-08-24 13:16:53",
+  "total_records": 458,
   "total_reports": 0,
   "kol_records": [
     {
@@ -6214,20 +6214,6 @@
       "related_assets": "上证指数,创业板指,芯片ETF,通信ETF,计算机ETF",
       "record_date": "2026-08-04",
       "created_at": "2026-08-05 16:51:10",
-      "position_size": 0,
-      "position_action": "",
-      "position_note": "",
-      "image_path": ""
-    },
-    {
-      "id": 283,
-      "kol_name": "李大霄",
-      "platform": "微博",
-      "content": "A股已经进入新一轮牛市周期，沪深300估值处于历史低位，现在是布局宽基ETF的最佳时机。创业板估值回归合理，成长股机会大于风险。短期震荡不改长期向上趋势。",
-      "extracted_viewpoints": "A股已经进入新一轮牛市周期，沪深300估值处于历史低位，现在是布局宽基ETF的最佳时机\n创业板估值回归合理，成长股机会大于风险\n短期震荡不改长期向上趋势",
-      "related_assets": "510300,159915",
-      "record_date": "2026-08-04",
-      "created_at": "2026-08-20 22:10:15",
       "position_size": 0,
       "position_action": "",
       "position_note": "",
