@@ -9,9 +9,9 @@ MSG="${1:-sync: $(date '+%Y-%m-%d %H:%M')}"
 # 修复 SSL 证书问题
 git config http.sslVerify false
 
-# 导出最新数据库到 JSONL（追加式，避免git冲突）
+# 导出最新数据库到 kol_records.json（全量JSON，跨设备统一格式）
 if [ -f data/kol_opinions.db ]; then
-    python scripts/sync_jsonl.py export 2>/dev/null || echo "[WARN] JSONL导出失败"
+    python scripts/db_export.py 2>/dev/null || echo "[WARN] 导出失败"
 fi
 
 # 提交

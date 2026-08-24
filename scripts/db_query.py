@@ -131,7 +131,10 @@ def search_content(conn, keyword: str) -> list:
 
 
 def auto_sync_from_github():
-    """自动从 GitHub 拉取最新数据（静默失败，不影响查询）"""
+    """自动从 GitHub 拉取最新数据（静默失败，不影响查询）
+
+    统一同步格式：sync/kol_records.json（全量JSON，跨设备统一）
+    """
     try:
         import subprocess
         skill_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -139,14 +142,14 @@ def auto_sync_from_github():
         subprocess.run(['git', '-C', skill_dir, 'pull', '--rebase'],
                       capture_output=True, timeout=15,
                       encoding='utf-8', errors='ignore')
-        # 2. 调用 sync_jsonl.py import（幂等导入 JSONL）
-        sync_jsonl = os.path.join(skill_dir, 'scripts', 'sync_jsonl.py')
-        if os.path.exists(sync_jsonl):
-            r = subprocess.run([sys.executable, sync_jsonl, 'import'],
+        # 2. 调用 db_import.py（读 kol_records.json，幂等导入，跨设备统一格式）
+        db_import = os.path.join(skill_dir, 'scripts', 'db_import.py')
+        if os.path.exists(db_import):
+            r = subprocess.run([sys.executable, db_import],
                               capture_output=True, timeout=20,
                               encoding='utf-8', errors='ignore')
             out = (r.stdout or '').strip()
-            if out and '导入 0 条' not in out:
+            if out and 'Imported' in out and '0 new' not in out:
                 print(out)
     except Exception:
         pass  # 静默失败，离线也能查询

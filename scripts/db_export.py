@@ -22,9 +22,13 @@ def export_all(output_dir):
     cur.execute("SELECT * FROM kol_records ORDER BY record_date DESC")
     records = [dict(r) for r in cur.fetchall()]
 
-    # Export analysis_reports
-    cur.execute("SELECT * FROM analysis_reports ORDER BY created_at DESC")
-    reports = [dict(r) for r in cur.fetchall()]
+    # Export analysis_reports（表可能不存在，容错）
+    reports = []
+    try:
+        cur.execute("SELECT * FROM analysis_reports ORDER BY created_at DESC")
+        reports = [dict(r) for r in cur.fetchall()]
+    except sqlite3.OperationalError:
+        pass  # 表不存在，跳过
 
     conn.close()
 
