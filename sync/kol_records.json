@@ -1,8 +1,36 @@
 {
-  "exported_at": "2026-08-24 14:54:02",
-  "total_records": 473,
+  "exported_at": "2026-08-24 15:05:58",
+  "total_records": 475,
   "total_reports": 0,
   "kol_records": [
+    {
+      "id": 479,
+      "kol_name": "wu2198",
+      "platform": "微博",
+      "content": "【8月24日收盘】今天大盘指数回撤了3856点（试3855.35点）收在3882点；按日线技术面看大盘指数3741和3767点连续的支撑位附近会有反复。明天指数需要观察3856--3926之间的取向，收到请回复666或点赞支持一下！",
+      "extracted_viewpoints": "",
+      "related_assets": "上证指数,沪深300ETF",
+      "record_date": "2026-08-24 15:01",
+      "created_at": "2026-08-24 15:05:25",
+      "position_size": 1,
+      "position_action": "持有",
+      "position_note": "收3882，3741-3767连线支撑附近反复，明天看3856-3926",
+      "image_path": ""
+    },
+    {
+      "id": 478,
+      "kol_name": "wu2198",
+      "platform": "微博",
+      "content": "【8月24日盘中】截止14:58两市成交了20035亿元，有3984只个股下跌，大盘资金流出921.44亿元，量能比上一交易日增加1324亿元！",
+      "extracted_viewpoints": "",
+      "related_assets": "上证指数,沪深300ETF",
+      "record_date": "2026-08-24 14:59",
+      "created_at": "2026-08-24 15:05:25",
+      "position_size": 1,
+      "position_action": "持有",
+      "position_note": "成交20035亿，3984只跌，资金流出921亿，量能增1324亿",
+      "image_path": ""
+    },
     {
       "id": 477,
       "kol_name": "wu2198",
