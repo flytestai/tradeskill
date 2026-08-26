@@ -93,16 +93,20 @@ def main():
         print('[HINT] Run db_init.py first.', file=sys.stderr)
         sys.exit(1)
 
-    # Ensure position columns exist
+    # Ensure required columns exist (per-column, ignore duplicates)
     conn = sqlite3.connect(DB_PATH)
-    try:
-        conn.execute("ALTER TABLE kol_records ADD COLUMN position_size INTEGER DEFAULT NULL")
-        conn.execute("ALTER TABLE kol_records ADD COLUMN position_action TEXT DEFAULT ''")
-        conn.execute("ALTER TABLE kol_records ADD COLUMN position_note TEXT DEFAULT ''")
-        conn.commit()
-        print('[INFO] Added position tracking columns')
-    except sqlite3.OperationalError:
-        pass
+    for stmt in [
+        "ALTER TABLE kol_records ADD COLUMN position_size INTEGER DEFAULT NULL",
+        "ALTER TABLE kol_records ADD COLUMN position_action TEXT DEFAULT ''",
+        "ALTER TABLE kol_records ADD COLUMN position_note TEXT DEFAULT ''",
+        "ALTER TABLE kol_records ADD COLUMN image_path TEXT DEFAULT ''",
+        "ALTER TABLE kol_records ADD COLUMN is_vip INTEGER DEFAULT 0",
+    ]:
+        try:
+            conn.execute(stmt)
+        except sqlite3.OperationalError:
+            pass
+    conn.commit()
 
     json_files = find_json_files(args.kol_name or '')
 
