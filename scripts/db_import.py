@@ -64,8 +64,8 @@ def import_from_json(json_path, dry_run=False):
         cur.execute("""
             INSERT INTO kol_records (kol_name, platform, content, extracted_viewpoints,
                                      related_assets, record_date, position_size,
-                                     position_action, position_note)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                     position_action, position_note, image_path, is_vip)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             r.get("kol_name", ""),
             r.get("platform", ""),
@@ -76,6 +76,8 @@ def import_from_json(json_path, dry_run=False):
             r.get("position_size"),
             r.get("position_action", ""),
             r.get("position_note", ""),
+            r.get("image_path", ""),
+            r.get("is_vip", 0),
         ))
         inserted += 1
 
