@@ -74,12 +74,14 @@ def import_db():
             skipped += 1
             continue
         cur.execute("""INSERT INTO kol_records (kol_name,platform,content,extracted_viewpoints,
-                       related_assets,record_date,position_size,position_action,position_note)
-                       VALUES (?,?,?,?,?,?,?,?,?)""", (
+                       related_assets,record_date,position_size,position_action,position_note,
+                       image_path,is_vip)
+                       VALUES (?,?,?,?,?,?,?,?,?,?,?)""", (
             r.get("kol_name",""), r.get("platform",""), r.get("content",""),
             r.get("extracted_viewpoints",""), r.get("related_assets",""),
             r.get("record_date",""), r.get("position_size"),
-            r.get("position_action",""), r.get("position_note","")))
+            r.get("position_action",""), r.get("position_note",""),
+            r.get("image_path",""), r.get("is_vip", 0)))
         inserted += 1
 
     conn.commit()

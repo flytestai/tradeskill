@@ -204,11 +204,12 @@ def main():
             dup_skipped += 1
             continue
         if not args.dry_run:
+            vip = 1 if "仅TA的真爱粉可见" in text else 0
             cur.execute("""INSERT INTO kol_records
                 (kol_name, platform, content, extracted_viewpoints, related_assets,
-                 record_date, position_size, position_action, position_note)
-                VALUES (?,?,?,?,?,?,?,?,?)""",
-                ("wu2198", "飞书群", text, "", "", ct, None, "", "飞书群自动同步"))
+                 record_date, position_size, position_action, position_note, is_vip)
+                VALUES (?,?,?,?,?,?,?,?,?,?)""",
+                ("wu2198", "飞书群", text, "", "", ct, None, "", "飞书群自动同步", vip))
         existing_norm.append(nn)
         inserted += 1
 
