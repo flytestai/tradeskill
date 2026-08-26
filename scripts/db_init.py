@@ -24,6 +24,8 @@ CREATE TABLE IF NOT EXISTS kol_records (
     position_size INTEGER DEFAULT NULL,
     position_action TEXT DEFAULT '',
     position_note TEXT DEFAULT '',
+    image_path TEXT DEFAULT '',
+    is_vip INTEGER DEFAULT 0,
     created_at TEXT DEFAULT (datetime('now', 'localtime'))
 );
 
@@ -43,11 +45,13 @@ CREATE INDEX IF NOT EXISTS idx_kol_records_position ON kol_records(kol_name, pos
 CREATE INDEX IF NOT EXISTS idx_analysis_reports_record ON analysis_reports(record_id);
 """
 
-MIGRATION = """
-ALTER TABLE kol_records ADD COLUMN position_size INTEGER DEFAULT NULL;
-ALTER TABLE kol_records ADD COLUMN position_action TEXT DEFAULT '';
-ALTER TABLE kol_records ADD COLUMN position_note TEXT DEFAULT '';
-"""
+MIGRATION_COLUMNS = [
+    "ALTER TABLE kol_records ADD COLUMN position_size INTEGER DEFAULT NULL",
+    "ALTER TABLE kol_records ADD COLUMN position_action TEXT DEFAULT ''",
+    "ALTER TABLE kol_records ADD COLUMN position_note TEXT DEFAULT ''",
+    "ALTER TABLE kol_records ADD COLUMN image_path TEXT DEFAULT ''",
+    "ALTER TABLE kol_records ADD COLUMN is_vip INTEGER DEFAULT 0",
+]
 
 
 def get_default_db_path():
@@ -69,11 +73,12 @@ def init_db(db_path: str) -> str:
         conn.execute("PRAGMA busy_timeout=5000")
         conn.execute("PRAGMA synchronous=NORMAL")
         conn.executescript(SCHEMA)
-        # Run migration for existing databases
-        try:
-            conn.executescript(MIGRATION)
-        except sqlite3.OperationalError:
-            pass  # Columns already exist
+        # Run migration for existing databases (per-column, ignore duplicates)
+        for stmt in MIGRATION_COLUMNS:
+            try:
+                conn.execute(stmt)
+            except sqlite3.OperationalError:
+                pass  # Column already exists
         conn.commit()
     finally:
         conn.close()
