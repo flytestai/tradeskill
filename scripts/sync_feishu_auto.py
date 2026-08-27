@@ -25,6 +25,7 @@ import argparse
 import difflib
 import json
 import os
+import re
 import shutil
 import sqlite3
 import subprocess
@@ -236,6 +237,38 @@ def extract_text(msg):
     return c.strip() if isinstance(c, str) else ""
 
 
+IMG_KEY_RE = re.compile(r"img_[A-Za-z0-9_-]+")
+
+
+def extract_image_key(msg):
+    """从图片消息提取 image_key（用于去重与后续下载）"""
+    if msg.get("msg_type") != "image":
+        return ""
+    c = msg.get("content", "") or ""
+    m = IMG_KEY_RE.search(c)
+    return m.group(0) if m else ""
+
+
+def download_image(lark_cli, message_id, image_key):
+    """下载图片到 assets/feishu_images/，成功返回相对路径，失败返回空串"""
+    rel = "assets/feishu_images/" + image_key
+    try:
+        r = subprocess.run(
+            [lark_cli, "im", "+messages-resources-download",
+             "--message-id", message_id, "--file-key", image_key,
+             "--type", "image", "--output", rel, "--json"],
+            capture_output=True, text=True, timeout=60, cwd=SKILL_DIR)
+        if r.returncode == 0:
+            # 实际文件名可能带扩展名，回退用 key 作为路径
+            for fn in os.listdir(os.path.join(SKILL_DIR, "assets", "feishu_images")):
+                if fn.startswith(image_key):
+                    return os.path.join("assets", "feishu_images", fn)
+            return rel
+        return ""
+    except Exception:
+        return ""
+
+
 def is_test_message(text):
     if not text:
         return True
@@ -269,6 +302,7 @@ def main():
     ap.add_argument("--dry-run", action="store_true", help="只预览不写库")
     ap.add_argument("--reset-watermark", action="store_true", help="重置增量水位，下次全量拉取")
     ap.add_argument("--no-pull", action="store_true", help="同步前不拉取最新水位")
+    ap.add_argument("--download-images", action="store_true", help="同步时下载图片到 assets/feishu_images/")
     args = ap.parse_args()
 
     if args.reset_watermark:
@@ -315,8 +349,9 @@ def main():
             if not new_watermark or latest > new_watermark:
                 new_watermark = latest
 
-    # 3. 过滤机器人消息 + 提取文本
+    # 3. 过滤机器人消息 + 提取文本/图片
     bot_texts = []
+    bot_images = []
     for m in messages:
         s = m.get("sender") or {}
         stype = s.get("sender_type", "")
@@ -324,10 +359,13 @@ def main():
         if stype not in BOT_SENDER_TYPES and sname != "自定义机器人":
             continue
         t = extract_text(m)
-        if t is None:
-            continue
-        bot_texts.append((m.get("create_time", ""), t))
-    print("[3/5] 机器人文本消息 %d 条" % len(bot_texts))
+        if t:
+            bot_texts.append((m.get("create_time", ""), t))
+        else:
+            img_key = extract_image_key(m)
+            if img_key:
+                bot_images.append((m.get("create_time", ""), m.get("message_id", ""), img_key))
+    print("[3/5] 机器人文本消息 %d 条 / 图片消息 %d 条" % (len(bot_texts), len(bot_images)))
 
     # 4. 97% 去重 + 入库（精确去重用集合 O(1)，相似度只对比最近 300 条）
     conn = sqlite3.connect(args.db)
@@ -368,6 +406,31 @@ def main():
         recent_norm.append(nn)
         inserted += 1
 
+    # 4b. 图片消息入库（按 image_key 精确去重）
+    img_inserted = 0
+    img_dup = 0
+    if not args.dry_run:
+        cur.execute("SELECT image_path FROM kol_records WHERE kol_name='wu2198' AND image_path != ''")
+        seen_img = {r[0] for r in cur.fetchall() if r[0]}
+    else:
+        seen_img = set()
+    for ct, mid, img_key in reversed(bot_images):
+        if img_key in seen_img:
+            img_dup += 1
+            continue
+        local_path = ""
+        if not args.dry_run and args.download_images:
+            local_path = download_image(lark_cli, mid, img_key)
+        if not args.dry_run:
+            cur.execute("""INSERT INTO kol_records
+                (kol_name, platform, content, extracted_viewpoints, related_assets,
+                 record_date, position_size, position_action, position_note, image_path, is_vip)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
+                ("wu2198", "飞书群", "[图片消息]", "", "", ct, None, "", "飞书群图片",
+                 local_path or img_key, 0))
+        seen_img.add(img_key)
+        img_inserted += 1
+
     if not args.dry_run:
         conn.commit()
         # 5. 保存新水位（记录本次拉取到的最新群消息时间）
@@ -384,7 +447,7 @@ def main():
     # 6. GitHub 推送（有新记录，或水位前移时也推送，保证多设备水位一致）
     watermark_advanced = bool(new_watermark and new_watermark != watermark)
     push_ok = None
-    if not args.dry_run and not args.no_push and (inserted > 0 or watermark_advanced):
+    if not args.dry_run and not args.no_push and (inserted > 0 or img_inserted > 0 or watermark_advanced):
         print("[6/6] 有新增，导出并推送到 GitHub ...")
         r = subprocess.run([sys.executable, SYNC_SCRIPT, "push"], capture_output=True, text=True, timeout=180)
         push_ok = r.returncode == 0
@@ -403,6 +466,8 @@ def main():
     print("=" * 56)
     print("  增量水位: %s" % (watermark or "无"))
     print("  新增导入条数: %d" % inserted)
+    if img_inserted or img_dup:
+        print("  图片消息: 新增 %d 条 / 跳过 %d 条" % (img_inserted, img_dup))
     print("  跳过条数: %d（重复相似度>%.0f%%: %d / 测试消息: %d / 空消息: %d）"
           % (dup_skipped + test_skipped + empty_skipped, args.threshold * 100,
              dup_skipped, test_skipped, empty_skipped))
