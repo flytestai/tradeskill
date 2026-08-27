@@ -1,8 +1,23 @@
 {
-  "exported_at": "2026-08-27 09:41:29",
-  "total_records": 578,
+  "exported_at": "2026-08-27 09:50:58",
+  "total_records": 579,
   "kol_count": 1,
   "kol_records": [
+    {
+      "id": 1351,
+      "kol_name": "wu2198",
+      "platform": "飞书群",
+      "content": "光纤几大龙头最近是持续反弹，走得比较强！",
+      "extracted_viewpoints": "",
+      "related_assets": "",
+      "record_date": "2026-08-27 09:46",
+      "created_at": "2026-08-27 09:50:57",
+      "position_size": null,
+      "position_action": "",
+      "position_note": "飞书群自动同步",
+      "image_path": "",
+      "is_vip": 0
+    },
     {
       "id": 1350,
       "kol_name": "wu2198",
