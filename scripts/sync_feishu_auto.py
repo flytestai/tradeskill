@@ -34,7 +34,7 @@ from datetime import datetime, timezone, timedelta
 SKILL_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DB_PATH = os.path.join(SKILL_DIR, "data", "kol_opinions.db")
 SYNC_SCRIPT = os.path.join(SKILL_DIR, "scripts", "sync.py")
-STATE_PATH = os.path.join(SKILL_DIR, "data", "feishu_sync_state.json")
+STATE_PATH = os.path.join(SKILL_DIR, "sync", "feishu_sync_state.json")
 
 DEFAULT_CHAT_ID = "oc_59301fc3e11c6e131f31ffb8acd4125a"
 BOT_SENDER_TYPES = ("app", "bot")          # 机器人消息（wu2198 发言由自定义机器人发出）
@@ -80,8 +80,22 @@ def to_iso(ts):
         return None
 
 
+def pull_latest():
+    """从 GitHub 拉取最新同步数据（含水位），失败不阻塞后续同步"""
+    try:
+        r = subprocess.run(["git", "-C", SKILL_DIR, "pull", "--rebase"],
+                           capture_output=True, text=True, timeout=90)
+        if r.returncode == 0:
+            print("[PULL] 已拉取最新同步数据（含水位）")
+        else:
+            msg = (r.stderr or r.stdout).strip().splitlines()
+            print("[PULL] 拉取失败（继续使用本地水位）: %s" % (msg[-1][:120] if msg else "unknown"))
+    except Exception as e:
+        print("[PULL] 拉取异常（继续使用本地水位）: %s" % e)
+
+
 def load_watermark(db_path):
-    """加载增量水位：优先状态文件，回退到 DB 中飞书群最新记录时间，再回退 None"""
+    """加载增量水位：优先 sync/ 状态文件，回退到 DB 中飞书群最新记录时间，再回退 None"""
     if os.path.exists(STATE_PATH):
         try:
             with open(STATE_PATH, "r", encoding="utf-8") as f:
@@ -196,6 +210,7 @@ def main():
     ap.add_argument("--no-push", action="store_true", help="跳过 GitHub 推送")
     ap.add_argument("--dry-run", action="store_true", help="只预览不写库")
     ap.add_argument("--reset-watermark", action="store_true", help="重置增量水位，下次全量拉取")
+    ap.add_argument("--no-pull", action="store_true", help="同步前不拉取最新水位")
     args = ap.parse_args()
 
     if args.reset_watermark:
@@ -213,6 +228,8 @@ def main():
             return
 
     lark_cli = find_lark_cli()
+    if not args.no_pull:
+        pull_latest()
     watermark = load_watermark(args.db)
     start_iso = to_iso(watermark) if watermark else None
 
@@ -300,9 +317,10 @@ def main():
     conn.close()
     print("[4/5] 入库完成")
 
-    # 6. GitHub 推送
+    # 6. GitHub 推送（有新记录，或水位前移时也推送，保证多设备水位一致）
+    watermark_advanced = bool(new_watermark and new_watermark != watermark)
     push_ok = None
-    if not args.dry_run and inserted > 0 and not args.no_push:
+    if not args.dry_run and not args.no_push and (inserted > 0 or watermark_advanced):
         print("[6/6] 有新增，导出并推送到 GitHub ...")
         r = subprocess.run([sys.executable, SYNC_SCRIPT, "push"], capture_output=True, text=True, timeout=180)
         push_ok = r.returncode == 0
