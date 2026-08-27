@@ -360,6 +360,22 @@ python <skill-dir>/scripts/sync.py status
 - **.gitignore 已配置**：`data/*.db` 不会上传，只有 `sync/*.json` 进入 git
 - **冲突处理**：JSON 是文本文件，git 冲突时手动合并即可
 
+## 飞书群消息自动同步
+
+`scripts/sync_feishu_auto.py` 通过 lark-cli（OAuth 用户授权）从飞书群增量拉取 wu2198 发言：
+
+- **盘中时间**：交易日 9:00-11:30 / 13:00-15:00（**9:00-9:30 也算盘中**），另在盘后 16:00 兜底一次，其余时间自动跳过
+- **增量拉取**：只记住「最后一次拉取的群消息时间」（水位，存于 `data/feishu_sync_state.json`），仅拉取该时间之后的新消息
+- **去重**：按 97% 文本相似度去重，测试消息自动跳过，已导入消息不重复导入
+- **入库 + 推送**：增量写入 `kol_opinions.db`，有新增时自动导出 JSON 并推送到 GitHub
+
+```bash
+python scripts/sync_feishu_auto.py                # 正常同步（带盘中/交易日守卫）
+python scripts/sync_feishu_auto.py --force        # 忽略守卫强制同步
+python scripts/sync_feishu_auto.py --dry-run      # 只预览
+python scripts/sync_feishu_auto.py --reset-watermark  # 重置增量水位（下次全量）
+```
+
 ## 分析工作流
 
 ### Step 0: 自动同步（每次分析前必执行）
