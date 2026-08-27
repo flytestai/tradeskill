@@ -1,8 +1,38 @@
 {
-  "exported_at": "2026-08-27 12:03:11",
-  "total_records": 424,
+  "exported_at": "2026-08-27 13:51:34",
+  "total_records": 426,
   "kol_count": 1,
   "kol_records": [
+    {
+      "id": 1361,
+      "kol_name": "wu2198",
+      "platform": "飞书群",
+      "content": "截止目前看试了3944.51点！\n@wu2198\n早盘收在3935.99点，收复了3926点，盘中是科技类股推动指数小幅度修正，下午指数区间参考3910--3956之间。按短线看是下午指数有机会向3956反压缓慢上爬，这是3994至3850下跌之后的技术修正；按日线看也是3741和3767连线的支持所带来的技术性反抽。收到请回复666或点赞支持一下！",
+      "extracted_viewpoints": "",
+      "related_assets": "",
+      "record_date": "2026-08-27 13:43",
+      "created_at": "2026-08-27 13:51:30",
+      "position_size": null,
+      "position_action": "",
+      "position_note": "飞书群自动同步",
+      "image_path": "",
+      "is_vip": 0
+    },
+    {
+      "id": 1362,
+      "kol_name": "wu2198",
+      "platform": "飞书群",
+      "content": "煤炭板块近期是连续上涨，按业绩看很多是业绩恢复了增长！",
+      "extracted_viewpoints": "",
+      "related_assets": "",
+      "record_date": "2026-08-27 13:32",
+      "created_at": "2026-08-27 13:51:31",
+      "position_size": null,
+      "position_action": "",
+      "position_note": "飞书群自动同步",
+      "image_path": "",
+      "is_vip": 0
+    },
     {
       "id": 1359,
       "kol_name": "wu2198",
