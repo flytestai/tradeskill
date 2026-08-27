@@ -1,8 +1,23 @@
 {
-  "exported_at": "2026-08-27 14:55:13",
-  "total_records": 430,
+  "exported_at": "2026-08-27 14:57:32",
+  "total_records": 431,
   "kol_count": 1,
   "kol_records": [
+    {
+      "id": 1367,
+      "kol_name": "wu2198",
+      "platform": "飞书群",
+      "content": "有个缺口在3990点。\n▌所在微博：前面给大家分析了，盯住3741和3767连线的支撑，多空反复是必然规律。截止目前看指数如此反抽3956点；那么，接下来市场会再度反复。指数日线阻力继续是3996点。",
+      "extracted_viewpoints": "",
+      "related_assets": "",
+      "record_date": "2026-08-27 14:55",
+      "created_at": "2026-08-27 14:57:30",
+      "position_size": null,
+      "position_action": "",
+      "position_note": "飞书群自动同步",
+      "image_path": "",
+      "is_vip": 0
+    },
     {
       "id": 1365,
       "kol_name": "wu2198",
