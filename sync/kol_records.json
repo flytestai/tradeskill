@@ -1,8 +1,23 @@
 {
-  "exported_at": "2026-08-27 09:50:58",
-  "total_records": 579,
+  "exported_at": "2026-08-27 10:01:02",
+  "total_records": 580,
   "kol_count": 1,
   "kol_records": [
+    {
+      "id": 1352,
+      "kol_name": "wu2198",
+      "platform": "飞书群",
+      "content": "神奇，誉衡，金健等目前冲板！\n@wu2198\n最近粮食，化学制药等出现一批连续走强的。",
+      "extracted_viewpoints": "",
+      "related_assets": "",
+      "record_date": "2026-08-27 09:50",
+      "created_at": "2026-08-27 10:01:01",
+      "position_size": null,
+      "position_action": "",
+      "position_note": "飞书群自动同步",
+      "image_path": "",
+      "is_vip": 0
+    },
     {
       "id": 1351,
       "kol_name": "wu2198",
