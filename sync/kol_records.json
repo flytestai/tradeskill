@@ -1,8 +1,38 @@
 {
-  "exported_at": "2026-08-27 11:55:22",
-  "total_records": 422,
+  "exported_at": "2026-08-27 12:03:11",
+  "total_records": 424,
   "kol_count": 1,
   "kol_records": [
+    {
+      "id": 1359,
+      "kol_name": "wu2198",
+      "platform": "飞书群",
+      "content": "早盘收在3935.99点，收复了3926点，盘中是科技类股推动指数小幅度修正，下午指数区间参考3910--3956之间。按短线看是下午指数有机会向3956反压缓慢上爬，这是3994至3850下跌之后的技术修正；按日线看也是3741和3767连线的支持所带来的技术性反抽。收到请回复666或点赞支持一下！",
+      "extracted_viewpoints": "",
+      "related_assets": "",
+      "record_date": "2026-08-27 11:34",
+      "created_at": "2026-08-27 12:03:10",
+      "position_size": null,
+      "position_action": "",
+      "position_note": "飞书群自动同步",
+      "image_path": "",
+      "is_vip": 0
+    },
+    {
+      "id": 1360,
+      "kol_name": "wu2198",
+      "platform": "飞书群",
+      "content": "【仅TA的真爱粉可见】 创业板指数周一由于没到我预期位置（试3359点），所以我没有参与。按目前看会反抽3500方向。",
+      "extracted_viewpoints": "",
+      "related_assets": "",
+      "record_date": "2026-08-27 11:33",
+      "created_at": "2026-08-27 12:03:10",
+      "position_size": null,
+      "position_action": "",
+      "position_note": "飞书群自动同步",
+      "image_path": "",
+      "is_vip": 1
+    },
     {
       "id": 1358,
       "kol_name": "wu2198",
