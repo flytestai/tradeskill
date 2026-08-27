@@ -91,7 +91,7 @@ def import_db():
 
 def git_push():
     """Git add sync/ + commit + push"""
-    ok, out = run("git add sync/kol_records.json")
+    ok, out = run("git add sync/")
     if not ok:
         print(f"[GIT] add failed: {out}"); return False
 

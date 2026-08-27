@@ -4,9 +4,6 @@ data/*.db-journal
 data/*.db-wal
 data/*.db-shm
 
-# 飞书同步增量水位（每设备独立，不纳入 git）
-data/feishu_sync_state.json
-
 # 临时脚本
 scripts/bulk_*.py
 scripts/_*.py

@@ -365,7 +365,7 @@ python <skill-dir>/scripts/sync.py status
 `scripts/sync_feishu_auto.py` 通过 lark-cli（OAuth 用户授权）从飞书群增量拉取 wu2198 发言：
 
 - **盘中时间**：交易日 9:00-11:30 / 13:00-15:00（**9:00-9:30 也算盘中**），另在盘后 16:00 兜底一次，其余时间自动跳过
-- **增量拉取**：只记住「最后一次拉取的群消息时间」（水位，存于 `data/feishu_sync_state.json`），仅拉取该时间之后的新消息
+- **增量拉取**：只记住「最后一次拉取的群消息时间」（水位，存于 `sync/feishu_sync_state.json`，随 GitHub 同步，多设备共享一致水位），仅拉取该时间之后的新消息
 - **去重**：按 97% 文本相似度去重，测试消息自动跳过，已导入消息不重复导入
 - **入库 + 推送**：增量写入 `kol_opinions.db`，有新增时自动导出 JSON 并推送到 GitHub
 
