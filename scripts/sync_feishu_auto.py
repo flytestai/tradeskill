@@ -41,6 +41,17 @@ BOT_SENDER_TYPES = ("app", "bot")          # 机器人消息（wu2198 发言由�
 SIM_THRESHOLD = 0.97                        # 文本相似度去重阈值
 TEST_KEYWORDS = ["转发测试", "同步测试", "设备A同步测试", "test", "TEST"]
 
+# 2026年 A股 休市日（仅列工作日；来源：沪深北交易所公告，需每年更新）
+HOLIDAYS = {
+    "2026-01-01", "2026-01-02",                                                # 元旦
+    "2026-02-16", "2026-02-17", "2026-02-18", "2026-02-19", "2026-02-20", "2026-02-23",  # 春节
+    "2026-04-06",                                                               # 清明节
+    "2026-05-01", "2026-05-04", "2026-05-05",                                  # 劳动节
+    "2026-06-19",                                                               # 端午节
+    "2026-09-25",                                                               # 中秋节
+    "2026-10-01", "2026-10-02", "2026-10-05", "2026-10-06", "2026-10-07",      # 国庆节
+}
+
 
 def find_lark_cli():
     """定位 lark-cli 可执行文件（兼容 PATH 与常见全局安装目录）"""
@@ -59,11 +70,40 @@ def find_lark_cli():
     return "lark-cli"
 
 
+def check_auth(lark_cli):
+    """检查 lark-cli 用户授权状态，临近过期时告警（不阻塞）"""
+    try:
+        r = subprocess.run([lark_cli, "auth", "status"], capture_output=True, text=True, timeout=30)
+        data = json.loads(r.stdout)
+    except Exception as e:
+        print("[AUTH] 无法检查授权状态: %s" % e)
+        return
+    user = (data.get("identities") or {}).get("user") or {}
+    expires = user.get("refreshExpiresAt") or user.get("expiresAt") or ""
+    if not expires:
+        print("[AUTH] ⚠️ 未检测到用户授权，请执行 lark-cli auth login")
+        return
+    try:
+        exp = datetime.fromisoformat(expires)
+        now8 = datetime.now(timezone(timedelta(hours=8)))
+        days = (exp - now8).days
+        if days < 0:
+            print("[AUTH] ⚠️ 授权已过期，请重新执行 lark-cli auth login")
+        elif days <= 3:
+            print("[AUTH] ⚠️ 授权将在 %d 天后过期(%s)，请提前重新授权" % (days, expires[:10]))
+        else:
+            print("[AUTH] 授权正常，%s 到期" % expires[:10])
+    except Exception:
+        pass
+
+
 def trading_time_guard():
-    """交易日 + 盘中/盘后时间守卫（北京时间）。返回 (是否可运行, 原因)"""
+    """交易日(含节假日) + 盘中/盘后时间守卫（北京时间）。返回 (是否可运行, 原因)"""
     now = datetime.now(timezone(timedelta(hours=8)))
     if now.weekday() >= 5:
         return False, "非交易日（周末）"
+    if now.strftime("%Y-%m-%d") in HOLIDAYS:
+        return False, "非交易日（节假日）"
     hm = now.hour * 100 + now.minute
     # 盘中 9:00-11:30（9:00-9:30 也算盘中）/ 13:00-15:00，盘后 16:00 兜底一次
     if (900 <= hm <= 1130) or (1300 <= hm <= 1500) or (1555 <= hm <= 1605):
@@ -228,6 +268,7 @@ def main():
             return
 
     lark_cli = find_lark_cli()
+    check_auth(lark_cli)
     if not args.no_pull:
         pull_latest()
     watermark = load_watermark(args.db)

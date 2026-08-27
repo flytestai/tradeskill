@@ -18,7 +18,7 @@ def run(cmd, cwd=None):
     """Run shell command, return (ok, output)"""
     try:
         r = subprocess.run(cmd, shell=True, cwd=cwd or SKILL_DIR,
-                          capture_output=True, text=True, timeout=30)
+                          capture_output=True, text=True, timeout=180)
         return r.returncode == 0, r.stdout + r.stderr
     except Exception as e:
         return False, str(e)
