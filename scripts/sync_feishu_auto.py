@@ -4,19 +4,22 @@
 wu2198 五号群 消息自动同步（合并版：飞书群拉取 + 大V发言分析）
 
 功能：
-  1. 通过 lark-cli（OAuth 用户授权）拉取 wu2198五号群 最新的机器人消息（即 wu2198 的发言）
-  2. 按 97% 文本相似度去重后，增量导入 kol-opinion-analyzer 的 SQLite 数据库
-  3. 测试消息自动跳过
-  4. 已导入过的消息不会重复导入
+  1. 通过 lark-cli（OAuth 用户授权）拉取 wu2198五号群 的机器人消息（即 wu2198 的发言）
+  2. 增量拉取：只记住「最后一次拉取的群消息时间」，仅拉取该时间之后的新消息
+  3. 按 97% 文本相似度去重后，增量导入 kol-opinion-analyzer 的 SQLite 数据库
+  4. 测试消息自动跳过
   5. 报告本次同步结果（新增导入条数、跳过条数）
   6. 有新增时自动导出 JSON 并推送到 GitHub
+
+盘中时间定义：交易日 9:00-11:30 / 13:00-15:00（9:00-9:30 也算盘中），
+另在盘后 16:00 兜底同步一次；其余时间自动跳过。
 
 用法:
   python sync_feishu_auto.py                # 正常同步（盘中 + 交易日守卫）
   python sync_feishu_auto.py --force        # 忽略盘中/交易日守卫，强制同步
   python sync_feishu_auto.py --no-push      # 不同步到 GitHub
   python sync_feishu_auto.py --dry-run      # 只预览，不写库不推送
-  python sync_feishu_auto.py --page-size 100
+  python sync_feishu_auto.py --reset-watermark  # 重置增量水位（下次重新全量拉取）
 """
 import argparse
 import difflib
@@ -31,6 +34,7 @@ from datetime import datetime, timezone, timedelta
 SKILL_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DB_PATH = os.path.join(SKILL_DIR, "data", "kol_opinions.db")
 SYNC_SCRIPT = os.path.join(SKILL_DIR, "scripts", "sync.py")
+STATE_PATH = os.path.join(SKILL_DIR, "data", "feishu_sync_state.json")
 
 DEFAULT_CHAT_ID = "oc_59301fc3e11c6e131f31ffb8acd4125a"
 BOT_SENDER_TYPES = ("app", "bot")          # 机器人消息（wu2198 发言由自定义机器人发出）
@@ -56,30 +60,79 @@ def find_lark_cli():
 
 
 def trading_time_guard():
-    """交易日 + 盘中时间守卫（北京时间）。返回 (是否可运行, 原因)"""
+    """交易日 + 盘中/盘后时间守卫（北京时间）。返回 (是否可运行, 原因)"""
     now = datetime.now(timezone(timedelta(hours=8)))
     if now.weekday() >= 5:
         return False, "非交易日（周末）"
     hm = now.hour * 100 + now.minute
-    # 盘中 9:30-11:30 / 13:00-15:00，以及盘后 16:00 各执行一次
-    if (930 <= hm <= 1130) or (1300 <= hm <= 1500) or (1555 <= hm <= 1605):
+    # 盘中 9:00-11:30（9:00-9:30 也算盘中）/ 13:00-15:00，盘后 16:00 兜底一次
+    if (900 <= hm <= 1130) or (1300 <= hm <= 1500) or (1555 <= hm <= 1605):
         return True, ""
     return False, "非盘中/盘后时间（当前 %02d:%02d）" % (now.hour, now.minute)
 
 
-def fetch_latest_messages(lark_cli, chat_id, page_size=50):
-    """通过 lark-cli 拉取群内最新消息（默认最新 50 条，倒序）"""
+def to_iso(ts):
+    """'YYYY-MM-DD HH:MM' -> ISO8601（北京时间）"""
+    try:
+        dt = datetime.strptime(ts, "%Y-%m-%d %H:%M")
+        return dt.strftime("%Y-%m-%dT%H:%M:%S") + "+08:00"
+    except Exception:
+        return None
+
+
+def load_watermark(db_path):
+    """加载增量水位：优先状态文件，回退到 DB 中飞书群最新记录时间，再回退 None"""
+    if os.path.exists(STATE_PATH):
+        try:
+            with open(STATE_PATH, "r", encoding="utf-8") as f:
+                d = json.load(f)
+            t = d.get("last_message_time")
+            if t:
+                return t
+        except Exception:
+            pass
+    if os.path.exists(db_path):
+        try:
+            conn = sqlite3.connect(db_path)
+            cur = conn.cursor()
+            cur.execute("SELECT MAX(record_date) FROM kol_records WHERE kol_name='wu2198' AND platform='飞书群'")
+            t = cur.fetchone()[0]
+            conn.close()
+            if t:
+                return t
+        except Exception:
+            pass
+    return None
+
+
+def save_watermark(t):
+    """保存增量水位（最后拉取的群消息时间）"""
+    if not t:
+        return
+    try:
+        os.makedirs(os.path.dirname(STATE_PATH), exist_ok=True)
+        with open(STATE_PATH, "w", encoding="utf-8") as f:
+            json.dump({"last_message_time": t}, f, ensure_ascii=False)
+    except Exception as e:
+        print("[WARN] 保存水位失败: %s" % e)
+
+
+def fetch_messages_since(lark_cli, chat_id, start_iso=None):
+    """通过 lark-cli 拉取 start_iso 之后的消息（升序，自动分页）"""
     cmd = [
         lark_cli, "im", "+chat-messages-list",
         "--chat-id", chat_id,
         "--as", "user",
-        "--order", "desc",
-        "--page-size", str(page_size),
+        "--order", "asc",
+        "--page-all",
+        "--page-limit", "1000",
         "--no-reactions",
         "--json",
     ]
+    if start_iso:
+        cmd += ["--start", start_iso]
     try:
-        r = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=180)
     except subprocess.TimeoutExpired:
         print("[ERROR] lark-cli 拉取超时")
         return None
@@ -138,12 +191,20 @@ def main():
     ap = argparse.ArgumentParser(description="wu2198五号群消息自动同步（合并版）")
     ap.add_argument("--chat-id", default=DEFAULT_CHAT_ID)
     ap.add_argument("--threshold", type=float, default=SIM_THRESHOLD)
-    ap.add_argument("--page-size", type=int, default=50)
     ap.add_argument("--db", default=DB_PATH)
     ap.add_argument("--force", action="store_true", help="忽略盘中/交易日守卫")
     ap.add_argument("--no-push", action="store_true", help="跳过 GitHub 推送")
     ap.add_argument("--dry-run", action="store_true", help="只预览不写库")
+    ap.add_argument("--reset-watermark", action="store_true", help="重置增量水位，下次全量拉取")
     args = ap.parse_args()
+
+    if args.reset_watermark:
+        if os.path.exists(STATE_PATH):
+            os.remove(STATE_PATH)
+            print("[OK] 已重置增量水位（下次将全量拉取）")
+        else:
+            print("[INFO] 无水位文件，无需重置")
+        return
 
     if not args.force:
         ok, reason = trading_time_guard()
@@ -152,20 +213,33 @@ def main():
             return
 
     lark_cli = find_lark_cli()
+    watermark = load_watermark(args.db)
+    start_iso = to_iso(watermark) if watermark else None
+
     print("=" * 56)
     print("  wu2198五号群 消息自动同步")
     print("  时间: %s" % datetime.now(timezone(timedelta(hours=8))).strftime("%Y-%m-%d %H:%M:%S"))
     print("  群ID: %s" % args.chat_id)
+    print("  增量水位: %s" % (watermark or "无（全量拉取）"))
     print("=" * 56)
 
-    # 1. 拉取最新消息
-    messages = fetch_latest_messages(lark_cli, args.chat_id, args.page_size)
+    # 1. 只拉取水位之后的消息
+    messages = fetch_messages_since(lark_cli, args.chat_id, start_iso)
     if messages is None:
         print("[FAIL] 拉取失败，本轮结束")
         sys.exit(1)
-    print("[1/4] 拉到 %d 条消息" % len(messages))
+    print("[1/5] 拉到 %d 条新消息" % len(messages))
 
-    # 2. 过滤机器人消息 + 提取文本
+    # 2. 计算新水位 = 所有拉取消息的最大 create_time
+    new_watermark = watermark
+    if messages:
+        times = [m.get("create_time", "") for m in messages if m.get("create_time")]
+        if times:
+            latest = max(times)
+            if not new_watermark or latest > new_watermark:
+                new_watermark = latest
+
+    # 3. 过滤机器人消息 + 提取文本
     bot_texts = []
     for m in messages:
         s = m.get("sender") or {}
@@ -177,9 +251,9 @@ def main():
         if t is None:
             continue
         bot_texts.append((m.get("create_time", ""), t))
-    print("[2/4] 机器人文本消息 %d 条" % len(bot_texts))
+    print("[3/5] 机器人文本消息 %d 条" % len(bot_texts))
 
-    # 3. 去重 + 入库
+    # 4. 97% 去重 + 入库
     conn = sqlite3.connect(args.db)
     ensure_schema(conn)
     cur = conn.cursor()
@@ -215,27 +289,35 @@ def main():
 
     if not args.dry_run:
         conn.commit()
+        # 5. 保存新水位（记录本次拉取到的最新群消息时间）
+        if new_watermark:
+            save_watermark(new_watermark)
+        if new_watermark != watermark:
+            print("[5/5] 水位已更新: %s -> %s" % (watermark or "无", new_watermark))
+        else:
+            print("[5/5] 无新消息，水位保持: %s" % (new_watermark or "无"))
     total = cur.execute("SELECT COUNT(*) FROM kol_records WHERE kol_name='wu2198'").fetchone()[0]
     conn.close()
-    print("[3/4] 入库完成")
+    print("[4/5] 入库完成")
 
-    # 4. GitHub 推送
+    # 6. GitHub 推送
     push_ok = None
     if not args.dry_run and inserted > 0 and not args.no_push:
-        print("[4/4] 有新增，导出并推送到 GitHub ...")
+        print("[6/6] 有新增，导出并推送到 GitHub ...")
         r = subprocess.run([sys.executable, SYNC_SCRIPT, "push"], capture_output=True, text=True, timeout=180)
         push_ok = r.returncode == 0
         tail = (r.stdout + r.stderr).strip().splitlines()
         for line in tail[-6:]:
             print("      " + line)
     else:
-        print("[4/4] 跳过推送（dry-run=%s, inserted=%d, no-push=%s）"
+        print("[6/6] 跳过推送（dry-run=%s, inserted=%d, no-push=%s）"
               % (args.dry_run, inserted, args.no_push))
 
-    # 5. 报告
+    # 7. 报告
     print("\n" + "=" * 56)
     print("  同步结果报告")
     print("=" * 56)
+    print("  增量水位: %s" % (watermark or "无"))
     print("  新增导入条数: %d" % inserted)
     print("  跳过条数: %d（重复相似度>%.0f%%: %d / 测试消息: %d / 空消息: %d）"
           % (dup_skipped + test_skipped + empty_skipped, args.threshold * 100,
