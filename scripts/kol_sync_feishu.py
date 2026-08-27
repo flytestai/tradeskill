@@ -39,7 +39,7 @@ APP_ID = os.environ.get("FEISHU_APP_ID", "")
 APP_SECRET = os.environ.get("FEISHU_APP_SECRET", "")
 
 # 测试消息过滤关键词
-TEST_KEYWORDS = ["测试", "test", "TEST", "这是一条测试", "同步测试", "设备A同步测试"]
+TEST_KEYWORDS = ["转发测试", "同步测试", "设备A同步测试", "test", "TEST"]
 
 # 文本相似度去重阈值（0.8 = 80%）
 SIMILARITY_THRESHOLD = 0.80

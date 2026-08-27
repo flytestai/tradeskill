@@ -39,7 +39,7 @@ STATE_PATH = os.path.join(SKILL_DIR, "sync", "feishu_sync_state.json")
 DEFAULT_CHAT_ID = "oc_59301fc3e11c6e131f31ffb8acd4125a"
 BOT_SENDER_TYPES = ("app", "bot")          # 机器人消息（wu2198 发言由自定义机器人发出）
 SIM_THRESHOLD = 0.97                        # 文本相似度去重阈值
-TEST_KEYWORDS = ["测试", "test", "TEST", "这是一条测试", "同步测试", "设备A同步测试"]
+TEST_KEYWORDS = ["转发测试", "同步测试", "设备A同步测试", "test", "TEST"]
 
 
 def find_lark_cli():
