@@ -1,8 +1,23 @@
 {
-  "exported_at": "2026-08-27 09:31:32",
-  "total_records": 577,
+  "exported_at": "2026-08-27 09:41:29",
+  "total_records": 578,
   "kol_count": 1,
   "kol_records": [
+    {
+      "id": 1350,
+      "kol_name": "wu2198",
+      "platform": "飞书群",
+      "content": "SSD龙头目前冲20厘米，主要是受35亿大订单刺激！",
+      "extracted_viewpoints": "",
+      "related_assets": "",
+      "record_date": "2026-08-27 09:36",
+      "created_at": "2026-08-27 09:41:27",
+      "position_size": null,
+      "position_action": "",
+      "position_note": "飞书群自动同步",
+      "image_path": "",
+      "is_vip": 0
+    },
     {
       "id": 1349,
       "kol_name": "wu2198",
