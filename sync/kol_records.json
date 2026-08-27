@@ -1,8 +1,38 @@
 {
-  "exported_at": "2026-08-27 13:51:34",
-  "total_records": 426,
+  "exported_at": "2026-08-27 14:10:56",
+  "total_records": 428,
   "kol_count": 1,
   "kol_records": [
+    {
+      "id": 1363,
+      "kol_name": "wu2198",
+      "platform": "飞书群",
+      "content": "伦敦金从预期的3942美元出现反复，目前反抽到过4697美元。预计反抽的阻力在4800美元附近。接近之后会再度转跌，大的步伐不变........大家不要断章取义，前面我分析得很清楚，是先到4000美元区域，然后出现反复。按近期的走势来看确实如此.......…收到回复666//[@wu2198](https://weibo.com/n/wu2198):伦敦金较1月28日5598.75美元历史高点至3942.43美元。预计会有反复……收到回复666",
+      "extracted_viewpoints": "",
+      "related_assets": "",
+      "record_date": "2026-08-27 14:06",
+      "created_at": "2026-08-27 14:10:54",
+      "position_size": null,
+      "position_action": "",
+      "position_note": "飞书群自动同步",
+      "image_path": "",
+      "is_vip": 0
+    },
+    {
+      "id": 1364,
+      "kol_name": "wu2198",
+      "platform": "飞书群",
+      "content": "反抽到了3946",
+      "extracted_viewpoints": "",
+      "related_assets": "",
+      "record_date": "2026-08-27 14:01",
+      "created_at": "2026-08-27 14:10:55",
+      "position_size": null,
+      "position_action": "",
+      "position_note": "飞书群自动同步",
+      "image_path": "",
+      "is_vip": 0
+    },
     {
       "id": 1361,
       "kol_name": "wu2198",
