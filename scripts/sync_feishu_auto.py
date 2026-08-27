@@ -35,6 +35,7 @@ SKILL_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DB_PATH = os.path.join(SKILL_DIR, "data", "kol_opinions.db")
 SYNC_SCRIPT = os.path.join(SKILL_DIR, "scripts", "sync.py")
 STATE_PATH = os.path.join(SKILL_DIR, "sync", "feishu_sync_state.json")
+ERROR_LOG = os.path.join(SKILL_DIR, "data", "sync_errors.log")
 
 DEFAULT_CHAT_ID = "oc_59301fc3e11c6e131f31ffb8acd4125a"
 BOT_SENDER_TYPES = ("app", "bot")          # 机器人消息（wu2198 发言由自定义机器人发出）
@@ -171,6 +172,17 @@ def save_watermark(t):
         print("[WARN] 保存水位失败: %s" % e)
 
 
+def log_error(msg):
+    """记录同步错误到 data/sync_errors.log（带时间戳，用于回溯）"""
+    try:
+        os.makedirs(os.path.dirname(ERROR_LOG), exist_ok=True)
+        ts = datetime.now(timezone(timedelta(hours=8))).strftime("%Y-%m-%d %H:%M:%S")
+        with open(ERROR_LOG, "a", encoding="utf-8") as f:
+            f.write("[%s] %s\n" % (ts, msg))
+    except Exception:
+        pass
+
+
 def fetch_messages_since(lark_cli, chat_id, start_iso=None):
     """通过 lark-cli 拉取 start_iso 之后的消息（升序，自动分页）"""
     cmd = [
@@ -189,17 +201,23 @@ def fetch_messages_since(lark_cli, chat_id, start_iso=None):
         r = subprocess.run(cmd, capture_output=True, text=True, timeout=180)
     except subprocess.TimeoutExpired:
         print("[ERROR] lark-cli 拉取超时")
+        log_error("lark-cli 拉取超时")
         return None
     if r.returncode != 0:
-        print("[ERROR] lark-cli 拉取失败: %s" % (r.stderr[:300] or r.stdout[:300]))
+        err = r.stderr[:300] or r.stdout[:300]
+        print("[ERROR] lark-cli 拉取失败: %s" % err)
+        log_error("lark-cli 拉取失败: %s" % err)
         return None
     try:
         data = json.loads(r.stdout)
     except json.JSONDecodeError:
         print("[ERROR] 解析 lark-cli 输出失败")
+        log_error("解析 lark-cli 输出失败")
         return None
     if not data.get("ok"):
-        print("[ERROR] lark-cli 返回异常: %s" % json.dumps(data.get("error", {}), ensure_ascii=False)[:200])
+        err = json.dumps(data.get("error", {}), ensure_ascii=False)[:200]
+        print("[ERROR] lark-cli 返回异常: %s" % err)
+        log_error("lark-cli 返回异常: %s" % err)
         return None
     return data.get("data", {}).get("messages", []) or []
 
@@ -311,13 +329,14 @@ def main():
         bot_texts.append((m.get("create_time", ""), t))
     print("[3/5] 机器人文本消息 %d 条" % len(bot_texts))
 
-    # 4. 97% 去重 + 入库
+    # 4. 97% 去重 + 入库（精确去重用集合 O(1)，相似度只对比最近 300 条）
     conn = sqlite3.connect(args.db)
     ensure_schema(conn)
     cur = conn.cursor()
     cur.execute("SELECT content FROM kol_records WHERE kol_name='wu2198'")
-    existing = [r[0] for r in cur.fetchall() if r[0]]
-    existing_norm = [normalize(e) for e in existing]
+    exact_set = {normalize(r[0]) for r in cur.fetchall() if r[0]}
+    cur.execute("SELECT content FROM kol_records WHERE kol_name='wu2198' ORDER BY record_date DESC LIMIT 300")
+    recent_norm = [normalize(r[0]) for r in cur.fetchall() if r[0]]
 
     inserted = 0
     dup_skipped = 0
@@ -332,7 +351,10 @@ def main():
             test_skipped += 1
             continue
         nn = normalize(text)
-        if any(nn and difflib.SequenceMatcher(None, ee, nn).ratio() >= args.threshold for ee in existing_norm):
+        if nn in exact_set:
+            dup_skipped += 1
+            continue
+        if any(nn and difflib.SequenceMatcher(None, ee, nn).ratio() >= args.threshold for ee in recent_norm):
             dup_skipped += 1
             continue
         if not args.dry_run:
@@ -342,7 +364,8 @@ def main():
                  record_date, position_size, position_action, position_note, is_vip)
                 VALUES (?,?,?,?,?,?,?,?,?,?)""",
                 ("wu2198", "飞书群", text, "", "", ct, None, "", "飞书群自动同步", vip))
-        existing_norm.append(nn)
+        exact_set.add(nn)
+        recent_norm.append(nn)
         inserted += 1
 
     if not args.dry_run:
@@ -365,6 +388,8 @@ def main():
         print("[6/6] 有新增，导出并推送到 GitHub ...")
         r = subprocess.run([sys.executable, SYNC_SCRIPT, "push"], capture_output=True, text=True, timeout=180)
         push_ok = r.returncode == 0
+        if not push_ok:
+            log_error("GitHub 推送失败")
         tail = (r.stdout + r.stderr).strip().splitlines()
         for line in tail[-6:]:
             print("      " + line)
