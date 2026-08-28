@@ -1,8 +1,23 @@
 {
-  "exported_at": "2026-08-28 11:22:13",
-  "total_records": 444,
+  "exported_at": "2026-08-28 11:37:33",
+  "total_records": 445,
   "kol_count": 1,
   "kol_records": [
+    {
+      "id": 1381,
+      "kol_name": "wu2198",
+      "platform": "飞书群",
+      "content": "今天下午大盘指数看3932--3970之间折腾........收到请回复666或点赞支持一下！ \n@wu2198\n大盘指数短线今天早盘暂时看3932--3968之间........收到请回复666或点赞支持一下！",
+      "extracted_viewpoints": "",
+      "related_assets": "",
+      "record_date": "2026-08-28 11:22",
+      "created_at": "2026-08-28 11:37:32",
+      "position_size": null,
+      "position_action": "",
+      "position_note": "飞书群自动同步",
+      "image_path": "",
+      "is_vip": 0
+    },
     {
       "id": 1379,
       "kol_name": "wu2198",
