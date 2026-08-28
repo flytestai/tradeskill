@@ -1,8 +1,38 @@
 {
-  "exported_at": "2026-08-28 10:32:11",
-  "total_records": 442,
+  "exported_at": "2026-08-28 11:22:13",
+  "total_records": 444,
   "kol_count": 1,
   "kol_records": [
+    {
+      "id": 1379,
+      "kol_name": "wu2198",
+      "platform": "飞书群",
+      "content": "银行，煤炭，最近走得比较稳。粮食板块则出现走牛！",
+      "extracted_viewpoints": "",
+      "related_assets": "",
+      "record_date": "2026-08-28 11:12",
+      "created_at": "2026-08-28 11:22:11",
+      "position_size": null,
+      "position_action": "",
+      "position_note": "飞书群自动同步",
+      "image_path": "",
+      "is_vip": 0
+    },
+    {
+      "id": 1380,
+      "kol_name": "wu2198",
+      "platform": "飞书群",
+      "content": "短线不要追，小心扎人.......",
+      "extracted_viewpoints": "",
+      "related_assets": "",
+      "record_date": "2026-08-28 11:05",
+      "created_at": "2026-08-28 11:22:11",
+      "position_size": null,
+      "position_action": "",
+      "position_note": "飞书群自动同步",
+      "image_path": "",
+      "is_vip": 0
+    },
     {
       "id": 1377,
       "kol_name": "wu2198",
