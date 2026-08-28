@@ -376,6 +376,21 @@ python scripts/sync_feishu_auto.py --dry-run      # 只预览
 python scripts/sync_feishu_auto.py --reset-watermark  # 重置增量水位（下次全量）
 ```
 
+## 飞书机器人提醒
+
+`scripts/notify_feishu.sh` 通过飞书机器人（应用 `cli_a92579c6ddf9dcb5`，机器人身份）给用户发私聊提醒：
+
+```bash
+bash scripts/notify_feishu.sh "提醒内容"
+```
+
+**触发条件**（关键位突破/跌破或转折观点）：
+- 上证放量突破 **3996** → 转多；跌破 **3741/3767** → C杀启动
+- 创业板跌破 **3359** → 加速去 3300；回踩 **3300** 企稳 → 短线机会
+- wu2198 发表 B反/C杀 转折性观点
+
+> 注：lark-cli 偶发"发送成功后进程不退出"，脚本已改为后台发送（`nohup ... &`），消息发出即返回。
+
 ## 分析工作流
 
 ### Step 0: 自动同步（每次分析前必执行）
