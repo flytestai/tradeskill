@@ -386,6 +386,15 @@ python scripts/sync_feishu_auto.py --reset-watermark  # 重置增量水位（下
 bash scripts/notify_feishu.sh "提醒内容"
 ```
 
+**去重（避免重复轰炸）**：用 `alert_once.sh` 发送，同一触发键只提醒一次：
+
+```bash
+bash scripts/alert_once.sh "触发键" "提醒内容"
+```
+
+- 触发键记录在 `data/alert_state.txt`（每行一个），已触发则自动跳过；
+- 需要重新提醒时，删除 `data/alert_state.txt` 即可重置。
+
 **触发条件**（关键位突破/跌破或转折观点）：
 - 上证放量突破 **3996** → 转多；跌破 **3741-3767 连线（红线）** → C杀启动
 - 创业板跌破 **3359** → 加速去 3300；回踩 **3300** 企稳 → 短线机会；跌破 **3158**（A杀低）→ C杀确认
