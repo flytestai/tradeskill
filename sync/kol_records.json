@@ -1,8 +1,38 @@
 {
-  "exported_at": "2026-08-28 11:37:33",
-  "total_records": 445,
+  "exported_at": "2026-08-28 12:40:42",
+  "total_records": 447,
   "kol_count": 1,
   "kol_records": [
+    {
+      "id": 1382,
+      "kol_name": "wu2198",
+      "platform": "飞书群",
+      "content": "早上收在3959.63点，下午大盘指数看3932--3970之间折腾........收到请回复666或点赞支持一下！",
+      "extracted_viewpoints": "",
+      "related_assets": "",
+      "record_date": "2026-08-28 11:38",
+      "created_at": "2026-08-28 12:40:38",
+      "position_size": null,
+      "position_action": "",
+      "position_note": "飞书群自动同步",
+      "image_path": "",
+      "is_vip": 0
+    },
+    {
+      "id": 1383,
+      "kol_name": "wu2198",
+      "platform": "飞书群",
+      "content": "截止11：30两市成交了14338亿元，有3197只个股上涨，大盘资金流出209.79亿元，量能比上一交易日增加728亿元！",
+      "extracted_viewpoints": "",
+      "related_assets": "",
+      "record_date": "2026-08-28 11:37",
+      "created_at": "2026-08-28 12:40:38",
+      "position_size": null,
+      "position_action": "",
+      "position_note": "飞书群自动同步",
+      "image_path": "",
+      "is_vip": 0
+    },
     {
       "id": 1381,
       "kol_name": "wu2198",
