@@ -1,8 +1,23 @@
 {
-  "exported_at": "2026-08-28 14:41:05",
-  "total_records": 451,
+  "exported_at": "2026-08-28 14:56:59",
+  "total_records": 452,
   "kol_count": 1,
   "kol_records": [
+    {
+      "id": 1388,
+      "kol_name": "wu2198",
+      "platform": "飞书群",
+      "content": "按周线看大盘指数本周收小阳，指数介于3850--3970之间波动；深成指和创业板指数周线收阴，说明市场对于科技类股的风险预期还在，而主板则得益于银行，煤炭，保险，券商等权种力量的加持收红。整体看下周市场维持震荡整理的可能性比较大，可操作空间不大，依然是多看少动为主.......收到请回复666或点赞支持一下！",
+      "extracted_viewpoints": "",
+      "related_assets": "",
+      "record_date": "2026-08-28 14:56",
+      "created_at": "2026-08-28 14:56:58",
+      "position_size": null,
+      "position_action": "",
+      "position_note": "飞书群自动同步",
+      "image_path": "",
+      "is_vip": 0
+    },
     {
       "id": 1386,
       "kol_name": "wu2198",
