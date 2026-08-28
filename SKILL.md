@@ -378,6 +378,8 @@ python scripts/sync_feishu_auto.py --reset-watermark  # 重置增量水位（下
 
 ## 飞书机器人提醒
 
+> **约定：本 skill 以后设置的所有提醒，统一通过飞书机器人（`notify_feishu.sh`）发私聊，不在会话内刷屏。**
+
 `scripts/notify_feishu.sh` 通过飞书机器人（应用 `cli_a92579c6ddf9dcb5`，机器人身份）给用户发私聊提醒：
 
 ```bash
