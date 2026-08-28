@@ -7,7 +7,7 @@
   python sync.py pull       # git pull → JSON → DB 导入
   python sync.py status     # 查看同步状态
 """
-import sqlite3, json, os, sys, subprocess, argparse
+import sqlite3, json, os, sys, subprocess, argparse, time
 from datetime import datetime
 
 SKILL_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -105,8 +105,17 @@ def git_push():
     if ok:
         print(f"[GIT] pushed → remote")
     else:
-        print(f"[GIT] push failed: {out.strip()}")
-        print("  (可能需要配置 GitHub 凭证)")
+        # 网络不稳定（github 443 偶发连不上）时自动重试
+        for i in range(1, 4):
+            print(f"[GIT] push 失败，第 {i} 次重试（等 6 秒）...")
+            time.sleep(6)
+            ok, out = run("git push")
+            if ok:
+                print(f"[GIT] pushed → remote（第 {i} 次重试成功）")
+                break
+        if not ok:
+            print(f"[GIT] push failed: {out.strip()}")
+            print("  (可能需要配置 GitHub 凭证)")
     return ok
 
 def git_pull():
