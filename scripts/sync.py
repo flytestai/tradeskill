@@ -106,7 +106,7 @@ def git_push():
         print(f"[GIT] pushed → remote")
     else:
         # 网络不稳定（github 443 偶发连不上）时自动重试
-        for i in range(1, 4):
+        for i in range(1, 6):
             print(f"[GIT] push 失败，第 {i} 次重试（等 6 秒）...")
             time.sleep(6)
             ok, out = run("git push")
