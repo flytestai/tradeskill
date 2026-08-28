@@ -19,6 +19,9 @@ if [ -z "$MSG" ]; then
     exit 1
 fi
 
+# 把输入里的 \n 转成真实换行（bash 双引号不会自动解释 \n）
+MSG=$(printf '%b' "$MSG")
+
 nohup lark-cli im +messages-send \
     --user-id "$USER_OPEN_ID" \
     --as bot \
