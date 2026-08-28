@@ -1,8 +1,38 @@
 {
-  "exported_at": "2026-08-28 14:18:50",
-  "total_records": 449,
+  "exported_at": "2026-08-28 14:41:05",
+  "total_records": 451,
   "kol_count": 1,
   "kol_records": [
+    {
+      "id": 1386,
+      "kol_name": "wu2198",
+      "platform": "飞书群",
+      "content": "大盘指数连续反击了几天，显示出疲惫了。而且创业板指数偏软！",
+      "extracted_viewpoints": "",
+      "related_assets": "",
+      "record_date": "2026-08-28 14:38",
+      "created_at": "2026-08-28 14:41:04",
+      "position_size": null,
+      "position_action": "",
+      "position_note": "飞书群自动同步",
+      "image_path": "",
+      "is_vip": 0
+    },
+    {
+      "id": 1387,
+      "kol_name": "wu2198",
+      "platform": "飞书群",
+      "content": "截止14:33两市成交了18782亿元，有3406只个股上涨，大盘资金流出289亿元，量能比上一交易日减少117亿元！",
+      "extracted_viewpoints": "",
+      "related_assets": "",
+      "record_date": "2026-08-28 14:34",
+      "created_at": "2026-08-28 14:41:04",
+      "position_size": null,
+      "position_action": "",
+      "position_note": "飞书群自动同步",
+      "image_path": "",
+      "is_vip": 0
+    },
     {
       "id": 1385,
       "kol_name": "wu2198",
