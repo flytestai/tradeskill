@@ -365,6 +365,7 @@ python <skill-dir>/scripts/sync.py status
 `scripts/sync_feishu_auto.py` 通过 lark-cli（OAuth 用户授权）从飞书群增量拉取 wu2198 发言：
 
 - **盘中时间**：交易日 9:00-11:30 / 13:00-15:00（**9:00-9:30 也算盘中**），另在盘后 16:00 兜底一次，其余时间自动跳过
+- **节假日**：法定休市日自动跳过；节假日列表在 `data/holidays.txt`（每行一个日期，每年年初更新），脚本内另有硬编码兜底
 - **增量拉取**：只记住「最后一次拉取的群消息时间」（水位，存于 `sync/feishu_sync_state.json`，随 GitHub 同步，多设备共享一致水位），仅拉取该时间之后的新消息
 - **去重**：按 97% 文本相似度去重，测试消息自动跳过，已导入消息不重复导入
 - **入库 + 推送**：增量写入 `kol_opinions.db`，有新增时自动导出 JSON 并推送到 GitHub
@@ -386,19 +387,25 @@ python scripts/sync_feishu_auto.py --reset-watermark  # 重置增量水位（下
 bash scripts/notify_feishu.sh "提醒内容"
 ```
 
-**去重（避免重复轰炸）**：用 `alert_once.sh` 发送，同一触发键只提醒一次：
+**去重 + 反向重置**：用 `alert_once.sh` 发送，同一触发键只提醒一次，收回关键位后自动重置、再次触发再提醒：
 
 ```bash
-bash scripts/alert_once.sh "触发键" "提醒内容"
+bash scripts/alert_once.sh "触发键" "状态" "提醒内容"
+# 状态: below=跌破(提醒) / break=突破(提醒) / above=收回(只重置不提醒)
 ```
 
-- 触发键记录在 `data/alert_state.txt`（每行一个），已触发则自动跳过；
-- 需要重新提醒时，删除 `data/alert_state.txt` 即可重置。
+- 触发状态记录在 `data/alert_state.txt`（格式 `键=状态`）；
+- 需要全部重置时，删除 `data/alert_state.txt` 即可。
 
 **触发条件**（关键位突破/跌破或转折观点）：
 - 上证放量突破 **3996** → 转多；跌破 **3741-3767 连线（红线）** → C杀启动
 - 创业板跌破 **3359** → 加速去 3300；回踩 **3300** 企稳 → 短线机会；跌破 **3158**（A杀低）→ C杀确认
 - wu2198 发表 B反/C杀 转折性观点
+
+**其它提醒**：
+- **收盘汇总**：每个交易日 15:05 自动生成当日汇总（收盘点位/成交额/wu2198观点/明日关注）发飞书
+- **同步告警**：lark-cli 拉取失败、GitHub 推送失败、授权临近过期（<3天）时自动发飞书告警
+- **图片消息**：图片以 `image_key` 记录在库；`python sync_feishu_auto.py --download-images` 可下载图片到 `assets/feishu_images/`，OCR 需另装 OCR 工具（tesseract/paddleocr）
 
 > 注：lark-cli 偶发"发送成功后进程不退出"，脚本已改为后台发送（`nohup ... &`），消息发出即返回。
 
