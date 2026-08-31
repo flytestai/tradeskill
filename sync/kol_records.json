@@ -1,8 +1,38 @@
 {
-  "exported_at": "2026-08-31 13:31:20",
-  "total_records": 467,
+  "exported_at": "2026-08-31 13:41:30",
+  "total_records": 469,
   "kol_count": 1,
   "kol_records": [
+    {
+      "id": 1404,
+      "kol_name": "wu2198",
+      "platform": "飞书群",
+      "content": "AI预测：wu2198的一层仓，星宸科技目前10cm涨幅，端测端长期依然看好，还没到爆发期！",
+      "extracted_viewpoints": "",
+      "related_assets": "",
+      "record_date": "2026-08-31 13:34",
+      "created_at": "2026-08-31 13:41:28",
+      "position_size": null,
+      "position_action": "",
+      "position_note": "飞书群自动同步",
+      "image_path": "",
+      "is_vip": 0
+    },
+    {
+      "id": 1405,
+      "kol_name": "wu2198",
+      "platform": "飞书群",
+      "content": "截止目前看今天SoC芯片表现出色！\n@wu2198\n两只蹲厕封板！",
+      "extracted_viewpoints": "",
+      "related_assets": "",
+      "record_date": "2026-08-31 13:33",
+      "created_at": "2026-08-31 13:41:29",
+      "position_size": null,
+      "position_action": "",
+      "position_note": "飞书群自动同步",
+      "image_path": "",
+      "is_vip": 0
+    },
     {
       "id": 1402,
       "kol_name": "wu2198",
