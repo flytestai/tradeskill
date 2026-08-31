@@ -215,6 +215,19 @@ def alert_feishu(key, msg):
         pass
 
 
+def push_vip_to_group(text, ct):
+    """VIP 消息（含「仅TA的真爱粉可见」）实时推送到群（荔枝种植交流群）"""
+    try:
+        msg = ("🔒 **【VIP消息】**\n"
+               f"🕐 **时间**：{ct}\n"
+               f"{text}")
+        subprocess.run(
+            ["bash", os.path.join(SKILL_DIR, "scripts", "notify_group.sh"), msg],
+            capture_output=True, text=True, timeout=30, cwd=SKILL_DIR)
+    except Exception:
+        pass
+
+
 def fetch_messages_since(lark_cli, chat_id, start_iso=None):
     """通过 lark-cli 拉取 start_iso 之后的消息（升序，自动分页）"""
     cmd = [
@@ -436,6 +449,8 @@ def main():
                  record_date, position_size, position_action, position_note, is_vip)
                 VALUES (?,?,?,?,?,?,?,?,?,?)""",
                 (args.kol_name, "飞书群", text, "", "", ct, None, "", "飞书群自动同步", vip))
+            if vip:
+                push_vip_to_group(text, ct)
         exact_set.add(nn)
         recent_norm.append(nn)
         inserted += 1

@@ -49,6 +49,6 @@ if [ "$ST" = "above" ] || [ -z "$MSG" ]; then
     exit 0
 fi
 
-# 跌破/突破 → 发提醒
-bash "$SKILL_DIR/scripts/notify_feishu.sh" "$MSG"
+# 跌破/突破 → 发提醒到群（荔枝种植交流群）
+bash "$SKILL_DIR/scripts/notify_group.sh" "$MSG"
 echo "[已提醒] $KEY -> $ST"
