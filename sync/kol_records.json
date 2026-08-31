@@ -1,8 +1,23 @@
 {
-  "exported_at": "2026-08-31 10:01:33",
-  "total_records": 457,
+  "exported_at": "2026-08-31 10:11:16",
+  "total_records": 458,
   "kol_count": 1,
   "kol_records": [
+    {
+      "id": 1394,
+      "kol_name": "wu2198",
+      "platform": "飞书群",
+      "content": "四大行中，中行改写了历史新高！",
+      "extracted_viewpoints": "",
+      "related_assets": "",
+      "record_date": "2026-08-31 10:07",
+      "created_at": "2026-08-31 10:11:16",
+      "position_size": null,
+      "position_action": "",
+      "position_note": "飞书群自动同步",
+      "image_path": "",
+      "is_vip": 0
+    },
     {
       "id": 1392,
       "kol_name": "wu2198",
