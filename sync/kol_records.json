@@ -1,8 +1,23 @@
 {
-  "exported_at": "2026-08-31 14:21:59",
-  "total_records": 477,
+  "exported_at": "2026-08-31 14:31:32",
+  "total_records": 478,
   "kol_count": 1,
   "kol_records": [
+    {
+      "id": 1414,
+      "kol_name": "wu2198",
+      "platform": "飞书群",
+      "content": "【仅TA的真爱粉可见】 创业板指数早盘试探3359之后反击，与前面一次3359重合，要搏击短线得话可以考虑其成小双底（破3356止损），收复3526之后才有短线空间。目前短线暂时放弃3300的想法。因为，市场可能维持一段时间区间震荡！",
+      "extracted_viewpoints": "",
+      "related_assets": "",
+      "record_date": "2026-08-31 14:22",
+      "created_at": "2026-08-31 14:31:25",
+      "position_size": null,
+      "position_action": "",
+      "position_note": "飞书群自动同步",
+      "image_path": "",
+      "is_vip": 1
+    },
     {
       "id": 1411,
       "kol_name": "wu2198",
