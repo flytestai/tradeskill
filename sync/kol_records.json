@@ -1,8 +1,23 @@
 {
-  "exported_at": "2026-08-31 13:41:30",
-  "total_records": 469,
+  "exported_at": "2026-08-31 13:44:56",
+  "total_records": 470,
   "kol_count": 1,
   "kol_records": [
+    {
+      "id": 1406,
+      "kol_name": "wu2198",
+      "platform": "飞书群",
+      "content": "四大行，煤炭，石油托指数明显！",
+      "extracted_viewpoints": "",
+      "related_assets": "",
+      "record_date": "2026-08-31 13:44",
+      "created_at": "2026-08-31 13:44:54",
+      "position_size": null,
+      "position_action": "",
+      "position_note": "飞书群自动同步",
+      "image_path": "",
+      "is_vip": 0
+    },
     {
       "id": 1404,
       "kol_name": "wu2198",
