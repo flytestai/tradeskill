@@ -1,8 +1,38 @@
 {
-  "exported_at": "2026-08-31 13:21:36",
-  "total_records": 465,
+  "exported_at": "2026-08-31 13:31:20",
+  "total_records": 467,
   "kol_count": 1,
   "kol_records": [
+    {
+      "id": 1402,
+      "kol_name": "wu2198",
+      "platform": "飞书群",
+      "content": "早盘我认为向3900边回撤的（只试了3926点），谁知道四大行硬是将指数扛起来。",
+      "extracted_viewpoints": "",
+      "related_assets": "",
+      "record_date": "2026-08-31 13:27",
+      "created_at": "2026-08-31 13:31:18",
+      "position_size": null,
+      "position_action": "",
+      "position_note": "飞书群自动同步",
+      "image_path": "",
+      "is_vip": 0
+    },
+    {
+      "id": 1403,
+      "kol_name": "wu2198",
+      "platform": "飞书群",
+      "content": "两只蹲厕封板！",
+      "extracted_viewpoints": "",
+      "related_assets": "",
+      "record_date": "2026-08-31 13:23",
+      "created_at": "2026-08-31 13:31:18",
+      "position_size": null,
+      "position_action": "",
+      "position_note": "飞书群自动同步",
+      "image_path": "",
+      "is_vip": 0
+    },
     {
       "id": 1401,
       "kol_name": "wu2198",
