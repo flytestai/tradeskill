@@ -22,6 +22,13 @@ from datetime import datetime, timezone, timedelta
 SKILL_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 ALERT_ONCE = os.path.join(SKILL_DIR, "scripts", "alert_once.sh")
 
+# Git Bash 的 bash.exe 完整路径（Windows 下 subprocess 调 "bash" 会误调 WSL bash 而失败）
+BASH = r"C:\Program Files\Git\usr\bin\bash.exe"
+if not os.path.exists(BASH):
+    BASH = r"C:\Program Files\Git\bin\bash.exe"
+if not os.path.exists(BASH):
+    BASH = "bash"
+
 API_URL = "https://bee-ai.integrity.com.cn/skills/v1/query2data"
 BASE_HEADERS = {
     "Content-Type": "application/json",
@@ -71,7 +78,7 @@ def fmt_msg(stock, point, desc, action):
 
 def alert(key, state, msg="", dry_run=False):
     """调用 alert_once.sh（状态变化才提醒）"""
-    cmd = ["bash", ALERT_ONCE, key, state, msg]
+    cmd = [BASH, ALERT_ONCE, key, state, msg]
     if dry_run:
         print(f"  [DRY] {key} -> {state}  {msg[:40] if msg else '(重置)'}")
         return

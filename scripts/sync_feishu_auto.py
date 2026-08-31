@@ -38,6 +38,13 @@ SYNC_SCRIPT = os.path.join(SKILL_DIR, "scripts", "sync.py")
 STATE_PATH = os.path.join(SKILL_DIR, "sync", "feishu_sync_state.json")
 ERROR_LOG = os.path.join(SKILL_DIR, "data", "sync_errors.log")
 
+# Git Bash 的 bash.exe 完整路径（Windows 下 subprocess 调 "bash" 会误调 WSL bash 而失败）
+BASH = r"C:\Program Files\Git\usr\bin\bash.exe"
+if not os.path.exists(BASH):
+    BASH = r"C:\Program Files\Git\bin\bash.exe"
+if not os.path.exists(BASH):
+    BASH = "bash"
+
 DEFAULT_CHAT_ID = "oc_59301fc3e11c6e131f31ffb8acd4125a"
 BOT_SENDER_TYPES = ("app", "bot")          # 机器人消息（wu2198 发言由自定义机器人发出）
 SIM_THRESHOLD = 0.97                        # 文本相似度去重阈值
@@ -208,7 +215,7 @@ def alert_feishu(key, msg):
     try:
         day = datetime.now(timezone(timedelta(hours=8))).strftime("%Y-%m-%d")
         subprocess.run(
-            ["bash", os.path.join(SKILL_DIR, "scripts", "alert_once_private.sh"),
+            [BASH, os.path.join(SKILL_DIR, "scripts", "alert_once_private.sh"),
              "%s_%s" % (key, day), "below", msg],
             capture_output=True, text=True, timeout=30, cwd=SKILL_DIR)
     except Exception:
@@ -224,9 +231,19 @@ def push_vip_to_group(text, ct):
                f"🕐 {ct}\n"
                f"\n"
                f"{body}")
-        subprocess.run(
-            ["bash", os.path.join(SKILL_DIR, "scripts", "notify_group.sh"), msg],
-            capture_output=True, text=True, timeout=30, cwd=SKILL_DIR)
+        # 写入临时文件（避免命令行传中文/多行在 Windows 下编码损坏）
+        tmp = os.path.join(SKILL_DIR, "data", "_vip_push_tmp.txt")
+        with open(tmp, "w", encoding="utf-8") as f:
+            f.write(msg)
+        # 用 BASH -c 内联执行（脚本文件方式在 Python subprocess 下有参数错位问题）
+        cmd = ('timeout -k 3 20 lark-cli im +messages-send '
+               '--chat-id oc_92e9e038a0b4aa5356427e8c2901a970 '
+               '--as bot --markdown "$(cat data/_vip_push_tmp.txt)" >/dev/null 2>&1')
+        subprocess.run([BASH, "-c", cmd], capture_output=True, timeout=40, cwd=SKILL_DIR)
+        try:
+            os.remove(tmp)
+        except Exception:
+            pass
     except Exception:
         pass
 
