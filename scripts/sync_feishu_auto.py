@@ -54,6 +54,23 @@ HOLIDAYS = {
     "2026-10-01", "2026-10-02", "2026-10-05", "2026-10-06", "2026-10-07",      # 国庆节
 }
 
+HOLIDAYS_FILE = os.path.join(SKILL_DIR, "data", "holidays.txt")
+
+
+def load_holidays():
+    """加载节假日集合：硬编码 HOLIDAYS + data/holidays.txt（可配置，每年更新）"""
+    days = set(HOLIDAYS)
+    if os.path.exists(HOLIDAYS_FILE):
+        try:
+            with open(HOLIDAYS_FILE, "r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if line and not line.startswith("#") and re.match(r"^\d{4}-\d{2}-\d{2}$", line):
+                        days.add(line)
+        except Exception:
+            pass
+    return days
+
 
 def find_lark_cli():
     """定位 lark-cli 可执行文件（兼容 PATH 与常见全局安装目录）"""
@@ -91,8 +108,10 @@ def check_auth(lark_cli):
         days = (exp - now8).days
         if days < 0:
             print("[AUTH] ⚠️ 授权已过期，请重新执行 lark-cli auth login")
+            alert_feishu("授权过期", "🚨 **【授权告警】**\nlark-cli 授权已过期，请重新执行 lark-cli auth login 扫码授权")
         elif days <= 3:
             print("[AUTH] ⚠️ 授权将在 %d 天后过期(%s)，请提前重新授权" % (days, expires[:10]))
+            alert_feishu("授权过期", "🚨 **【授权告警】**\nlark-cli 授权将在 %d 天后过期(%s)，请提前重新扫码授权" % (days, expires[:10]))
         else:
             print("[AUTH] 授权正常，%s 到期" % expires[:10])
     except Exception:
@@ -104,7 +123,7 @@ def trading_time_guard():
     now = datetime.now(timezone(timedelta(hours=8)))
     if now.weekday() >= 5:
         return False, "非交易日（周末）"
-    if now.strftime("%Y-%m-%d") in HOLIDAYS:
+    if now.strftime("%Y-%m-%d") in load_holidays():
         return False, "非交易日（节假日）"
     hm = now.hour * 100 + now.minute
     # 盘中 9:00-11:30（9:00-9:30 也算盘中）/ 13:00-15:00，盘后 16:00 兜底一次
