@@ -223,7 +223,7 @@ def alert_feishu(key, msg):
 
 
 def push_vip_to_group(text, ct):
-    """VIP 消息（含「仅TA的真爱粉可见」）实时推送到群（荔枝种植交流群）"""
+    """VIP 消息（含「仅TA的真爱粉可见」）推送到群（荔枝种植交流群），返回是否成功"""
     try:
         # 去掉正文里重复的 VIP 标记，让排版更干净
         body = text.replace("【仅TA的真爱粉可见】", "").strip()
@@ -235,17 +235,22 @@ def push_vip_to_group(text, ct):
         tmp = os.path.join(SKILL_DIR, "data", "_vip_push_tmp.txt")
         with open(tmp, "w", encoding="utf-8") as f:
             f.write(msg)
-        # 用 BASH -c 内联执行（脚本文件方式在 Python subprocess 下有参数错位问题）
+        # 用 BASH -c 内联执行，捕获输出判断是否成功（lark-cli 返回 ok:true 即成功）
         cmd = ('timeout -k 3 20 lark-cli im +messages-send '
                '--chat-id oc_92e9e038a0b4aa5356427e8c2901a970 '
-               '--as bot --markdown "$(cat data/_vip_push_tmp.txt)" >/dev/null 2>&1')
-        subprocess.run([BASH, "-c", cmd], capture_output=True, timeout=40, cwd=SKILL_DIR)
+               '--as bot --markdown "$(cat data/_vip_push_tmp.txt)"')
+        r = subprocess.run([BASH, "-c", cmd], capture_output=True, timeout=40, cwd=SKILL_DIR)
+        out = r.stdout or b""
+        ok = (b'"ok": true' in out or b'"ok":true' in out)
         try:
             os.remove(tmp)
         except Exception:
             pass
+        if not ok:
+            log_error("VIP 消息推送失败: %s" % ct)
+        return ok
     except Exception:
-        pass
+        return False
 
 
 def fetch_messages_since(lark_cli, chat_id, start_iso=None):
@@ -470,7 +475,8 @@ def main():
                 VALUES (?,?,?,?,?,?,?,?,?,?)""",
                 (args.kol_name, "飞书群", text, "", "", ct, None, "", "飞书群自动同步", vip))
             if vip:
-                push_vip_to_group(text, ct)
+                if push_vip_to_group(text, ct):
+                    cur.execute("UPDATE kol_records SET vip_pushed=1 WHERE id=?", (cur.lastrowid,))
         exact_set.add(nn)
         recent_norm.append(nn)
         inserted += 1
@@ -499,6 +505,14 @@ def main():
                  local_path or img_key, 0))
         seen_img.add(img_key)
         img_inserted += 1
+
+    # 4c. 补推未推送成功的 VIP 消息（数据已入库，推送失败的下次自动补）
+    if not args.dry_run:
+        cur.execute("SELECT id, content, record_date FROM kol_records WHERE kol_name=? AND is_vip=1 AND vip_pushed=0 ORDER BY id ASC", (args.kol_name,))
+        pending_vip = cur.fetchall()
+        for pid, pcontent, pct in pending_vip:
+            if push_vip_to_group(pcontent, pct):
+                cur.execute("UPDATE kol_records SET vip_pushed=1 WHERE id=?", (pid,))
 
     if not args.dry_run:
         conn.commit()

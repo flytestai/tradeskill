@@ -26,6 +26,7 @@ CREATE TABLE IF NOT EXISTS kol_records (
     position_note TEXT DEFAULT '',
     image_path TEXT DEFAULT '',
     is_vip INTEGER DEFAULT 0,
+    vip_pushed INTEGER DEFAULT 0,
     created_at TEXT DEFAULT (datetime('now', 'localtime'))
 );
 
@@ -51,6 +52,7 @@ MIGRATION_COLUMNS = [
     "ALTER TABLE kol_records ADD COLUMN position_note TEXT DEFAULT ''",
     "ALTER TABLE kol_records ADD COLUMN image_path TEXT DEFAULT ''",
     "ALTER TABLE kol_records ADD COLUMN is_vip INTEGER DEFAULT 0",
+    "ALTER TABLE kol_records ADD COLUMN vip_pushed INTEGER DEFAULT 0",
 ]
 
 
