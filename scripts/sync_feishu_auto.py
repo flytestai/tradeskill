@@ -155,7 +155,7 @@ def pull_latest():
         print("[PULL] 拉取异常（继续使用本地水位）: %s" % e)
 
 
-def load_watermark(db_path):
+def load_watermark(db_path, kol_name="wu2198"):
     """加载增量水位：优先 sync/ 状态文件，回退到 DB 中飞书群最新记录时间，再回退 None"""
     if os.path.exists(STATE_PATH):
         try:
@@ -170,7 +170,7 @@ def load_watermark(db_path):
         try:
             conn = sqlite3.connect(db_path)
             cur = conn.cursor()
-            cur.execute("SELECT MAX(record_date) FROM kol_records WHERE kol_name='wu2198' AND platform='飞书群'")
+            cur.execute("SELECT MAX(record_date) FROM kol_records WHERE kol_name=? AND platform='飞书群'", (kol_name,))
             t = cur.fetchone()[0]
             conn.close()
             if t:
@@ -334,6 +334,8 @@ def main():
     ap.add_argument("--reset-watermark", action="store_true", help="重置增量水位，下次全量拉取")
     ap.add_argument("--no-pull", action="store_true", help="同步前不拉取最新水位")
     ap.add_argument("--download-images", action="store_true", help="同步时下载图片到 assets/feishu_images/")
+    ap.add_argument("--kol-name", default="wu2198", help="KOL 名称（默认 wu2198）")
+    ap.add_argument("--bot-name", default="自定义机器人", help="发言机器人名称（默认 自定义机器人）")
     args = ap.parse_args()
 
     if args.reset_watermark:
@@ -354,7 +356,7 @@ def main():
     check_auth(lark_cli)
     if not args.no_pull:
         pull_latest()
-    watermark = load_watermark(args.db)
+    watermark = load_watermark(args.db, args.kol_name)
     start_iso = to_iso(watermark) if watermark else None
 
     print("=" * 56)
@@ -388,7 +390,7 @@ def main():
         s = m.get("sender") or {}
         stype = s.get("sender_type", "")
         sname = s.get("name", "")
-        if stype not in BOT_SENDER_TYPES and sname != "自定义机器人":
+        if stype not in BOT_SENDER_TYPES and sname != args.bot_name:
             continue
         t = extract_text(m)
         if t:
@@ -403,9 +405,9 @@ def main():
     conn = sqlite3.connect(args.db)
     ensure_schema(conn)
     cur = conn.cursor()
-    cur.execute("SELECT content FROM kol_records WHERE kol_name='wu2198'")
+    cur.execute("SELECT content FROM kol_records WHERE kol_name=?", (args.kol_name,))
     exact_set = {normalize(r[0]) for r in cur.fetchall() if r[0]}
-    cur.execute("SELECT content FROM kol_records WHERE kol_name='wu2198' ORDER BY record_date DESC LIMIT 300")
+    cur.execute("SELECT content FROM kol_records WHERE kol_name=? ORDER BY record_date DESC LIMIT 300", (args.kol_name,))
     recent_norm = [normalize(r[0]) for r in cur.fetchall() if r[0]]
 
     inserted = 0
@@ -433,7 +435,7 @@ def main():
                 (kol_name, platform, content, extracted_viewpoints, related_assets,
                  record_date, position_size, position_action, position_note, is_vip)
                 VALUES (?,?,?,?,?,?,?,?,?,?)""",
-                ("wu2198", "飞书群", text, "", "", ct, None, "", "飞书群自动同步", vip))
+                (args.kol_name, "飞书群", text, "", "", ct, None, "", "飞书群自动同步", vip))
         exact_set.add(nn)
         recent_norm.append(nn)
         inserted += 1
@@ -442,7 +444,7 @@ def main():
     img_inserted = 0
     img_dup = 0
     if not args.dry_run:
-        cur.execute("SELECT image_path FROM kol_records WHERE kol_name='wu2198' AND image_path != ''")
+        cur.execute("SELECT image_path FROM kol_records WHERE kol_name=? AND image_path != ''", (args.kol_name,))
         seen_img = {r[0] for r in cur.fetchall() if r[0]}
     else:
         seen_img = set()
@@ -458,7 +460,7 @@ def main():
                 (kol_name, platform, content, extracted_viewpoints, related_assets,
                  record_date, position_size, position_action, position_note, image_path, is_vip)
                 VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
-                ("wu2198", "飞书群", "[图片消息]", "", "", ct, None, "", "飞书群图片",
+                (args.kol_name, "飞书群", "[图片消息]", "", "", ct, None, "", "飞书群图片",
                  local_path or img_key, 0))
         seen_img.add(img_key)
         img_inserted += 1
@@ -472,7 +474,7 @@ def main():
             print("[5/5] 水位已更新: %s -> %s" % (watermark or "无", new_watermark))
         else:
             print("[5/5] 无新消息，水位保持: %s" % (new_watermark or "无"))
-    total = cur.execute("SELECT COUNT(*) FROM kol_records WHERE kol_name='wu2198'").fetchone()[0]
+    total = cur.execute("SELECT COUNT(*) FROM kol_records WHERE kol_name=?", (args.kol_name,)).fetchone()[0]
     conn.close()
     print("[4/5] 入库完成")
 

@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 """
-飞书群消息自动同步脚本 —— 拉取 wu2198 群发言，增量导入 kol-opinion-analyzer 数据库
+【已废弃】飞书群消息自动同步脚本 —— 拉取 wu2198 群发言，增量导入 kol-opinion-analyzer 数据库
+
+⚠️ 本脚本已由 sync_feishu_auto.py 取代（OAuth 用户授权 + 水位增量 + 97%去重 + 图片处理），
+   请使用 sync_feishu_auto.py，不要再使用本脚本。
 
 功能：
 1. 拉取飞书群内最新的机器人消息（wu2198 的发言）
