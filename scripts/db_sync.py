@@ -11,55 +11,73 @@ Usage:
 
 import sqlite3, os, json, sys
 
+from records_hash import content_hash
+
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 SKILL_DIR = os.path.dirname(SCRIPT_DIR)
 DB_PATH = os.path.join(SKILL_DIR, 'data', 'kol_opinions.db')
 DATA_DIR = SCRIPT_DIR  # JSON files sit next to scripts
 
 
-def get_existing_keys(conn, kol_name: str) -> set:
-    """Get (kol_name, record_date) pairs already in DB."""
-    rows = conn.execute(
-        "SELECT kol_name, record_date FROM kol_records WHERE kol_name = ?",
-        (kol_name,)
-    ).fetchall()
-    return {(r[0], r[1]) for r in rows}
-
-
 def sync_json(conn, json_path: str, kol_name: str, dry_run: bool = False) -> dict:
-    """Sync one JSON file. Returns {inserted, skipped, errors}."""
+    """同步/补全一个 JSON 文件：按 content_hash 去重；已存在则补全资产与仓位。"""
     with open(json_path, 'r', encoding='utf-8') as f:
         records = json.load(f)
 
-    existing = get_existing_keys(conn, kol_name)
+    cur = conn.cursor()
+    existing = {r[0]: r[1] for r in cur.execute(
+        "SELECT content_hash, id FROM kol_records WHERE kol_name=?", (kol_name,)).fetchall() if r[0]}
 
-    result = {'inserted': 0, 'skipped': 0, 'errors': 0}
+    result = {'inserted': 0, 'enriched': 0, 'skipped': 0, 'errors': 0}
     for r in records:
-        key = (kol_name, r['t'])
-        if key in existing:
-            result['skipped'] += 1
+        content = r['c']
+        h = content_hash(content)
+        assets = r.get('a', '')
+        ps = r.get('ps')
+        pa = r.get('pa', '')
+        pn = r.get('pn', '')
+
+        if h in existing:
+            rid = existing[h]
+            if dry_run:
+                row = cur.execute(
+                    "SELECT related_assets, position_size FROM kol_records WHERE id=?", (rid,)).fetchone()
+                if (not row[0] and assets) or (row[1] is None and ps is not None):
+                    result['enriched'] += 1
+                else:
+                    result['skipped'] += 1
+                continue
+            row = cur.execute(
+                "SELECT related_assets, position_size FROM kol_records WHERE id=?", (rid,)).fetchone()
+            sets, params = [], []
+            if not row[0] and assets:
+                sets.append("related_assets=?")
+                params.append(assets)
+            if row[1] is None and ps is not None:
+                sets.extend(["position_size=?", "position_action=?", "position_note=?"])
+                params.extend([ps, pa, pn])
+            if sets:
+                params.append(rid)
+                cur.execute(f"UPDATE kol_records SET {', '.join(sets)} WHERE id=?", params)
+                result['enriched'] += 1
+            else:
+                result['skipped'] += 1
             continue
 
         if dry_run:
             result['inserted'] += 1
             continue
 
-        content = r['c']
-        assets = r.get('a', '')
-        ps = r.get('ps')
-        pa = r.get('pa', '')
-        pn = r.get('pn', '')
-
         vps = [s.strip() for d in '。！？；' for s in content.split(d) if len(s.strip()) > 4]
         vp_text = '\n'.join(vps[:10])
-
+        is_vip = 1 if "仅TA的真爱粉可见" in content else 0
         try:
-            conn.execute(
+            cur.execute(
                 """INSERT INTO kol_records
                    (kol_name, platform, content, extracted_viewpoints, related_assets,
-                    record_date, position_size, position_action, position_note)
-                   VALUES (?,?,?,?,?,?,?,?,?)""",
-                (kol_name, "微博/公众号", content, vp_text, assets, r['t'], ps, pa, pn)
+                    record_date, position_size, position_action, position_note, content_hash, is_vip)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
+                (kol_name, "微博/公众号", content, vp_text, assets, r['t'], ps, pa, pn, h, is_vip)
             )
             result['inserted'] += 1
         except Exception as e:
@@ -100,6 +118,7 @@ def main():
         "ALTER TABLE kol_records ADD COLUMN position_action TEXT DEFAULT ''",
         "ALTER TABLE kol_records ADD COLUMN position_note TEXT DEFAULT ''",
         "ALTER TABLE kol_records ADD COLUMN image_path TEXT DEFAULT ''",
+        "ALTER TABLE kol_records ADD COLUMN content_hash TEXT",
         "ALTER TABLE kol_records ADD COLUMN is_vip INTEGER DEFAULT 0",
     ]:
         try:
@@ -116,21 +135,21 @@ def main():
         return
 
     tag = '[DRY RUN] ' if args.dry_run else ''
-    total = {'inserted': 0, 'skipped': 0, 'errors': 0}
+    total = {'inserted': 0, 'enriched': 0, 'skipped': 0, 'errors': 0}
 
     for filename, kol_name in json_files:
         path = os.path.join(DATA_DIR, filename)
         result = sync_json(conn, path, kol_name, args.dry_run)
-        print(f'{tag}[{kol_name}] {filename}: {result["inserted"]} new, {result["skipped"]} skipped, {result["errors"]} errors')
+        print(f'{tag}[{kol_name}] {filename}: {result["inserted"]} new, {result["enriched"]} enriched, {result["skipped"]} skipped, {result["errors"]} errors')
         for k in total:
             total[k] += result[k]
 
     conn.close()
 
     if args.dry_run:
-        print(f'\n{tag}Would insert {total["inserted"]} new records ({total["skipped"]} already in DB)')
+        print(f'\n{tag}Would insert {total["inserted"]} new, enrich {total["enriched"]}, skip {total["skipped"]}')
     else:
-        print(f'\n[OK] Done: {total["inserted"]} inserted, {total["skipped"]} up-to-date, {total["errors"]} errors')
+        print(f'\n[OK] Done: {total["inserted"]} inserted, {total["enriched"]} enriched, {total["skipped"]} up-to-date, {total["errors"]} errors')
 
 
 if __name__ == '__main__':

@@ -234,6 +234,12 @@ python <skill-dir>/scripts/db_query.py --kol-name "某某大V" --latest 20
 # 只看仓位变化
 python <skill-dir>/scripts/db_query.py --kol-name "某某大V" --with-position
 
+# 只看 VIP 消息
+python <skill-dir>/scripts/db_query.py --kol-name "某某大V" --vip-only
+
+# 数据概览（总量/VIP/最新仓位/关联资产，供报告快速引用）
+python <skill-dir>/scripts/db_query.py --kol-name "某某大V" --summary
+
 # 列出所有大V
 python <skill-dir>/scripts/db_query.py --list-kols
 
@@ -321,6 +327,9 @@ python <skill-dir>/scripts/sync.py pull
 
 # 查看同步状态
 python <skill-dir>/scripts/sync.py status
+
+# 去重整理 records.jsonl（多设备合并出现重复行时）
+python <skill-dir>/scripts/sync.py compact
 ```
 
 ### 实时自动同步（默认开启）
@@ -360,7 +369,9 @@ python <skill-dir>/scripts/sync.py status
 - **节假日**：法定休市日自动跳过；节假日列表在 `data/holidays.txt`（每行一个日期，每年年初更新），脚本内另有硬编码兜底
 - **增量拉取**：只记住「最后一次拉取的群消息时间」（水位，存于 `sync/feishu_sync_state.json`，随 GitHub 同步，多设备共享一致水位），仅拉取该时间之后的新消息
 - **去重**：先按 `content_hash`（归一化正文 md5，图片按 image_key）+ 唯一索引精确去重，再按 97% 文本相似度做模糊去重；测试消息自动跳过，已导入消息不重复导入
-- **VIP 消息实时推送**：内容含 `【仅TA的真爱粉可见】` 的消息判定为 VIP 消息，入库后立即推送到「**荔枝种植交流群**」（机器人 Markdown 消息）；推送失败会记录并自动补推，同时发私信告警
+- **VIP 消息实时推送**：内容含 `【仅TA的真爱粉可见】` 的消息判定为 VIP 消息，入库后立即推送到「**荔枝种植交流群**」（机器人 Markdown 消息）；推送失败会记录并自动补推，同时发私信告警。VIP 标记词可在 `local_config.env` 用 `VIP_MARKERS`（逗号分隔）覆盖
+- **仓位自动提取**：发言中含「持仓N米 / 清仓」时自动写入 `position_size/position_action`（配合 `position_monitor.py --notify` 盘中每 5 分钟监控仓位变化）
+- **图片 OCR（可选）**：加 `--download-images` 时下载图片并调用 tesseract 识别文字写入 `extracted_viewpoints`（需自行安装 tesseract 中文语言包，未装则静默跳过）
 - **入库 + 推送**：增量写入 `kol_opinions.db`；水位只按机器人消息前移（避免群里闲聊触发高频推送）；有新增时自动导出 JSON 并推送到 GitHub（推送前会先 pull 合并，避免多设备覆盖）
 - **单次耗时优化**：授权状态最多每小时检查一次（`data/_last_auth_check.txt` 缓存）、git pull 每 10 分钟才拉一次（`data/_last_pull.txt` 缓存）、各网络调用收紧超时，保证 30 秒轮询下单次同步可快速完成
 
@@ -401,7 +412,7 @@ bash scripts/alert_once.sh "触发键" "状态" "提醒内容"
 - 触发状态记录在 `data/alert_state.txt`（格式 `键=状态`）；
 - 需要全部重置时，删除 `data/alert_state.txt` 即可。
 
-**触发条件**（关键位突破/跌破或转折观点，可改 `data/levels.json` 无需改代码）：
+**触发条件**（关键位突破/跌破或转折观点，可改 `data/alert_levels.json` 无需改代码）：
 - 上证放量突破 **3996** → 转多；跌破 **3741-3767 连线（红线）** → C杀启动
 - 创业板跌破 **3359** → 加速去 3300；回踩 **3300** 企稳 → 短线机会；跌破 **3158**（A杀低）→ C杀确认
 - wu2198 发表 B反/C杀 转折性观点
@@ -409,7 +420,10 @@ bash scripts/alert_once.sh "触发键" "状态" "提醒内容"
 **其它提醒**：
 - **收盘汇总**：每个交易日 15:05 自动生成当日汇总（收盘点位/成交额/wu2198观点/明日关注）发飞书
 - **同步告警**：lark-cli 拉取失败、GitHub 推送失败、授权临近过期（<3天）时自动发飞书告警
-- **图片消息**：图片以 `image_key` 记录在库；`python sync_feishu_auto.py --download-images` 可下载图片到 `assets/feishu_images/`，OCR 需另装 OCR 工具（tesseract/paddleocr）
+- **仓位变化**：盘中每 5 分钟跑 `position_monitor.py --notify`，仓位变化时推群告警（需发言含「持仓N米」才会被提取）
+- **图片消息**：图片以 `image_key` 记录在库；`python sync_feishu_auto.py --download-images` 下载图片并 OCR（需装 tesseract 中文语言包，未装则静默跳过）
+
+> 关键位配置分两个文件：**告警阈值**用 `data/alert_levels.json`（monitor_alerts.py），**点位距离表**用 `data/level_targets.json`（level_monitor.py），互不影响。
 
 > 注：lark-cli 偶发"发送成功后进程不退出"，脚本已改为后台发送（`nohup ... &`），消息发出即返回。
 
@@ -489,8 +503,7 @@ python <skill-dir>/scripts/db_query.py --kol-name "大V名称" --with-position -
 
 | 维度 | 调用的 Skill/Tool | 查询内容 |
 |------|------------------|---------|
-| 行情数据 | `hithink-market-query` | 最新价格、涨跌幅、成交量、主力资金流向、技术指标 |
-| 指数行情 | `hithink-zhishu-query` | 上证指数、沪深300、创业板指、科创50等关键指数 |
+| 行情/指数 | `hithink-market-query` | 个股/ETF/指数最新价格、涨跌幅、成交量、主力资金流向、技术指标（含上证、沪深300、创业板指、科创50） |
 | 基本面 | `hithink-finance-query` | PE/PB 估值分位、ROE、营收增速、净利润增速 |
 | 行业数据 | `hithink-industry-query` | 行业估值、资金流向、板块排名 |
 | 情绪面 | `news-search` | 近期相关舆情热度、政策动态、重大事件 |
@@ -498,7 +511,7 @@ python <skill-dir>/scripts/db_query.py --kol-name "大V名称" --with-position -
 | ETF 筛选 | `hithink-etf-selector` | 按行情、规模、类型筛选匹配的 ETF |
 | 宏观数据 | `hithink-macro-query` | GDP、CPI、PMI、社融等宏观背景（必要时） |
 
-**重要**：使用 Skill 工具调用以上技能，尽量减少嵌套层级。
+**重要**：使用 Skill 工具调用以上技能，尽量减少嵌套层级；多个维度的查询互相独立，应在**同一批里并行调用**（而非串行逐个等待），以降低整体分析延迟。
 
 ### Step 4: 交叉验证与分析（时间优先）
 

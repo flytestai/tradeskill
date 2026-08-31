@@ -249,6 +249,50 @@ def cmd_import():
     import_incremental()
 
 
+def cmd_rebuild():
+    """从 DB 全量重建 records.jsonl（用于补全/迁移后一次性重新导出）。"""
+    if not os.path.exists(DB_PATH):
+        print("[ERROR] Database not found. Run db_init.py first.")
+        return
+    conn = _connect()
+    _ensure_hash_column(conn)
+    rows = [dict(r) for r in conn.execute("SELECT * FROM kol_records ORDER BY id ASC").fetchall()]
+    conn.close()
+    os.makedirs(SYNC_DIR, exist_ok=True)
+    with open(JSONL_PATH, "w", encoding="utf-8") as f:
+        for rec in rows:
+            line = {k: rec.get(k, "") for k in FIELDS}
+            line["content_hash"] = _hash_of(rec)
+            f.write(json.dumps(line, ensure_ascii=False) + "\n")
+    _write_meta()
+    print(f"[REBUILD] 全量重建 records.jsonl：{len(rows)} 条")
+
+
+def cmd_compact():
+    """去重整理 records.jsonl：按 content_hash 去重并重写（多设备合并产生重复行时用）。"""
+    if not os.path.exists(JSONL_PATH):
+        print("[COMPACT] records.jsonl 不存在")
+        return
+    records = _read_jsonl_records()
+    seen = set()
+    unique = []
+    removed = 0
+    for r in records:
+        h = _hash_of(r)
+        if h in seen:
+            removed += 1
+            continue
+        seen.add(h)
+        unique.append(r)
+    with open(JSONL_PATH, "w", encoding="utf-8") as f:
+        for r in unique:
+            line = {k: r.get(k, "") for k in FIELDS}
+            line["content_hash"] = _hash_of(r)
+            f.write(json.dumps(line, ensure_ascii=False) + "\n")
+    _write_meta()
+    print(f"[COMPACT] 保留 {len(unique)} 条，去除重复 {removed} 条")
+
+
 def cmd_status():
     if os.path.exists(DB_PATH):
         conn = _connect()
@@ -281,8 +325,8 @@ def cmd_status():
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="KOL DB cloud sync controller")
-    parser.add_argument("action", choices=["push", "pull", "export", "import", "status"],
-                       help="push=merge+upload, pull=download+import, export/import=local only, status=show info")
+    parser.add_argument("action", choices=["push", "pull", "export", "import", "compact", "rebuild", "status"],
+                       help="push=merge+upload, pull=download+import, export/import/compact/rebuild=local only, status=show info")
     args = parser.parse_args()
 
     {
@@ -290,5 +334,7 @@ if __name__ == "__main__":
         "pull": cmd_pull,
         "export": cmd_export,
         "import": cmd_import,
+        "compact": cmd_compact,
+        "rebuild": cmd_rebuild,
         "status": cmd_status,
     }[args.action]()

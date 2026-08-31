@@ -28,15 +28,16 @@ def cleanup(db_path, kol_name, dry_run=False):
             content LIKE '%转发测试%' OR content LIKE '%同步测试%' OR content LIKE '%设备A同步测试%'
         )""", (kol_name,)).rowcount
 
-    # 2. 删占位符
+    # 2. 删占位符（仅无 image_path 的真占位；有 image_path 的图片是有效记录，保留）
     ph_del = cur.execute(
-        "DELETE FROM kol_records WHERE kol_name=? AND content IN (%s)"
+        "DELETE FROM kol_records WHERE kol_name=? AND content IN (%s) "
+        "AND (image_path IS NULL OR image_path='')"
         % ",".join("?" * len(PLACEHOLDERS)), (kol_name, *PLACEHOLDERS)).rowcount
 
-    # 3. 精确去重（每段 content 保留最早 id）
+    # 3. 精确去重（按 content_hash；唯一索引已基本阻止，此处兜底）
     dup_del = cur.execute(
-        """DELETE FROM kol_records WHERE kol_name=? AND id NOT IN (
-            SELECT MIN(id) FROM kol_records WHERE kol_name=? GROUP BY content
+        """DELETE FROM kol_records WHERE kol_name=? AND content_hash IS NOT NULL AND id NOT IN (
+            SELECT MIN(id) FROM kol_records WHERE kol_name=? AND content_hash IS NOT NULL GROUP BY content_hash
         )""", (kol_name, kol_name)).rowcount
 
     if not dry_run:

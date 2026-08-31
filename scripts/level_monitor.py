@@ -17,7 +17,7 @@
 import json, os, sys, argparse
 
 SKILL_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-CONFIG_PATH = os.path.join(SKILL_DIR, "data", "levels.json")
+CONFIG_PATH = os.path.join(SKILL_DIR, "data", "level_targets.json")
 
 DEFAULT_LEVELS = {
     "创业板指": [

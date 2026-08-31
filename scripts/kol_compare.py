@@ -36,9 +36,8 @@ def get_kol_summary(conn, kol_name):
         WHERE kol_name=? ORDER BY record_date DESC LIMIT 3""", (kol_name,))
     latest = cur.fetchall()
 
-    # 情绪统计
-    cur.execute("""SELECT COUNT(*) FROM kol_records WHERE kol_name=?
-        AND content LIKE '%仅TA的真爱粉可见%'""", (kol_name,))
+    # VIP 统计（用 is_vip 列，比硬编码标记词更准确）
+    cur.execute("SELECT COUNT(*) FROM kol_records WHERE kol_name=? AND is_vip=1", (kol_name,))
     vip_count = cur.fetchone()[0]
 
     return {
