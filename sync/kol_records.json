@@ -1,8 +1,23 @@
 {
-  "exported_at": "2026-08-31 10:11:16",
-  "total_records": 458,
+  "exported_at": "2026-08-31 10:13:57",
+  "total_records": 459,
   "kol_count": 1,
   "kol_records": [
+    {
+      "id": 1395,
+      "kol_name": "wu2198",
+      "platform": "飞书群",
+      "content": "【仅TA的真爱粉可见】 不到自己预期的位置，我不会操作的！",
+      "extracted_viewpoints": "",
+      "related_assets": "",
+      "record_date": "2026-08-31 10:11",
+      "created_at": "2026-08-31 10:13:56",
+      "position_size": null,
+      "position_action": "",
+      "position_note": "飞书群自动同步",
+      "image_path": "",
+      "is_vip": 1
+    },
     {
       "id": 1394,
       "kol_name": "wu2198",
