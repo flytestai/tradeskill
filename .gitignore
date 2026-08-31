@@ -7,6 +7,9 @@ data/*.db-shm
 # 同步错误日志（每设备运行时状态，不纳入 git）
 data/sync_errors.log
 
+# 提醒触发状态（每设备运行时状态，不纳入 git）
+data/alert_state.txt
+
 # 临时脚本
 scripts/bulk_*.py
 scripts/_*.py
