@@ -246,7 +246,7 @@ python <skill-dir>/scripts/db_query.py --kol-name "某某大V" --json
 
 ## 云存档（GitHub 多设备同步）
 
-SQLite 是二进制文件，不适合 git diff/merge。采用 **JSON 文本中转** 方案实现跨设备同步。
+SQLite 是二进制文件，不适合 git diff/merge。采用 **追加式 JSONL**（`sync/records.jsonl`，每条记录一行）实现跨设备同步：历史行永不修改，每次只追加新行，git 只产生增量 diff，仓库不膨胀。
 
 ### 架构
 
@@ -254,35 +254,25 @@ SQLite 是二进制文件，不适合 git diff/merge。采用 **JSON 文本中�
 设备 A                          GitHub                        设备 B
 ───────                        ───────                       ───────
 SQLite DB                      sync/                         SQLite DB
-   │                          kol_records.json                  ▲
-   │ db_export.py                ▲                              │
-   └────────→ JSON ──→ git push ─┘                              │
+   │                          records.jsonl                    ▲
+   │ sync.py export              ▲                              │
+   └────→ 增量JSONL ──→ git push ─┘                              │
                                  │                              │
-                                 └───── git pull ──→ JSON ──→ db_import.py
+                                 └── git pull ──→ JSONL ──→ sync.py import
 ```
 
 ### 推送（当前设备 → GitHub）
 
 ```bash
-# 1. 导出数据库 → JSON
-python <skill-dir>/scripts/db_export.py
-
-# 2. 提交并推送
 cd <skill-dir>
-git add sync/kol_records.json sync/sync_meta.json
-git commit -m "sync: $(date '+%Y-%m-%d %H:%M') — $(python scripts/db_query.py --list-kols 2>/dev/null | wc -l) KOLs"
-git push
+python scripts/sync.py push   # git pull → 导入 → 增量导出 records.jsonl → git push
 ```
 
 ### 拉取（其他设备 ← GitHub）
 
 ```bash
-# 1. 拉取最新 JSON
 cd <skill-dir>
-git pull
-
-# 2. 导入 JSON → 数据库（幂等，已存在跳过）
-python <skill-dir>/scripts/db_import.py
+python scripts/sync.py pull   # git pull → 从 records.jsonl 导入（幂等）
 ```
 
 ### 首次在新设备上使用
@@ -290,8 +280,8 @@ python <skill-dir>/scripts/db_import.py
 ```bash
 git clone <your-github-repo-url>
 cd kol-opinion-analyzer
-python scripts/db_init.py              # 创建空数据库
-python scripts/db_import.py            # 从 JSON 恢复全部数据
+python scripts/db_init.py              # 创建空数据库（含 content_hash 列与索引）
+python scripts/sync.py import          # 从 records.jsonl 恢复全部数据
 ```
 
 ### 自动化（分析前自动同步）
@@ -354,34 +344,41 @@ python <skill-dir>/scripts/sync.py status
 
 ### 注意事项
 
-- **JSON 文件是真相源**：数据库是本地缓存，每次从 JSON 重建
-- **导入是幂等的**：`db_import.py` 按 `(kol_name, record_date, content)` 去重，重复运行安全
-- **推送前必须先拉取**：`git pull --rebase && git push`，避免冲突
-- **.gitignore 已配置**：`data/*.db` 不会上传，只有 `sync/*.json` 进入 git
-- **冲突处理**：JSON 是文本文件，git 冲突时手动合并即可
+- **records.jsonl 是真相源**：数据库是本地缓存；JSONL 追加式，历史行永不修改，git 只增量 diff
+- **导入是幂等的**：按 `content_hash` 去重，重复运行安全
+- **推送前必须先拉取**：`sync.py push` 会自动 `git pull --rebase --autostash` → 导入 → 增量导出 → `git push`，避免多设备冲突与覆盖丢数据
+- **.gitignore 已配置**：`data/*.db` 不会上传，只有 `sync/records.jsonl` 等文本文件进入 git
+- **冲突处理**：JSONL 每行独立、追加式写入，天然减少冲突；偶发冲突手动合并即可
 
 ## 飞书群消息自动同步
 
 `scripts/sync_feishu_auto.py` 通过 lark-cli（OAuth 用户授权）从飞书群增量拉取 wu2198 发言：
 
+- **盘中高频轮询**：交易日盘中每 **30 秒** 拉取一次（由 Bee 定时任务每 30 分钟尝试拉起 `--loop` 循环，文件锁防重复，循环内部每 30 秒同步一次）
+- **循环心跳监控**：`scripts/loop_health.py` 每 5 分钟检查一次循环心跳（复用 `data/_feishu_loop.lock` 时间戳），停摆超 3 分钟自动重启并私信告警
 - **盘中时间**：交易日 9:00-11:30 / 13:00-15:00（**9:00-9:30 也算盘中**），另在盘后 16:00 兜底一次，其余时间自动跳过
 - **节假日**：法定休市日自动跳过；节假日列表在 `data/holidays.txt`（每行一个日期，每年年初更新），脚本内另有硬编码兜底
 - **增量拉取**：只记住「最后一次拉取的群消息时间」（水位，存于 `sync/feishu_sync_state.json`，随 GitHub 同步，多设备共享一致水位），仅拉取该时间之后的新消息
-- **去重**：按 97% 文本相似度去重，测试消息自动跳过，已导入消息不重复导入
-- **入库 + 推送**：增量写入 `kol_opinions.db`，有新增时自动导出 JSON 并推送到 GitHub
+- **去重**：先按 `content_hash`（归一化正文 md5，图片按 image_key）+ 唯一索引精确去重，再按 97% 文本相似度做模糊去重；测试消息自动跳过，已导入消息不重复导入
+- **VIP 消息实时推送**：内容含 `【仅TA的真爱粉可见】` 的消息判定为 VIP 消息，入库后立即推送到「**荔枝种植交流群**」（机器人 Markdown 消息）；推送失败会记录并自动补推，同时发私信告警
+- **入库 + 推送**：增量写入 `kol_opinions.db`；水位只按机器人消息前移（避免群里闲聊触发高频推送）；有新增时自动导出 JSON 并推送到 GitHub（推送前会先 pull 合并，避免多设备覆盖）
+- **单次耗时优化**：授权状态最多每小时检查一次（`data/_last_auth_check.txt` 缓存）、git pull 每 10 分钟才拉一次（`data/_last_pull.txt` 缓存）、各网络调用收紧超时，保证 30 秒轮询下单次同步可快速完成
 
 ```bash
 python scripts/sync_feishu_auto.py                # 正常同步（带盘中/交易日守卫）
 python scripts/sync_feishu_auto.py --force        # 忽略守卫强制同步
 python scripts/sync_feishu_auto.py --dry-run      # 只预览
 python scripts/sync_feishu_auto.py --reset-watermark  # 重置增量水位（下次全量）
+python scripts/sync_feishu_auto.py --loop --interval 30  # 盘中高频循环：每 30 秒同步一次
 ```
 
 ## 飞书机器人提醒
 
 > **约定：本 skill 以后设置的所有提醒，统一通过飞书机器人（`notify_feishu.sh`）发私聊，不在会话内刷屏。**
 
-`scripts/notify_feishu.sh` 通过飞书机器人（应用 `cli_a92579c6ddf9dcb5`，机器人身份）给用户发私聊提醒：
+`scripts/notify_feishu.sh` 通过飞书机器人（机器人身份）给用户发私聊提醒：
+
+> 飞书敏感配置（群 chat_id、用户 open_id）统一放在 `data/local_config.env`（已加入 .gitignore，**不入 git**）；脚本缺失该文件时会告警并回退空值。
 
 ```bash
 bash scripts/notify_feishu.sh "提醒内容"
@@ -404,7 +401,7 @@ bash scripts/alert_once.sh "触发键" "状态" "提醒内容"
 - 触发状态记录在 `data/alert_state.txt`（格式 `键=状态`）；
 - 需要全部重置时，删除 `data/alert_state.txt` 即可。
 
-**触发条件**（关键位突破/跌破或转折观点）：
+**触发条件**（关键位突破/跌破或转折观点，可改 `data/levels.json` 无需改代码）：
 - 上证放量突破 **3996** → 转多；跌破 **3741-3767 连线（红线）** → C杀启动
 - 创业板跌破 **3359** → 加速去 3300；回踩 **3300** 企稳 → 短线机会；跌破 **3158**（A杀低）→ C杀确认
 - wu2198 发表 B反/C杀 转折性观点

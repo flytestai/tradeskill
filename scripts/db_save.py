@@ -18,6 +18,8 @@ import argparse
 import json
 from datetime import datetime
 
+from records_hash import content_hash
+
 
 def get_default_db_path():
     script_dir = os.path.dirname(os.path.abspath(__file__))
@@ -47,11 +49,12 @@ def save_record(db_path: str, kol_name: str, platform: str,
             """INSERT INTO kol_records
                (kol_name, platform, content, extracted_viewpoints,
                 related_assets, record_date,
-                position_size, position_action, position_note)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                position_size, position_action, position_note, content_hash)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (kol_name, platform, content, viewpoints,
              related_assets, record_date,
-             position_size, position_action, position_note)
+             position_size, position_action, position_note,
+             content_hash(content))
         )
         record_id = cursor.lastrowid
         conn.commit()

@@ -1,34 +1,12 @@
 #!/bin/bash
-# GitHub 推送脚本（带自动重试 + SSL修复）
-# 用法: bash push.sh [commit信息]
+# GitHub 推送脚本（委托 sync.py：增量 JSONL 导出 + 推送，带自动重试）
+# 用法: bash push.sh
 set -u
 cd "$(dirname "$0")/.."
 
-MSG="${1:-sync: $(date '+%Y-%m-%d %H:%M')}"
-
-# 修复 SSL 证书问题
+# 修复 SSL 证书问题（历史遗留，仅本仓库 .git/config 生效）
 git config http.sslVerify false
 
-# 导出最新数据库到 kol_records.json（全量JSON，跨设备统一格式）
-if [ -f data/kol_opinions.db ]; then
-    python scripts/db_export.py 2>/dev/null || echo "[WARN] 导出失败"
-fi
-
-# 提交
-git add -A
-git commit -m "$MSG" 2>/dev/null || echo "[INFO] 无新变更，跳过提交"
-
-# 推送（带重试，最多5次）
-echo "[PUSH] 开始推送到 GitHub..."
-for i in 1 2 3 4 5; do
-    echo "  尝试第 $i 次..."
-    if git push origin HEAD:main 2>&1; then
-        echo "[OK] 推送成功！"
-        exit 0
-    fi
-    echo "  第 $i 次失败，等待 5 秒重试..."
-    sleep 5
-done
-
-echo "[FAIL] 推送失败（已重试5次）。可能是网络问题，稍后再运行: bash scripts/push.sh"
-exit 1
+# 统一走 sync.py push：git pull → import → 增量导出 records.jsonl → git push
+python scripts/sync.py push
+exit $?

@@ -11,6 +11,8 @@ import os
 import sys
 import argparse
 
+from records_hash import content_hash
+
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS kol_records (
@@ -25,6 +27,7 @@ CREATE TABLE IF NOT EXISTS kol_records (
     position_action TEXT DEFAULT '',
     position_note TEXT DEFAULT '',
     image_path TEXT DEFAULT '',
+    content_hash TEXT,
     is_vip INTEGER DEFAULT 0,
     vip_pushed INTEGER DEFAULT 0,
     created_at TEXT DEFAULT (datetime('now', 'localtime'))
@@ -51,6 +54,7 @@ MIGRATION_COLUMNS = [
     "ALTER TABLE kol_records ADD COLUMN position_action TEXT DEFAULT ''",
     "ALTER TABLE kol_records ADD COLUMN position_note TEXT DEFAULT ''",
     "ALTER TABLE kol_records ADD COLUMN image_path TEXT DEFAULT ''",
+    "ALTER TABLE kol_records ADD COLUMN content_hash TEXT",
     "ALTER TABLE kol_records ADD COLUMN is_vip INTEGER DEFAULT 0",
     "ALTER TABLE kol_records ADD COLUMN vip_pushed INTEGER DEFAULT 0",
 ]
@@ -81,6 +85,25 @@ def init_db(db_path: str) -> str:
                 conn.execute(stmt)
             except sqlite3.OperationalError:
                 pass  # Column already exists
+        # 回填 content_hash（历史数据）：图片按 image_key、文本按归一化正文
+        try:
+            rows = conn.execute(
+                "SELECT id, content, image_path FROM kol_records "
+                "WHERE content_hash IS NULL OR content_hash=''"
+            ).fetchall()
+            for rid, content, image_path in rows:
+                conn.execute("UPDATE kol_records SET content_hash=? WHERE id=?",
+                             (content_hash(content, image_path), rid))
+            # 唯一索引：防止多路径重复入库（NULL 不参与去重，兼容未写哈希的旧路径）
+            conn.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS idx_kol_records_hash "
+                "ON kol_records(kol_name, content_hash)")
+            # 复合索引：加速 VIP 补推查询（WHERE kol_name=? AND is_vip=1 AND vip_pushed=0）
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_kol_records_vip "
+                "ON kol_records(kol_name, is_vip, vip_pushed)")
+        except Exception as e:
+            print(f"[WARN] content_hash 回填/索引失败: {e}")
         conn.commit()
     finally:
         conn.close()

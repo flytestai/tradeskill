@@ -20,6 +20,8 @@ JSON格式（数组）:
 import sqlite3, json, os, sys, argparse
 from datetime import datetime
 
+from records_hash import content_hash
+
 SKILL_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DB_PATH = os.path.join(SKILL_DIR, "data", "kol_opinions.db")
 
@@ -36,14 +38,14 @@ def insert_records(records, dry_run=False):
     conn = connect_db()
     cur = conn.cursor()
 
-    # 只查指纹字段，不查全表
-    cur.execute("SELECT kol_name, record_date, substr(content,1,200) FROM kol_records")
-    existing = set(cur.fetchall())
+    # 只查指纹字段，不查全表（按 content_hash 去重）
+    cur.execute("SELECT kol_name, content_hash FROM kol_records")
+    existing = {(r[0], r[1]) for r in cur.fetchall() if r[1]}
 
     inserted, skipped = 0, 0
     for r in records:
-        fp = (r.get("kol_name",""), r.get("record_date",""), (r.get("content","") or "")[:200])
-        if fp in existing:
+        h = content_hash(r.get("content",""), r.get("image_path",""))
+        if (r.get("kol_name",""), h) in existing:
             skipped += 1
             continue
         if dry_run:
@@ -53,14 +55,14 @@ def insert_records(records, dry_run=False):
 
         cur.execute("""INSERT INTO kol_records
             (kol_name, platform, content, extracted_viewpoints, related_assets,
-             record_date, position_size, position_action, position_note)
-            VALUES (?,?,?,?,?,?,?,?,?)""", (
+             record_date, position_size, position_action, position_note, content_hash)
+            VALUES (?,?,?,?,?,?,?,?,?,?)""", (
             r.get("kol_name",""), r.get("platform",""),
             r.get("content",""), r.get("extracted_viewpoints",""),
             r.get("related_assets",""), r.get("record_date",""),
             r.get("position_size"), r.get("position_action",""),
-            r.get("position_note","")))
-        existing.add(fp)
+            r.get("position_note",""), h))
+        existing.add((r.get("kol_name",""), h))
         inserted += 1
 
     conn.commit()
