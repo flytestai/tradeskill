@@ -184,6 +184,18 @@ def log_error(msg):
         pass
 
 
+def alert_feishu(key, msg):
+    """同步失败时通过飞书机器人告警（alert_once.sh 去重，当天同一类只提醒一次）"""
+    try:
+        day = datetime.now(timezone(timedelta(hours=8))).strftime("%Y-%m-%d")
+        subprocess.run(
+            ["bash", os.path.join(SKILL_DIR, "scripts", "alert_once.sh"),
+             "%s_%s" % (key, day), "below", msg],
+            capture_output=True, text=True, timeout=30, cwd=SKILL_DIR)
+    except Exception:
+        pass
+
+
 def fetch_messages_since(lark_cli, chat_id, start_iso=None):
     """通过 lark-cli 拉取 start_iso 之后的消息（升序，自动分页）"""
     cmd = [
@@ -337,6 +349,7 @@ def main():
     messages = fetch_messages_since(lark_cli, args.chat_id, start_iso)
     if messages is None:
         print("[FAIL] 拉取失败，本轮结束")
+        alert_feishu("拉取失败", "🚨 **【同步告警】**\n飞书群消息拉取失败，请检查 lark-cli 授权或网络")
         sys.exit(1)
     print("[1/5] 拉到 %d 条新消息" % len(messages))
 
@@ -453,6 +466,7 @@ def main():
         push_ok = r.returncode == 0
         if not push_ok:
             log_error("GitHub 推送失败")
+            alert_feishu("推送失败", "🚨 **【同步告警】**\nGitHub 推送失败（已自动重试），请检查网络")
         tail = (r.stdout + r.stderr).strip().splitlines()
         for line in tail[-6:]:
             print("      " + line)

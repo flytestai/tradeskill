@@ -19,6 +19,9 @@ if [ -z "$MSG" ]; then
     exit 1
 fi
 
+# 发送前先清理上次残留的 lark-cli 进程（node 发送后偶发不退出）
+bash "$(cd "$(dirname "$0")/.." && pwd)/scripts/cleanup_lark.sh" >/dev/null 2>&1
+
 # 把输入里的 \n 转成真实换行（bash 双引号不会自动解释 \n）
 MSG=$(printf '%b' "$MSG")
 
