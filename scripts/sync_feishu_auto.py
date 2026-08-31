@@ -204,11 +204,11 @@ def log_error(msg):
 
 
 def alert_feishu(key, msg):
-    """同步失败时通过飞书机器人告警（alert_once.sh 去重，当天同一类只提醒一次）"""
+    """同步/技术告警通过飞书机器人私信（alert_once_private.sh 去重，当天同一类只提醒一次）"""
     try:
         day = datetime.now(timezone(timedelta(hours=8))).strftime("%Y-%m-%d")
         subprocess.run(
-            ["bash", os.path.join(SKILL_DIR, "scripts", "alert_once.sh"),
+            ["bash", os.path.join(SKILL_DIR, "scripts", "alert_once_private.sh"),
              "%s_%s" % (key, day), "below", msg],
             capture_output=True, text=True, timeout=30, cwd=SKILL_DIR)
     except Exception:
