@@ -1,8 +1,23 @@
 {
-  "exported_at": "2026-08-31 14:31:32",
-  "total_records": 478,
+  "exported_at": "2026-08-31 14:43:43",
+  "total_records": 479,
   "kol_count": 1,
   "kol_records": [
+    {
+      "id": 1415,
+      "kol_name": "wu2198",
+      "platform": "飞书群",
+      "content": "端测板块出现了5只冲板，少见的涨停潮！",
+      "extracted_viewpoints": "",
+      "related_assets": "",
+      "record_date": "2026-08-31 14:39",
+      "created_at": "2026-08-31 14:43:41",
+      "position_size": null,
+      "position_action": "",
+      "position_note": "飞书群自动同步",
+      "image_path": "",
+      "is_vip": 0
+    },
     {
       "id": 1414,
       "kol_name": "wu2198",
