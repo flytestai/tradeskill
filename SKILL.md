@@ -389,6 +389,13 @@ bash scripts/notify_feishu.sh "提醒内容"
 
 **去重 + 反向重置**：用 `alert_once.sh` 发送，同一触发键只提醒一次，收回关键位后自动重置、再次触发再提醒：
 
+**确定性监控（推荐，避免误报）**：`scripts/monitor_alerts.py` 用代码硬比较价格触发提醒，零主观判断：
+
+```bash
+python scripts/monitor_alerts.py            # 正常监控
+python scripts/monitor_alerts.py --dry-run  # 只预览不发送
+```
+
 ```bash
 bash scripts/alert_once.sh "触发键" "状态" "提醒内容"
 # 状态: below=跌破(提醒) / break=突破(提醒) / above=收回(只重置不提醒)
