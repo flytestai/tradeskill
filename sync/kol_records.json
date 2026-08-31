@@ -1,8 +1,38 @@
 {
-  "exported_at": "2026-08-31 09:41:41",
-  "total_records": 455,
+  "exported_at": "2026-08-31 10:01:33",
+  "total_records": 457,
   "kol_count": 1,
   "kol_records": [
+    {
+      "id": 1392,
+      "kol_name": "wu2198",
+      "platform": "飞书群",
+      "content": "【仅TA的真爱粉可见】 对于创业板指数，上周给大家分析了，第一步是3300光卡！",
+      "extracted_viewpoints": "",
+      "related_assets": "",
+      "record_date": "2026-08-31 09:55",
+      "created_at": "2026-08-31 10:01:32",
+      "position_size": null,
+      "position_action": "",
+      "position_note": "飞书群自动同步",
+      "image_path": "",
+      "is_vip": 1
+    },
+    {
+      "id": 1393,
+      "kol_name": "wu2198",
+      "platform": "飞书群",
+      "content": "收到请回复666或点赞支持一下。\n@wu2198\n大盘指数上周五反抽3970点后再次受阻力，短线看今天需要再次考验3900方向，操作上依然是多看少动为主，收到请回复666或点赞支持一下。",
+      "extracted_viewpoints": "",
+      "related_assets": "",
+      "record_date": "2026-08-31 09:52",
+      "created_at": "2026-08-31 10:01:32",
+      "position_size": null,
+      "position_action": "",
+      "position_note": "飞书群自动同步",
+      "image_path": "",
+      "is_vip": 0
+    },
     {
       "id": 1390,
       "kol_name": "wu2198",
