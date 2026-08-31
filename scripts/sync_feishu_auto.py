@@ -218,11 +218,12 @@ def alert_feishu(key, msg):
 def push_vip_to_group(text, ct):
     """VIP 消息（含「仅TA的真爱粉可见」）实时推送到群（荔枝种植交流群）"""
     try:
-        msg = ("🔒 **【wu2198 · VIP 独家发言】**\n"
-               "━━━━━━━━━━━━━━━━━━━━━\n"
-               f"🕐 **时间**：{ct}\n"
-               "━━━━━━━━━━━━━━━━━━━━━\n"
-               f"{text}")
+        # 去掉正文里重复的 VIP 标记，让排版更干净
+        body = text.replace("【仅TA的真爱粉可见】", "").strip()
+        msg = ("🔒 **wu2198 · VIP 独家发言**\n"
+               f"🕐 {ct}\n"
+               f"\n"
+               f"{body}")
         subprocess.run(
             ["bash", os.path.join(SKILL_DIR, "scripts", "notify_group.sh"), msg],
             capture_output=True, text=True, timeout=30, cwd=SKILL_DIR)
