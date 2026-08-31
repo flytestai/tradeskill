@@ -220,7 +220,7 @@ def push_vip_to_group(text, ct):
     try:
         # 去掉正文里重复的 VIP 标记，让排版更干净
         body = text.replace("【仅TA的真爱粉可见】", "").strip()
-        msg = ("🔒 **wu2198 · VIP 独家发言**\n"
+        msg = ("📌🔒 **wu2198 · VIP 独家发言**\n"
                f"🕐 {ct}\n"
                f"\n"
                f"{body}")
