@@ -294,13 +294,29 @@ def alert_feishu(key, msg):
         pass
 
 
+WEEKDAYS_CN = ["星期一", "星期二", "星期三", "星期四", "星期五", "星期六", "星期日"]
+
+
+def fmt_vip_time(ct):
+    """'YYYY-MM-DD HH:MM[:SS]' -> '星期X YYYY-MM-DD HH:MM[:SS]'（兼容无秒）"""
+    ts = (ct or "").strip()
+    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M"):
+        try:
+            dt = datetime.strptime(ts, fmt)
+            return "%s %s" % (WEEKDAYS_CN[dt.weekday()], ts)
+        except Exception:
+            continue
+    return ct
+
+
 def push_vip_to_group(text, ct):
     """VIP 消息（含「仅TA的真爱粉可见」）推送到群（荔枝种植交流群），返回是否成功"""
     try:
         # 去掉正文里重复的 VIP 标记，让排版更干净
         body = text.replace("【仅TA的真爱粉可见】", "").strip()
-        msg = ("📌🔒 **wu2198 · VIP 独家发言**\n"
-               f"🕐 {ct}\n"
+        msg = ("🔒 VIP・仅TA的真爱粉可见\n"
+               f"\n"
+               f"🕐{fmt_vip_time(ct)}\n"
                f"\n"
                f"{body}")
         # 写入临时文件（避免命令行传中文/多行在 Windows 下编码损坏）
