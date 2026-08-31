@@ -1,8 +1,23 @@
 {
-  "exported_at": "2026-08-31 14:43:43",
-  "total_records": 479,
+  "exported_at": "2026-08-31 16:02:32",
+  "total_records": 480,
   "kol_count": 1,
   "kol_records": [
+    {
+      "id": 1416,
+      "kol_name": "wu2198",
+      "platform": "飞书群",
+      "content": "今天大盘指数下调3926之后反攻（没到3900边），收在3986点，在银行、煤炭、石油化工等权重股的推动下走得比预期强。按当前情况来看明天看能否突破3996点……收到请回复666或点赞支持一下。",
+      "extracted_viewpoints": "",
+      "related_assets": "",
+      "record_date": "2026-08-31 15:07",
+      "created_at": "2026-08-31 16:02:28",
+      "position_size": null,
+      "position_action": "",
+      "position_note": "飞书群自动同步",
+      "image_path": "",
+      "is_vip": 0
+    },
     {
       "id": 1415,
       "kol_name": "wu2198",
