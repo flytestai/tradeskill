@@ -52,12 +52,14 @@ def list_kols(conn) -> list:
 
 
 def query_by_kol(conn, kol_name: str, date_from: str = '', date_to: str = '',
-                 limit: int = 0) -> list:
+                 limit: int = 0, vip_only: bool = False) -> list:
     """Query records for a specific KOL.
     Returns results ordered by record_date DESC (latest first)."""
     sql = "SELECT * FROM kol_records WHERE kol_name = ?"
     params = [kol_name]
 
+    if vip_only:
+        sql += " AND is_vip = 1"
     if date_from:
         sql += " AND record_date >= ?"
         params.append(date_from)
@@ -120,6 +122,37 @@ def query_positions(conn, kol_name: str = '', days: int = 0) -> list:
             "SELECT * FROM kol_records WHERE position_size IS NOT NULL ORDER BY record_date ASC"
         ).fetchall()
     return [dict(r) for r in rows]
+
+
+def query_summary(conn, kol_name: str = '') -> dict:
+    """大V数据概览：总量/VIP/时间范围/最新仓位/关联资产（供分析报告快速引用）。"""
+    cur = conn.cursor()
+    where = "WHERE kol_name=?" if kol_name else "WHERE 1=1"
+    params = (kol_name,) if kol_name else ()
+
+    total = cur.execute(f"SELECT COUNT(*) FROM kol_records {where}", params).fetchone()[0]
+    vip = cur.execute(
+        f"SELECT COUNT(*) FROM kol_records {where} AND is_vip=1", params).fetchone()[0]
+    first, last = cur.execute(
+        f"SELECT MIN(record_date), MAX(record_date) FROM kol_records {where}", params).fetchone()
+    pos = cur.execute(
+        f"""SELECT position_size, position_action, record_date FROM kol_records
+            {where} AND position_size IS NOT NULL ORDER BY record_date DESC LIMIT 1""", params).fetchone()
+    pos = tuple(pos) if pos else None
+
+    assets = set()
+    for (a,) in cur.execute(
+            f"SELECT related_assets FROM kol_records {where} AND related_assets != ''", params).fetchall():
+        for x in (a or "").split(','):
+            x = x.strip()
+            if x:
+                assets.add(x)
+    return {
+        "kol_name": kol_name or "全部",
+        "total": total, "vip": vip, "public": total - vip,
+        "first": first, "last": last,
+        "position": pos, "assets": sorted(assets),
+    }
 
 
 def search_content(conn, keyword: str) -> list:
@@ -187,6 +220,8 @@ def main():
                         help='Limit to N latest records within the time window')
     parser.add_argument('--with-position', action='store_true',
                         help='Only show records with position tracking data')
+    parser.add_argument('--vip-only', action='store_true', help='只看 VIP 消息（is_vip=1）')
+    parser.add_argument('--summary', action='store_true', help='输出数据概览（总量/VIP/仓位/资产）')
     parser.add_argument('--list-kols', action='store_true', help='List all KOLs')
     parser.add_argument('--recent', type=int, help='Get N most recent records across all KOLs')
     parser.add_argument('--from', dest='date_from', help='Start date (YYYY-MM-DD)')
@@ -210,6 +245,24 @@ def main():
         default_date_from = (datetime.now() - timedelta(days=args.days)).strftime('%Y-%m-%d')
 
     try:
+        if args.summary:
+            s = query_summary(conn, args.kol_name or '')
+            if args.json:
+                print(json.dumps(s, ensure_ascii=False, indent=2))
+            else:
+                print(f"""
+  📊 {s['kol_name']} 数据概览
+  ┌─────────────┬──────────────┐
+  │ 总记录       │ {s['total']:4d} 条       │
+  │ VIP 消息     │ {s['vip']:4d} 条       │
+  │ 公开消息     │ {s['public']:4d} 条       │
+  │ 时间范围     │ {s['first']} ~ {s['last']} │
+  └─────────────┴──────────────┘""")
+                if s['position']:
+                    print(f"  最新仓位: {s['position'][0]}米 ({s['position'][1] or '持有'}) @ {s['position'][2]}")
+                if s['assets']:
+                    print(f"  关联资产: {'、'.join(s['assets'][:30])}")
+            return
         if args.list_kols:
             results = list_kols(conn)
             if not args.json:
@@ -238,7 +291,8 @@ def main():
         elif args.kol_name:
             date_from = args.date_from or default_date_from
             limit = args.latest if args.latest else 0
-            results = query_by_kol(conn, args.kol_name, date_from, args.date_to or '', limit)
+            results = query_by_kol(conn, args.kol_name, date_from, args.date_to or '', limit,
+                                   vip_only=args.vip_only)
 
         else:
             results = query_recent(conn, 10)

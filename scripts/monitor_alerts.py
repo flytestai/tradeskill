@@ -20,7 +20,7 @@ from datetime import datetime, timezone, timedelta
 
 SKILL_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 ALERT_ONCE = os.path.join(SKILL_DIR, "scripts", "alert_once.sh")
-LEVELS_FILE = os.path.join(SKILL_DIR, "data", "levels.json")
+LEVELS_FILE = os.path.join(SKILL_DIR, "data", "alert_levels.json")
 
 # Git Bash 的 bash.exe 完整路径（Windows 下 subprocess 调 "bash" 会误调 WSL bash 而失败）
 BASH = r"C:\Program Files\Git\usr\bin\bash.exe"

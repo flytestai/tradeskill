@@ -37,6 +37,7 @@ import time
 from datetime import datetime, timezone, timedelta
 
 from records_hash import content_hash
+from ocr_image import ocr
 
 SKILL_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DB_PATH = os.path.join(SKILL_DIR, "data", "kol_opinions.db")
@@ -76,6 +77,17 @@ def _env_value(key, default=""):
 
 DEFAULT_CHAT_ID = _env_value("WU2198_CHAT_ID")
 VIP_PUSH_CHAT_ID = _env_value("VIP_PUSH_CHAT_ID")
+
+
+def _load_vip_markers():
+    """VIP 消息标记词，可从 local_config.env 的 VIP_MARKERS（逗号分隔）覆盖。"""
+    raw = _env_value("VIP_MARKERS", "")
+    if raw:
+        return [m.strip() for m in raw.split(",") if m.strip()]
+    return ["仅TA的真爱粉可见"]
+
+
+VIP_MARKERS = _load_vip_markers()
 BOT_SENDER_TYPES = ("app", "bot")          # 机器人消息（wu2198 发言由自定义机器人发出）
 SIM_THRESHOLD = 0.97                        # 文本相似度去重阈值
 TEST_KEYWORDS = ["转发测试", "同步测试", "设备A同步测试", "test", "TEST"]
@@ -272,9 +284,14 @@ def save_watermark(t):
 
 
 def log_error(msg):
-    """记录同步错误到 data/sync_errors.log（带时间戳，用于回溯）"""
+    """记录同步错误到 data/sync_errors.log（带时间戳；超 512KB 自动轮转为 .old）"""
     try:
         os.makedirs(os.path.dirname(ERROR_LOG), exist_ok=True)
+        if os.path.exists(ERROR_LOG) and os.path.getsize(ERROR_LOG) > 512 * 1024:
+            try:
+                os.replace(ERROR_LOG, ERROR_LOG + ".old")
+            except Exception:
+                pass
         ts = datetime.now(timezone(timedelta(hours=8))).strftime("%Y-%m-%d %H:%M:%S")
         with open(ERROR_LOG, "a", encoding="utf-8") as f:
             f.write("[%s] %s\n" % (ts, msg))
@@ -309,11 +326,24 @@ def fmt_vip_time(ct):
     return ct
 
 
+def is_vip_text(text):
+    """判断是否为 VIP 消息（含任一 VIP 标记词）。"""
+    return bool(text) and any(m in text for m in VIP_MARKERS)
+
+
+def strip_vip_markers(text):
+    """去掉正文里的 VIP 标记（含【】和裸词），让推送排版更干净。"""
+    t = text or ""
+    for m in VIP_MARKERS:
+        t = t.replace("【%s】" % m, "").replace(m, "")
+    return t.strip()
+
+
 def push_vip_to_group(text, ct):
-    """VIP 消息（含「仅TA的真爱粉可见」）推送到群（荔枝种植交流群），返回是否成功"""
+    """VIP 消息推送到群（荔枝种植交流群），返回是否成功"""
     try:
         # 去掉正文里重复的 VIP 标记，让排版更干净
-        body = text.replace("【仅TA的真爱粉可见】", "").strip()
+        body = strip_vip_markers(text)
         msg = ("🔒 VIP・仅TA的真爱粉可见\n"
                f"\n"
                f"🕐{fmt_vip_time(ct)}\n"
@@ -438,6 +468,34 @@ def is_test_message(text):
 
 def normalize(text):
     return "".join(text.split())
+
+
+POS_SIZE_RE = re.compile(r"持仓[仅剩]?(\d+)\s*米")
+
+
+def extract_position(text):
+    """从发言中提取仓位信号，返回 (size, action, note)。
+
+    仅匹配明确的「持仓N米」或「清仓」表述（wu2198 用「米」表示仓位），保守避免误判。
+    """
+    if not text:
+        return None, "", ""
+    m = POS_SIZE_RE.search(text)
+    if m:
+        size = int(m.group(1))
+    elif re.search(r"清仓", text):
+        size = 0
+    else:
+        return None, "", ""
+    if re.search(r"清仓", text):
+        action = "清仓"
+    elif re.search(r"兑现|减仓|减到", text):
+        action = "减仓"
+    elif re.search(r"加仓|买进|买入", text):
+        action = "加仓"
+    else:
+        action = "持有"
+    return size, action, text.strip()[:40]
 
 
 def ensure_schema(conn):
@@ -622,12 +680,14 @@ def run_once(args, skip_guard=False):
             continue
         seen_hashes.add(h)
         if not args.dry_run:
-            vip = 1 if "仅TA的真爱粉可见" in text else 0
+            vip = 1 if is_vip_text(text) else 0
+            pos_size, pos_action, pos_note = extract_position(text)
             cur.execute("""INSERT INTO kol_records
                 (kol_name, platform, content, extracted_viewpoints, related_assets,
                  record_date, position_size, position_action, position_note, is_vip, content_hash)
                 VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
-                (args.kol_name, "飞书群", text, "", "", ct, None, "", "飞书群自动同步", vip, h))
+                (args.kol_name, "飞书群", text, "", "", ct, pos_size, pos_action,
+                 pos_note or "飞书群自动同步", vip, h))
             if vip:
                 if push_vip_to_group(text, ct):
                     cur.execute("UPDATE kol_records SET vip_pushed=1 WHERE id=?", (cur.lastrowid,))
@@ -647,14 +707,19 @@ def run_once(args, skip_guard=False):
             img_dup += 1
             continue
         local_path = ""
+        ocr_text = ""
         if not args.dry_run and args.download_images:
             local_path = download_image(lark_cli, mid, img_key)
+            if local_path:
+                # 下载成功后尝试 OCR（未装 tesseract 时静默返回空串）
+                ocr_text = ocr(os.path.join(SKILL_DIR, local_path))
         if not args.dry_run:
+            extracted = ("OCR: " + ocr_text[:2000]) if ocr_text else ""
             cur.execute("""INSERT INTO kol_records
                 (kol_name, platform, content, extracted_viewpoints, related_assets,
                  record_date, position_size, position_action, position_note, image_path, is_vip, content_hash)
                 VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
-                (args.kol_name, "飞书群", "[图片消息]", "", "", ct, None, "", "飞书群图片",
+                (args.kol_name, "飞书群", "[图片消息]", extracted, "", ct, None, "", "飞书群图片",
                  local_path or img_key, 0, content_hash("[图片消息]", image_key=img_key)))
         seen_img.add(img_key)
         img_inserted += 1

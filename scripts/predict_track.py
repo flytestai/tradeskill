@@ -95,7 +95,7 @@ def report(args):
     init()
     conn = connect()
     cur = conn.cursor()
-    where = "WHERE kol_name=?" if args.kol else ""
+    where = "WHERE kol_name=?" if args.kol else "WHERE 1=1"
     params = (args.kol,) if args.kol else ()
 
     # 已出结果的统计

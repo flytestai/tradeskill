@@ -13,10 +13,17 @@ wu2198 仓位变化监控 — 第一时间捕捉加仓/减仓信号
   🚨 减到1米        → 接近清仓（她躲暴跌的信号）
   🔵 加仓           → 进攻信号（如买3米→5米）
 """
-import sqlite3, os, sys, time, argparse
+import sqlite3, os, sys, time, argparse, subprocess
 
 SKILL_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DB_PATH = os.path.join(SKILL_DIR, "data", "kol_opinions.db")
+STATE_FILE = os.path.join(SKILL_DIR, "data", "position_state.txt")
+
+BASH = r"C:\Program Files\Git\usr\bin\bash.exe"
+if not os.path.exists(BASH):
+    BASH = r"C:\Program Files\Git\bin\bash.exe"
+if not os.path.exists(BASH):
+    BASH = "bash"
 
 def connect():
     conn = sqlite3.connect('file:' + DB_PATH + '?mode=ro', uri=True)
@@ -136,14 +143,76 @@ def watch(args):
     except KeyboardInterrupt:
         print("\n[STOP] 监控结束")
 
+def _save_state(size, rdate):
+    try:
+        os.makedirs(os.path.dirname(STATE_FILE), exist_ok=True)
+        with open(STATE_FILE, "w", encoding="utf-8") as f:
+            f.write("%s|%s" % (size, rdate))
+    except Exception:
+        pass
+
+
+def _load_state():
+    if not os.path.exists(STATE_FILE):
+        return None
+    try:
+        with open(STATE_FILE, encoding="utf-8") as f:
+            parts = f.read().strip().split("|")
+        return {"size": int(parts[0]), "date": parts[1] if len(parts) > 1 else ""}
+    except Exception:
+        return None
+
+
+def notify_once(args):
+    """一次性检查：仓位变化时推送到群（荔枝种植交流群），并记录状态。"""
+    history = get_position_history(args.kol)
+    if not history:
+        print("[INFO] 无仓位记录")
+        return
+    latest = history[-1]
+    size = latest["position_size"]
+    rdate = latest["record_date"]
+    action = latest["position_action"] or "持有"
+    note = (latest["position_note"] or "")[:40]
+    prev = _load_state()
+
+    if prev is None:
+        _save_state(size, rdate)
+        print(f"[INIT] 记录初始仓位 {size}米 ({rdate})")
+        return
+
+    if size != prev["size"]:
+        delta = size - prev["size"]
+        emoji = "🔴 减仓" if delta < 0 else "🔵 加仓"
+        msg = (f"🚨 **【仓位变化】**\n"
+               f"🕐 {rdate}\n"
+               f"{emoji}：{prev['size']}米 → {size}米（{delta:+d}米，{action}）\n"
+               f"备注：{note or '无'}")
+        if size <= 1:
+            msg += "\n⚠️⚠️ 已减到1米，接近清仓！"
+        _save_state(size, rdate)
+        try:
+            subprocess.run([BASH, os.path.join(SKILL_DIR, "scripts", "notify_group.sh"), msg],
+                           capture_output=True, timeout=30, cwd=SKILL_DIR)
+        except Exception as e:
+            print("[WARN] 仓位告警发送失败: %s" % e)
+        print("[ALERT] " + msg.replace("\n", " | "))
+    else:
+        _save_state(size, rdate)
+        print(f"[OK] 仓位未变（{size}米）")
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="仓位变化监控")
     parser.add_argument("--kol", default="wu2198", help="大V名称")
     parser.add_argument("--watch", action="store_true", help="持续监控模式")
+    parser.add_argument("--notify", action="store_true", help="一次性检查，仓位变化时推送到群")
     parser.add_argument("--interval", type=int, default=300, help="监控间隔（秒），默认300")
     args = parser.parse_args()
 
     if args.watch:
         watch(args)
+    elif args.notify:
+        notify_once(args)
     else:
         check(args)
