@@ -7,9 +7,8 @@
   python monitor_alerts.py            # 正常监控
   python monitor_alerts.py --dry-run  # 只打印将触发的提醒，不发
 
-关键位（依据 wu2198 原话）：
-  上证  3996 突破=转多；3850 跌破=加速；3767 跌破=连线破/C杀
-  创业板 3359 跌破=加速；3300 跌破=去3158 / 收回3310上方=企稳；3158 跌破=C杀确认
+关键位从 data/levels.json 读取（可随时增删改，无需改代码）；
+文件缺失或解析失败时回退到下方 DEFAULT_LEVELS。
 """
 import argparse
 import json
@@ -21,6 +20,7 @@ from datetime import datetime, timezone, timedelta
 
 SKILL_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 ALERT_ONCE = os.path.join(SKILL_DIR, "scripts", "alert_once.sh")
+LEVELS_FILE = os.path.join(SKILL_DIR, "data", "levels.json")
 
 # Git Bash 的 bash.exe 完整路径（Windows 下 subprocess 调 "bash" 会误调 WSL bash 而失败）
 BASH = r"C:\Program Files\Git\usr\bin\bash.exe"
@@ -38,6 +38,54 @@ BASE_HEADERS = {
     "X-Claw-Plugin-Id": "none",
     "X-Claw-Plugin-Version": "none",
 }
+
+STOCKS = {
+    "上证指数": "上证指数最新点位",
+    "创业板指": "创业板指最新点位",
+}
+
+# 兜底配置（与 data/levels.json 保持一致；json 缺失时使用）
+DEFAULT_LEVELS = {
+    "上证指数": [
+        {"key": "上证突破3996", "type": "break", "level": 3996,
+         "point": "放量突破 3996（B反前高）", "meaning": "B反未死，转多/看新高",
+         "action": "不追高，等回踩 3996 确认"},
+        {"key": "上证跌破3850", "type": "below", "level": 3850,
+         "point": "跌破 3850（8/25低点·双头颈线）", "meaning": "短线加速下跌，反抽结束",
+         "action": "减仓/离场，别接飞刀"},
+        {"key": "上证跌破3767", "type": "below", "level": 3767,
+         "point": "跌破 3767（3741-3767连线二次反击点）", "meaning": "连线必破，C杀启动",
+         "action": "清仓防守，等 3500 附近"},
+    ],
+    "创业板指": [
+        {"key": "创业板跌破3359", "type": "below", "level": 3359,
+         "point": "跌破 3359（8/25低点）", "meaning": "加速下探，去 3300",
+         "action": "空仓等待，3300 才是观察位"},
+        {"key": "创业板跌破3300", "type": "below_recover", "level": 3300, "recover": 3310,
+         "recover_key": "创业板企稳3300",
+         "point": "跌破 3300（短线机会位失守）", "meaning": "去 3158（A杀低）",
+         "action": "观望，等 C杀 完成",
+         "recover_point": "从 3300 下方收回 3310 上方",
+         "recover_meaning": "3300 获支撑、短线企稳",
+         "recover_action": "可关注低吸，破 3300 止损"},
+        {"key": "创业板跌破3158", "type": "below", "level": 3158,
+         "point": "跌破 3158（A杀低点）", "meaning": "C杀确认",
+         "action": "观望，等 C5 见底"},
+    ],
+}
+
+
+def load_levels():
+    """从 data/levels.json 加载关键位；失败回退 DEFAULT_LEVELS。"""
+    if os.path.exists(LEVELS_FILE):
+        try:
+            with open(LEVELS_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            if isinstance(data, dict) and data:
+                return data
+        except Exception as e:
+            print("[WARN] levels.json 解析失败，使用内置默认值: %s" % e)
+    return DEFAULT_LEVELS
 
 
 def query_index(query):
@@ -106,57 +154,51 @@ def read_state(key):
     return ""
 
 
+def dispatch(stock, price, e, dry_run):
+    """按 type 分发一条关键位检查。"""
+    key = e.get("key", "")
+    lv = e.get("level")
+    if not key or lv is None:
+        return
+    t = e.get("type", "below")
+
+    if t == "break":
+        if price > lv:
+            alert(key, "break", fmt_msg(stock, e.get("point", ""), e.get("meaning", ""), e.get("action", "")), dry_run)
+        else:
+            alert(key, "above", "", dry_run)
+    elif t == "below_recover":
+        recover = e.get("recover", lv)
+        rkey = e.get("recover_key", key + "企稳")
+        was_below = (read_state(key) == "below")
+        if price < lv:
+            alert(key, "below", fmt_msg(stock, e.get("point", ""), e.get("meaning", ""), e.get("action", "")), dry_run)
+            alert(rkey, "above", "", dry_run)
+        elif price > recover and was_below:
+            alert(key, "above", "", dry_run)
+            alert(rkey, "break", fmt_msg(stock, e.get("recover_point", ""), e.get("recover_meaning", ""), e.get("recover_action", "")), dry_run)
+        else:
+            alert(key, "above", "", dry_run)
+            alert(rkey, "above", "", dry_run)
+    else:  # below
+        check_below_above(key, price, lv, stock, e.get("point", ""), e.get("meaning", ""), e.get("action", ""), dry_run)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--dry-run", action="store_true")
     args = ap.parse_args()
 
-    sz = query_index("上证指数最新点位")
-    cyb = query_index("创业板指最新点位")
-    if sz is None or cyb is None:
-        print("[SKIP] 行情查询失败，本轮跳过")
-        return
-
-    print(f"上证 {sz} / 创业板 {cyb}")
-
-    # 上证 3996：突破转多
-    if sz > 3996:
-        alert("上证突破3996", "break", fmt_msg("上证指数", "放量突破 3996（B反前高）",
-                                                "B反未死，转多/看新高", "不追高，等回踩 3996 确认"), args.dry_run)
-    else:
-        alert("上证突破3996", "above", "", args.dry_run)
-
-    # 上证 3850：跌破加速
-    check_below_above("上证跌破3850", sz, 3850, "上证指数", "跌破 3850（8/25低点·双头颈线）",
-                      "短线加速下跌，反抽结束", "减仓/离场，别接飞刀", args.dry_run)
-
-    # 上证 3767：跌破连线必破/C杀
-    check_below_above("上证跌破3767", sz, 3767, "上证指数", "跌破 3767（3741-3767连线二次反击点）",
-                      "连线必破，C杀启动", "清仓防守，等 3500 附近", args.dry_run)
-
-    # 创业板 3359：跌破加速
-    check_below_above("创业板跌破3359", cyb, 3359, "创业板指", "跌破 3359（8/25低点）",
-                      "加速下探，去 3300", "空仓等待，3300 才是观察位", args.dry_run)
-
-    # 创业板 3300：跌破去3158 / 从3300下方收回3310上方=企稳（需前态是 below）
-    was_below_3300 = (read_state("创业板跌破3300") == "below")
-    if cyb < 3300:
-        alert("创业板跌破3300", "below", fmt_msg("创业板指", "跌破 3300（短线机会位失守）",
-                                                  "去 3158（A杀低）", "观望，等 C杀 完成"), args.dry_run)
-        alert("创业板企稳3300", "above", "", args.dry_run)
-    elif cyb > 3310 and was_below_3300:
-        # 从 3300 下方收回 → 企稳
-        alert("创业板跌破3300", "above", "", args.dry_run)
-        alert("创业板企稳3300", "break", fmt_msg("创业板指", "从 3300 下方收回 3310 上方",
-                                                  "3300 获支撑、短线企稳", "可关注低吸，破 3300 止损"), args.dry_run)
-    else:
-        # 一直在 3300 上方（或 3300-3310 之间）：都重置，不触发
-        alert("创业板跌破3300", "above", "", args.dry_run)
-        alert("创业板企稳3300", "above", "", args.dry_run)
-
-    # 创业板 3158：跌破C杀确认
-    check_below_above("创业板跌破3158", cyb, 3158, "创业板指", "跌破 3158（A杀低点）",
-                      "C杀确认", "观望，等 C5 见底", args.dry_run)
+    levels = load_levels()
+    for stock, entries in levels.items():
+        query = STOCKS.get(stock, stock + "最新点位")
+        price = query_index(query)
+        if price is None:
+            print("[SKIP] %s 行情查询失败，本轮跳过" % stock)
+            continue
+        print("%s %s" % (stock, price))
+        for e in entries:
+            dispatch(stock, price, e, args.dry_run)
 
 
 if __name__ == "__main__":

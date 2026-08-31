@@ -12,8 +12,18 @@
 set -u
 
 SKILL_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+ENV_FILE="$SKILL_DIR/data/local_config.env"
+
 MSG="${1:-}"
-GROUP_ID="${2:-oc_92e9e038a0b4aa5356427e8c2901a970}"
+GROUP_ID="${2:-}"
+
+# 未显式传群 ID 时，从本地配置读取（不入 git）
+if [ -z "$GROUP_ID" ]; then
+    GROUP_ID="$(grep '^VIP_PUSH_CHAT_ID=' "$ENV_FILE" 2>/dev/null | head -1 | cut -d= -f2-)"
+fi
+if [ -z "$GROUP_ID" ]; then
+    echo "[CONFIG] 未配置 VIP_PUSH_CHAT_ID（data/local_config.env），群发推送将失败" >&2
+fi
 
 if [ -z "$MSG" ]; then
     echo "用法: bash notify_group.sh \"消息内容\" 或 bash notify_group.sh @消息文件 [群ID]" >&2

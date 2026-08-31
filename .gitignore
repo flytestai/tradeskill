@@ -7,6 +7,16 @@ data/*.db-shm
 # 同步错误日志（每设备运行时状态，不纳入 git）
 data/sync_errors.log
 
+# 高频同步运行时缓存（每设备运行时状态，不纳入 git）
+data/_last_pull.txt
+data/_last_auth_check.txt
+data/_last_query_pull.txt
+data/_feishu_loop.lock
+data/_loop.log
+
+# 本地敏感配置（chat_id/open_id 等，不纳入 git）
+data/local_config.env
+
 # 提醒触发状态（每设备运行时状态，不纳入 git）
 data/alert_state.txt
 

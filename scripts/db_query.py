@@ -21,6 +21,7 @@ import os
 import sys
 import argparse
 import json
+import time
 from datetime import datetime, timedelta
 
 
@@ -131,18 +132,29 @@ def search_content(conn, keyword: str) -> list:
 
 
 def auto_sync_from_github():
-    """自动从 GitHub 拉取最新数据（静默失败，不影响查询）
-
-    统一同步格式：sync/kol_records.json（全量JSON，跨设备统一）
-    """
+    """自动从 GitHub 拉取最新数据（静默失败，不影响查询；10 分钟内不重复拉）"""
     try:
         import subprocess
         skill_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        cache_file = os.path.join(skill_dir, 'data', '_last_query_pull.txt')
+        if os.path.exists(cache_file):
+            try:
+                with open(cache_file, 'r') as f:
+                    last = float(f.read().strip() or '0')
+                if time.time() - last < 600:
+                    return  # 10 分钟内已同步过，跳过
+            except Exception:
+                pass
         # 1. git pull（静默）
         subprocess.run(['git', '-C', skill_dir, 'pull', '--rebase'],
                       capture_output=True, timeout=15,
                       encoding='utf-8', errors='ignore')
-        # 2. 调用 db_import.py（读 kol_records.json，幂等导入，跨设备统一格式）
+        try:
+            with open(cache_file, 'w') as f:
+                f.write(str(time.time()))
+        except Exception:
+            pass
+        # 2. 调用 db_import.py（读 records.jsonl，幂等导入，跨设备统一格式）
         db_import = os.path.join(skill_dir, 'scripts', 'db_import.py')
         if os.path.exists(db_import):
             r = subprocess.run([sys.executable, db_import],

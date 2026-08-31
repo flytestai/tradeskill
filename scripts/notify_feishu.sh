@@ -10,7 +10,14 @@
 #   - 同步发送，timeout 兜底（lark-cli 偶发"发送后进程不退出"，-k 3 强制杀）
 set -u
 
-USER_OPEN_ID="ou_aa522eed7dac7c0c6bad6d8d3236f0f2"
+SKILL_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+ENV_FILE="$SKILL_DIR/data/local_config.env"
+
+# 从本地配置读取 open_id（不入 git）；缺失则告警
+USER_OPEN_ID="$(grep '^USER_OPEN_ID=' "$ENV_FILE" 2>/dev/null | head -1 | cut -d= -f2-)"
+if [ -z "$USER_OPEN_ID" ]; then
+    echo "[CONFIG] 未配置 USER_OPEN_ID（data/local_config.env），私信推送将失败" >&2
+fi
 MSG="${1:-}"
 
 if [ -z "$MSG" ]; then
