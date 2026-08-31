@@ -7,8 +7,7 @@
 # 说明:
 #   - 飞书应用 cli_a92579c6ddf9dcb5 的机器人，给用户253172 发私聊
 #   - 使用 --markdown 发送，支持 **加粗**、换行、emoji 等富文本样式
-#   - 依赖 lark-cli（需先完成 auth login 授权）
-#   - lark-cli(node) 偶发"发送成功后进程不退出"，后台发送、脚本立即返回
+#   - 同步发送，timeout 兜底（lark-cli 偶发"发送后进程不退出"，-k 3 强制杀）
 set -u
 
 USER_OPEN_ID="ou_aa522eed7dac7c0c6bad6d8d3236f0f2"
@@ -19,15 +18,13 @@ if [ -z "$MSG" ]; then
     exit 1
 fi
 
-# 发送前先清理上次残留的 lark-cli 进程（node 发送后偶发不退出）
-bash "$(cd "$(dirname "$0")/.." && pwd)/scripts/cleanup_lark.sh" >/dev/null 2>&1
-
 # 把输入里的 \n 转成真实换行（bash 双引号不会自动解释 \n）
 MSG=$(printf '%b' "$MSG")
 
-nohup lark-cli im +messages-send \
+# 同步发送，确保消息送达；timeout 兜底杀掉不退出的进程
+timeout -k 3 20 lark-cli im +messages-send \
     --user-id "$USER_OPEN_ID" \
     --as bot \
-    --markdown "$MSG" >/dev/null 2>&1 &
+    --markdown "$MSG" >/dev/null 2>&1
 
 exit 0
