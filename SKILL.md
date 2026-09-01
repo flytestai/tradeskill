@@ -418,7 +418,8 @@ bash scripts/alert_once.sh "触发键" "状态" "提醒内容"
 - wu2198 发表 B反/C杀 转折性观点
 
 **其它提醒**：
-- **收盘汇总**：每个交易日 15:05 自动生成当日汇总（收盘点位/成交额/wu2198观点/明日关注）发飞书
+- **午间汇总**：每个交易日 11:35 自动生成上午汇总（四大指数+两市成交额+主力资金+上午观点+下午关注）发荔枝群
+- **收盘汇总**：每个交易日 15:05 自动生成当日汇总（四大指数+两市成交额+主力资金+wu2198观点+明日关注）发荔枝群
 - **同步告警**：lark-cli 拉取失败、GitHub 推送失败、授权临近过期（<3天）时自动发飞书告警
 - **仓位变化**：盘中每 5 分钟跑 `position_monitor.py --notify`，仓位变化时推群告警（需发言含「持仓N米」才会被提取）
 - **图片消息**：图片以 `image_key` 记录在库；`python sync_feishu_auto.py --download-images` 下载图片并 OCR（需装 tesseract 中文语言包，未装则静默跳过）
@@ -429,31 +430,49 @@ bash scripts/alert_once.sh "触发键" "状态" "提醒内容"
 
 ## 价格提醒（自然语言设置自动提醒）
 
-`scripts/price_alerts.py` 支持「标的到某价/跌破/突破/区间」自动提醒，盘中定时检查，触发后群发提醒。
+`scripts/price_alerts.py` 支持「标的到某价 / 跌破 / 突破 / 区间」自动提醒：盘中后台循环每 30 秒查一次价，命中条件即通过飞书机器人发群提醒并 **@ 设置人**。
+
+### 群里 @ 机器人（主要用法）
+
+在「荔枝种植交流群」里 @ 机器人，用自然语言下达指令（全天 7:00-23:00 每 5 分钟捕获一次）：
+
+| 意图 | 示例 | 机器人反馈 |
+|------|------|-----------|
+| 设置 | `创业板指跌破3356提醒我`、`上证指数突破4000提醒我`、`159915到3.5提醒我`、`沪深300在3500-3600之间提醒` | ✅ 已设置提醒 |
+| 删除 | `删除创业板提醒`、`取消富瀚微的提醒` | 🗑 已删除 |
+| 编辑 | `把创业板改成3300-3350`、`创业板改成跌破3300` | ✏️ 已更新 |
+| 查看 | `查看我的提醒`、`有哪些提醒` | 列出列表 |
+
+- 相同提醒（同标的+同条件+同点位）**自动去重**：名称/代码/区间方向都会归一化（如「富瀚微」与「300613」、「3356-3365」与「3365-3356」都视为同一条）。
+- 触发后该条**自动失效**（一次性提醒）；需要再次提醒时用「编辑」或 `reset` 重新激活。
+
+### 命令行用法
 
 ```bash
-# 自然语言设置（规则解析，支持指数/6位代码）
+# 设置（自然语言）
 python scripts/price_alerts.py add --text "创业板指跌破3356就提醒我"
-python scripts/price_alerts.py add --text "上证指数突破4000提醒我"
-python scripts/price_alerts.py add --text "159915到3.5提醒一下"
 
-# 显式设置（个股名等任意标的，推荐由 AI 解析后调用）
+# 设置（显式，个股名/代码任意标的）
 python scripts/price_alerts.py add --target 富瀚微 --cond below --price 70 --note "破70提醒"
 python scripts/price_alerts.py add --target 沪深300 --cond range --price 3500 --price2 3600
 
-# 管理
-python scripts/price_alerts.py list          # 列出
-python scripts/price_alerts.py remove --id <id>
-python scripts/price_alerts.py reset --id <id>   # 触发后重置，可再次提醒
-python scripts/price_alerts.py check --dry-run   # 预览检查
+# 查看 / 删除 / 编辑 / 重置
+python scripts/price_alerts.py list                    # 列出（含设置人、标的代码）
+python scripts/price_alerts.py remove --target 创业板指  # 按标的删
+python scripts/price_alerts.py remove --id <id>          # 按 id 删
+python scripts/price_alerts.py edit --target 创业板指 --price 3300 --price2 3350   # 改价/改区间
+python scripts/price_alerts.py reset --id <id>           # 触发后重新激活
+python scripts/price_alerts.py check --dry-run           # 预览检查
 
 # 盘中高频轮询循环（每30秒查一次，非盘中自动退出；文件锁防重复）
 python scripts/price_alerts.py --loop --interval 30
 ```
 
-- **检查**：盘中由看门狗定时任务（每 15 分钟）拉起 `--loop` 后台循环，循环内**每 30 秒**查一次价，命中条件即通过飞书机器人发群提醒并标记已触发。
+### 运行机制
+- **检查**：盘中由看门狗定时任务（每 15 分钟）拉起 `--loop` 后台循环，循环内每 30 秒查一次价，命中即群发提醒并标记已触发。
+- **条件**：`below`=跌破（价 ≤ 触发价）、`above`=突破/涨到（价 ≥ 触发价）、`range`=进入区间（下界 ≤ 价 ≤ 上界）。
 - **存储**：`data/price_alerts.json`（gitignored）；循环锁 `data/_price_alerts_loop.lock`。
-- **输入通道**：`scripts/fetch_mentions.py` 拉取群里「用户 @机器人」的文本，交给 AI 解析后调用 `add`（需实测飞书 @机器人 消息格式后微调）。
+- **输入通道**：`scripts/fetch_mentions.py` 拉取群里「用户 @机器人」的文本（含 sender 名称与 open_id，用于反馈与 @设置人），交给 AI 解析后调用 `add`。
 
 ## 分析工作流
 
