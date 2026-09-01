@@ -25,7 +25,6 @@ wu2198 五号群 消息自动同步（合并版：飞书群拉取 + 大V发言�
   python sync_feishu_auto.py --reset-watermark  # 重置增量水位（下次重新全量拉取）
 """
 import argparse
-import difflib
 import json
 import os
 import re
@@ -38,7 +37,7 @@ from datetime import datetime, timezone, timedelta
 
 from records_hash import content_hash
 from ocr_image import ocr
-from common import find_bash, load_holidays, normalize
+from common import find_bash, load_holidays
 
 SKILL_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DB_PATH = os.path.join(SKILL_DIR, "data", "kol_opinions.db")
@@ -86,7 +85,6 @@ def _load_vip_markers():
 
 VIP_MARKERS = _load_vip_markers()
 BOT_SENDER_TYPES = ("app", "bot")          # 机器人消息（wu2198 发言由自定义机器人发出）
-SIM_THRESHOLD = 0.97                        # 文本相似度去重阈值
 TEST_KEYWORDS = ["转发测试", "同步测试", "设备A同步测试", "test", "TEST"]
 
 # 节假日从 common.load_holidays(skill_dir) 加载（硬编码兜底 + data/holidays.txt）
@@ -324,22 +322,34 @@ def push_vip_to_group(text, ct):
         tmp = os.path.join(SKILL_DIR, "data", "_vip_push_tmp.txt")
         with open(tmp, "w", encoding="utf-8") as f:
             f.write(msg)
-        # 用 BASH -c 内联执行，捕获输出判断是否成功（lark-cli 返回 ok:true 即成功）
-        cmd = ('timeout -k 3 20 lark-cli im +messages-send '
+        # 用 BASH -c 内联执行，捕获输出判断是否成功（lark-cli 返回 ok:true 即成功）；失败重试 3 次
+        # 幂等键：同一(内容+时间)只发一次，防止重试/补推重复发
+        idem_key = "vip_" + content_hash(text + "|" + (ct or ""))
+        cmd = ('timeout -k 3 30 lark-cli im +messages-send '
                '--chat-id %s '
-               '--as bot --markdown "$(cat data/_vip_push_tmp.txt)"' % VIP_PUSH_CHAT_ID)
-        r = subprocess.run([BASH, "-c", cmd], capture_output=True, timeout=40, cwd=SKILL_DIR)
-        out = r.stdout or b""
-        ok = (b'"ok": true' in out or b'"ok":true' in out)
+               '--idempotency-key %s '
+               '--as bot --markdown "$(cat data/_vip_push_tmp.txt)"' % (VIP_PUSH_CHAT_ID, idem_key))
+        ok = False
+        last_err = ""
+        for attempt in range(3):
+            r = subprocess.run([BASH, "-c", cmd], capture_output=True, timeout=50, cwd=SKILL_DIR)
+            out = (r.stdout or b"") + (r.stderr or b"")
+            if b'"ok": true' in out or b'"ok":true' in out:
+                ok = True
+                break
+            last_err = out.decode("utf-8", "ignore")[:200]
+            if attempt < 2:
+                time.sleep(2)
         try:
             os.remove(tmp)
         except Exception:
             pass
         if not ok:
-            log_error("VIP 消息推送失败: %s" % ct)
+            log_error("VIP 消息推送失败: %s | err=%s" % (ct, last_err))
             alert_feishu("VIP推送失败", "🔒 **【VIP推送告警】**\n有 VIP 消息推送到「荔枝种植交流群」失败，将在后续轮次自动补推。\n🕐 %s" % ct)
         return ok
-    except Exception:
+    except Exception as e:
+        log_error("VIP 推送异常: %s" % e)
         return False
 
 
@@ -429,6 +439,7 @@ def download_image(lark_cli, message_id, image_key):
 
 
 def is_test_message(text):
+    """测试消息判定：命中关键词则跳过（不入库、不同步）。"""
     if not text:
         return True
     for kw in TEST_KEYWORDS:
@@ -610,12 +621,11 @@ def run_once(args, skip_guard=False):
                 bot_images.append((m.get("create_time", ""), m.get("message_id", ""), img_key))
     print("[3/5] 机器人文本消息 %d 条 / 图片消息 %d 条" % (len(bot_texts), len(bot_images)))
 
-    # 4. 97% 去重 + 入库（精确去重用 content_hash 唯一索引，相似度只对比最近 300 条）
-    conn = sqlite3.connect(args.db)
+    # 4. 入库（按 content_hash 精确去重；增量依据水位；测试消息跳过）
+    conn = sqlite3.connect(args.db, timeout=30)
+    conn.execute("PRAGMA busy_timeout=30000")
     ensure_schema(conn)
     cur = conn.cursor()
-    cur.execute("SELECT content FROM kol_records WHERE kol_name=? ORDER BY record_date DESC LIMIT 300", (args.kol_name,))
-    recent_norm = [normalize(r[0]) for r in cur.fetchall() if r[0]]
 
     inserted = 0
     dup_skipped = 0
@@ -630,7 +640,6 @@ def run_once(args, skip_guard=False):
         if is_test_message(text):
             test_skipped += 1
             continue
-        nn = normalize(text)
         h = content_hash(text)
         # 精确去重：先查本次批量，再查库（走 content_hash 唯一索引，O(1)）
         if h in seen_hashes:
@@ -641,10 +650,6 @@ def run_once(args, skip_guard=False):
             if cur.fetchone():
                 dup_skipped += 1
                 continue
-        # 相似度去重（最近 300 条）
-        if any(nn and difflib.SequenceMatcher(None, ee, nn).ratio() >= args.threshold for ee in recent_norm):
-            dup_skipped += 1
-            continue
         seen_hashes.add(h)
         if not args.dry_run:
             vip = 1 if is_vip_text(text) else 0
@@ -658,7 +663,6 @@ def run_once(args, skip_guard=False):
             if vip:
                 if push_vip_to_group(text, ct):
                     cur.execute("UPDATE kol_records SET vip_pushed=1 WHERE id=?", (cur.lastrowid,))
-        recent_norm.append(nn)
         inserted += 1
 
     # 4b. 图片消息入库（按 image_key 精确去重）
@@ -737,9 +741,8 @@ def run_once(args, skip_guard=False):
     print("  新增导入条数: %d" % inserted)
     if img_inserted or img_dup:
         print("  图片消息: 新增 %d 条 / 跳过 %d 条" % (img_inserted, img_dup))
-    print("  跳过条数: %d（重复相似度>%.0f%%: %d / 测试消息: %d / 空消息: %d）"
-          % (dup_skipped + test_skipped + empty_skipped, args.threshold * 100,
-             dup_skipped, test_skipped, empty_skipped))
+    print("  跳过条数: %d（重复: %d / 测试消息: %d / 空消息: %d）"
+          % (dup_skipped + test_skipped + empty_skipped, dup_skipped, test_skipped, empty_skipped))
     print("  数据库 wu2198 总条数: %d" % total)
     if push_ok is not None:
         print("  GitHub 推送: %s" % ("成功" if push_ok else "失败（见上方日志）"))
@@ -750,7 +753,6 @@ def run_once(args, skip_guard=False):
 def main():
     ap = argparse.ArgumentParser(description="wu2198五号群消息自动同步（合并版）")
     ap.add_argument("--chat-id", default=DEFAULT_CHAT_ID)
-    ap.add_argument("--threshold", type=float, default=SIM_THRESHOLD)
     ap.add_argument("--db", default=DB_PATH)
     ap.add_argument("--force", action="store_true", help="忽略盘中/交易日守卫")
     ap.add_argument("--no-push", action="store_true", help="跳过 GitHub 推送")
