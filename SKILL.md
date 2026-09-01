@@ -368,7 +368,7 @@ python <skill-dir>/scripts/sync.py compact
 - **盘中时间**：交易日 9:00-11:30 / 13:00-15:00（**9:00-9:30 也算盘中**），另在盘后 16:00 兜底一次，其余时间自动跳过
 - **节假日**：法定休市日自动跳过；节假日列表在 `data/holidays.txt`（每行一个日期，每年年初更新），脚本内另有硬编码兜底
 - **增量拉取**：只记住「最后一次拉取的群消息时间」（水位，存于 `sync/feishu_sync_state.json`，随 GitHub 同步，多设备共享一致水位），仅拉取该时间之后的新消息
-- **去重**：先按 `content_hash`（归一化正文 md5，图片按 image_key）+ 唯一索引精确去重，再按 97% 文本相似度做模糊去重；测试消息自动跳过，已导入消息不重复导入
+- **去重**：只按 `content_hash`（归一化正文 md5，图片按 image_key）+ 唯一索引精确去重；增量同步依据水位（仅拉取水位之后的新消息）；测试消息自动跳过
 - **VIP 消息实时推送**：内容含 `【仅TA的真爱粉可见】` 的消息判定为 VIP 消息，入库后立即推送到「**荔枝种植交流群**」（机器人 Markdown 消息）；推送失败会记录并自动补推，同时发私信告警。VIP 标记词可在 `local_config.env` 用 `VIP_MARKERS`（逗号分隔）覆盖
 - **仓位自动提取**：发言中含「持仓N米 / 清仓」时自动写入 `position_size/position_action`（配合 `position_monitor.py --notify` 盘中每 5 分钟监控仓位变化）
 - **图片 OCR（可选）**：加 `--download-images` 时下载图片并调用 tesseract 识别文字写入 `extracted_viewpoints`（需自行安装 tesseract 中文语言包，未装则静默跳过）
@@ -426,6 +426,31 @@ bash scripts/alert_once.sh "触发键" "状态" "提醒内容"
 > 关键位配置分两个文件：**告警阈值**用 `data/alert_levels.json`（monitor_alerts.py），**点位距离表**用 `data/level_targets.json`（level_monitor.py），互不影响。
 
 > 注：lark-cli 偶发"发送成功后进程不退出"，脚本已改为后台发送（`nohup ... &`），消息发出即返回。
+
+## 价格提醒（自然语言设置自动提醒）
+
+`scripts/price_alerts.py` 支持「标的到某价/跌破/突破/区间」自动提醒，盘中定时检查，触发后群发提醒。
+
+```bash
+# 自然语言设置（规则解析，支持指数/6位代码）
+python scripts/price_alerts.py add --text "创业板指跌破3356就提醒我"
+python scripts/price_alerts.py add --text "上证指数突破4000提醒我"
+python scripts/price_alerts.py add --text "159915到3.5提醒一下"
+
+# 显式设置（个股名等任意标的，推荐由 AI 解析后调用）
+python scripts/price_alerts.py add --target 富瀚微 --cond below --price 70 --note "破70提醒"
+python scripts/price_alerts.py add --target 沪深300 --cond range --price 3500 --price2 3600
+
+# 管理
+python scripts/price_alerts.py list          # 列出
+python scripts/price_alerts.py remove --id <id>
+python scripts/price_alerts.py reset --id <id>   # 触发后重置，可再次提醒
+python scripts/price_alerts.py check --dry-run   # 预览检查
+```
+
+- **检查**：盘中每 2 分钟由 Bee 定时任务跑 `check`，命中条件即通过飞书机器人发群提醒并标记已触发。
+- **存储**：`data/price_alerts.json`（gitignored）。
+- **输入通道**：`scripts/fetch_mentions.py` 拉取群里「用户 @机器人」的文本，交给 AI 解析后调用 `add`（需实测飞书 @机器人 消息格式后微调）。
 
 ## 分析工作流
 

@@ -8,12 +8,8 @@ data/*.db-shm
 data/sync_errors.log
 data/sync_errors.log.old
 
-# 高频同步运行时缓存（每设备运行时状态，不纳入 git）
-data/_last_pull.txt
-data/_last_auth_check.txt
-data/_last_query_pull.txt
-data/_feishu_loop.lock
-data/_loop.log
+# 运行时临时/状态文件（每设备运行时状态，不纳入 git；含锁、心跳、缓存、临时输出）
+data/_*
 
 # 本地敏感配置（chat_id/open_id 等，不纳入 git）
 data/local_config.env
@@ -21,10 +17,12 @@ data/local_config.env
 # 提醒触发状态（每设备运行时状态，不纳入 git）
 data/alert_state.txt
 data/position_state.txt
+data/price_alerts.json
 
 # 临时脚本
 scripts/bulk_*.py
 scripts/_*.py
+scripts/_*.txt
 
 # 生成的 HTML 报告（每次重新生成即可）
 scripts/kol_analysis_*.html
