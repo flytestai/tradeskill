@@ -72,7 +72,7 @@ def _save(alerts):
 
 
 def query_price(target):
-    """查询标的现价，返回 (price, name, chg) 或 None。"""
+    """查询标的现价，返回 (price, name, chg, code) 或 None。"""
     headers = {
         "Content-Type": "application/json",
         "X-Claw-Call-Type": "normal",
@@ -104,7 +104,8 @@ def query_price(target):
             continue
         name = it.get("股票简称") or it.get("指数简称") or it.get("基金简称") or target
         chg = it.get("最新涨跌幅") or it.get("最新涨跌幅:前复权") or ""
-        return price, name, chg
+        code = it.get("股票代码") or it.get("指数代码") or it.get("基金代码") or ""
+        return price, name, chg, code
     return None
 
 
@@ -182,37 +183,61 @@ def parse_alert_text(text):
     return target, cond, price, price2
 
 
-def add_alert(target, cond, price, price2=None, note="", chat_id=""):
+def add_alert(target, cond, price, price2=None, note="", chat_id="", created_by="", created_by_id=""):
     if cond not in ("below", "above", "range"):
         print(f"[ERROR] 条件类型无效: {cond}")
-        return
-    if cond == "range" and (price2 is None or price2 <= price):
-        print("[ERROR] 区间需要两个递增的价格")
-        return
+        return None
+    target = INDEX_ALIASES.get(target, target)  # 指数别名归一化，避免「创业板/创业板指」重复
+    price = float(price)
+    price2 = float(price2) if price2 is not None else None
+    if cond == "range":
+        if price2 is None:
+            print("[ERROR] 区间需要两个价格")
+            return None
+        if price2 < price:
+            price, price2 = price2, price  # 区间归一化：小的在前，避免「3356-3365」和「3365-3356」重复
+    # 解析标的的规范代码（名称/代码统一去重，如「富瀚微」与「300613」）
+    code = ""
+    try:
+        res = query_price(target)
+        if res:
+            code = (res[3] or "").split(".")[0]
+    except Exception:
+        pass
     alerts = _load()
-    # 去重：同标的+同条件+同价格 已存在则不重复加
+    # 去重：同标的+同条件+同价格 已存在则不重复加（名称相同 或 代码相同 都算重复）
     for a in alerts:
-        if (a.get("target") == target and a.get("cond") == cond
-                and a.get("price") == price and a.get("price2") == price2
+        ex_p2 = a.get("price2") or None
+        a_code = (a.get("code") or "").split(".")[0]
+        name_same = a.get("target") == target
+        code_same = bool(code) and bool(a_code) and code == a_code
+        if ((name_same or code_same) and a.get("cond") == cond
+                and float(a.get("price") or 0) == price
+                and ex_p2 == price2
                 and a.get("status") == "active"):
-            print(f"[INFO] 已存在相同提醒（id={a.get('id')}），不重复添加")
-            return
+            print(f"[DUP] 已存在相同提醒（id={a.get('id')}），不重复添加")
+            return None
+    aid = secrets.token_hex(4)
     a = {
-        "id": secrets.token_hex(4),
+        "id": aid,
         "target": target,
+        "code": code,
         "cond": cond,
         "price": price,
         "price2": price2,
         "note": note,
         "chat_id": chat_id,
+        "created_by": created_by,
+        "created_by_id": created_by_id,
         "status": "active",          # active / triggered
         "created_at": datetime.now(timezone(timedelta(hours=8))).strftime("%Y-%m-%d %H:%M:%S"),
         "triggered_at": "",
     }
     alerts.append(a)
     _save(alerts)
-    print(f"[OK] 已添加提醒 {a['id']}: {target} {cond} {price}" +
+    print(f"[OK] 已添加提醒 {aid}: {target} {cond} {price}" +
           (f"~{price2}" if price2 else "") + (f"（{note}）" if note else ""))
+    return aid
 
 
 def list_alerts():
@@ -225,7 +250,8 @@ def list_alerts():
         st = "✅已触发" if a["status"] == "triggered" else "🟢待触发"
         cond_txt = {"below": "跌破", "above": "突破/涨到", "range": "区间"}[a["cond"]]
         rng = f"{a['price']} ~ {a['price2']}" if a["price2"] else str(a["price"])
-        print(f"  [{a['id']}] {st} {a['target']} {cond_txt} {rng}"
+        who = f" ｜@{a['created_by']}" if a.get("created_by") else ""
+        print(f"  [{a['id']}] {st} {a['target']} {cond_txt} {rng}{who}"
               + (f" ｜{a['note']}" if a.get("note") else ""))
 
 
@@ -256,7 +282,7 @@ def check_alerts(dry_run=False, quiet=False):
             if not quiet:
                 print(f"[SKIP] 查询失败: {a['target']}")
             continue
-        price, name, chg = res
+        price, name, chg, code = res
         if not _triggered(a["cond"], price, a):
             if not quiet:
                 print(f"[OK] {name} 现价 {price}，未触发 {a['cond']} {a['price']}")
@@ -264,12 +290,18 @@ def check_alerts(dry_run=False, quiet=False):
         # 触发
         cond_txt = {"below": "跌破", "above": "突破/涨到", "range": "进入区间"}[a["cond"]]
         rng = f"{a['price']}~{a['price2']}" if a["price2"] else str(a["price"])
+        mention = ""
+        if a.get("created_by_id"):
+            mention = f'<at user_id="{a["created_by_id"]}"></at>'
+        elif a.get("created_by"):
+            mention = f"@{a['created_by']}"
+        who = f"\n设置人：{mention}" if mention else ""
         msg = (f"🚨 **【价格提醒】**\n"
                f"🕐 {now}\n"
                f"标的：{name}（{a['target']}）\n"
                f"触发：{cond_txt} {rng}\n"
                f"现价：{price}" + (f"（{chg}%）" if chg else "") +
-               (f"\n备注：{a['note']}" if a.get("note") else ""))
+               (f"\n备注：{a['note']}" if a.get("note") else "") + who)
         if dry_run:
             print(f"[DRY] {msg}")
         else:
@@ -379,10 +411,19 @@ def main():
     p_add.add_argument("--price2", type=float, help="区间上界（cond=range 时必填）")
     p_add.add_argument("--note", default="", help="备注")
     p_add.add_argument("--chat-id", default="", help="提醒目标群（默认通知群）")
+    p_add.add_argument("--created-by", default="", help="设置人名称")
+    p_add.add_argument("--created-by-id", default="", help="设置人 open_id")
 
     sub.add_parser("list", help="列出所有提醒")
-    p_rm = sub.add_parser("remove", help="删除提醒")
-    p_rm.add_argument("--id", required=True)
+    p_rm = sub.add_parser("remove", help="删除提醒（--id 或 --target）")
+    p_rm.add_argument("--id", help="按 id 删除")
+    p_rm.add_argument("--target", help="按标的删除（指数/股票/ETF 名称或代码）")
+    p_ed = sub.add_parser("edit", help="编辑提醒（--id 或 --target + 新条件/价格）")
+    p_ed.add_argument("--id", help="按 id 编辑")
+    p_ed.add_argument("--target", help="按标的编辑")
+    p_ed.add_argument("--cond", choices=["below", "above", "range"], help="新条件")
+    p_ed.add_argument("--price", type=float, help="新触发价")
+    p_ed.add_argument("--price2", type=float, help="新区间上界")
     p_rst = sub.add_parser("reset", help="重置已触发状态")
     p_rst.add_argument("--id", required=True)
     p_chk = sub.add_parser("check", help="检查并触发提醒")
@@ -401,19 +442,51 @@ def main():
                 print("[ERROR] 无法解析该指令，请用 --target/--cond/--price 明确指定")
                 sys.exit(1)
             target, cond, price, price2 = r
-            add_alert(target, cond, price, price2, note=args.note or args.text, chat_id=args.chat_id)
+            add_alert(target, cond, price, price2, note=args.note or args.text,
+                      chat_id=args.chat_id, created_by=args.created_by, created_by_id=args.created_by_id)
         else:
             if not args.target or not args.cond or args.price is None:
                 print("[ERROR] 需要 --target --cond --price（或 --text）")
                 sys.exit(1)
-            add_alert(args.target, args.cond, args.price, args.price2, args.note, args.chat_id)
+            add_alert(args.target, args.cond, args.price, args.price2, args.note,
+                      args.chat_id, args.created_by, args.created_by_id)
     elif args.cmd == "list":
         list_alerts()
     elif args.cmd == "remove":
         alerts = _load()
-        alerts = [a for a in alerts if a.get("id") != args.id]
+        if args.id:
+            alerts = [a for a in alerts if a.get("id") != args.id]
+            print(f"[OK] 已删除 {args.id}")
+        elif args.target:
+            t = INDEX_ALIASES.get(args.target, args.target)
+            removed = [a for a in alerts if a.get("target") == t]
+            alerts = [a for a in alerts if a.get("target") != t]
+            print(f"[OK] 已删除 {len(removed)} 条「{t}」的提醒")
+        else:
+            print("[ERROR] remove 需要 --id 或 --target")
+            sys.exit(1)
         _save(alerts)
-        print(f"[OK] 已删除 {args.id}")
+    elif args.cmd == "edit":
+        alerts = _load()
+        t = INDEX_ALIASES.get(args.target, "") if args.target else ""
+        matched = []
+        for a in alerts:
+            if (args.id and a.get("id") == args.id) or (args.target and a.get("target") == t):
+                matched.append(a)
+        if not matched:
+            print("[ERROR] 未找到匹配的提醒")
+            sys.exit(1)
+        for a in matched:
+            if args.cond:
+                a["cond"] = args.cond
+            if args.price is not None:
+                a["price"] = args.price
+            if args.price2 is not None:
+                a["price2"] = args.price2
+            a["status"] = "active"  # 编辑后重新激活
+            a["triggered_at"] = ""
+        _save(alerts)
+        print(f"[OK] 已编辑 {len(matched)} 条提醒")
     elif args.cmd == "reset":
         alerts = _load()
         for a in alerts:

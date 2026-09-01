@@ -164,16 +164,26 @@ def main():
         text = re.sub(r"@\S+\s*", "", text).strip()
         if not text:
             continue
+        sender_name = sender.get("name", "")
+        sender_id = sender.get("id") or sender.get("open_id") or ""
         if args.process:
-            _process_one(ct, sender.get("name", ""), text)
+            _process_one(ct, sender_name, sender_id, text)
         else:
-            print(json.dumps({"create_time": ct, "sender": sender.get("name", ""), "text": text},
+            print(json.dumps({"create_time": ct, "sender": sender_name,
+                              "sender_id": sender_id, "text": text},
                              ensure_ascii=False))
-    if new_wm != wm:
-        save_watermark(new_wm)
+    if new_wm:
+        # 水位前移 1 分钟，避免 --start 边界重复拉到同一条消息、反复处理/反复回复
+        try:
+            from datetime import datetime as _dt, timedelta as _td
+            new_wm = (_dt.strptime(new_wm, "%Y-%m-%d %H:%M") + _td(minutes=1)).strftime("%Y-%m-%d %H:%M")
+        except Exception:
+            pass
+        if new_wm != wm:
+            save_watermark(new_wm)
 
 
-def _process_one(ct, sender, text):
+def _process_one(ct, sender, sender_id, text):
     """解析一条@指令 → 设置提醒 → 群确认（非价格指令/解析失败时保持安静）。"""
     from price_alerts import parse_alert_text, add_alert, query_price
     r = parse_alert_text(text)
@@ -188,11 +198,15 @@ def _process_one(ct, sender, text):
         print("[WARN] " + msg)
         _notify(msg)
         return
-    cur_price, name, chg = res
-    add_alert(target, cond, price, price2, note=text, chat_id="")
+    cur_price, name, chg, code = res
+    aid = add_alert(target, cond, price, price2, note=text, chat_id="",
+                    created_by=sender, created_by_id=sender_id)
     cond_txt = {"below": "跌破", "above": "突破/涨到", "range": "区间"}[cond]
     rng = f"{price}~{price2}" if price2 else str(price)
-    msg = f"✅ 已设置提醒：{name} {cond_txt} {rng} 就提醒（当前 {cur_price}）"
+    if aid:
+        msg = f"✅ 已设置提醒：{name} {cond_txt} {rng} 就提醒（当前 {cur_price}）"
+    else:
+        msg = f"ℹ️ 相同提醒已存在：{name} {cond_txt} {rng}"
     print("[OK] " + msg)
     _notify(msg)
 
