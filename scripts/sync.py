@@ -195,7 +195,7 @@ def git_push():
         print(f"[GIT] add failed: {out}"); return False
 
     ts = datetime.now().strftime("%Y-%m-%d %H:%M")
-    ok, out = run(f'git commit -m "sync: {ts}"')
+    ok, out = run(f'git commit -m "sync: {ts}" -- sync/')
     if not ok and "nothing to commit" not in out:
         print(f"[GIT] commit skipped: {out.strip()}")
 
