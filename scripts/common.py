@@ -1,0 +1,53 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""公共工具：bash 路径、节假日、文本归一化、DB 连接（消除各脚本重复）。"""
+import os
+import re
+import sqlite3
+
+
+def find_bash():
+    """定位 Git Bash 的 bash.exe（Windows 下 subprocess 调 'bash' 会误调 WSL bash）。"""
+    for p in (r"C:\Program Files\Git\usr\bin\bash.exe",
+              r"C:\Program Files\Git\bin\bash.exe"):
+        if os.path.exists(p):
+            return p
+    return "bash"
+
+
+# A股休市日硬编码兜底（来源：沪深北交易所公告，需每年更新）
+_HARDCODED_HOLIDAYS = {
+    "2026-01-01", "2026-01-02",
+    "2026-02-16", "2026-02-17", "2026-02-18", "2026-02-19", "2026-02-20", "2026-02-23",
+    "2026-04-06", "2026-05-01", "2026-05-04", "2026-05-05", "2026-06-19",
+    "2026-09-25", "2026-10-01", "2026-10-02", "2026-10-05", "2026-10-06", "2026-10-07",
+}
+
+
+def load_holidays(skill_dir):
+    """加载节假日集合：硬编码兜底 + data/holidays.txt。"""
+    days = set(_HARDCODED_HOLIDAYS)
+    path = os.path.join(skill_dir, "data", "holidays.txt")
+    if os.path.exists(path):
+        try:
+            with open(path, encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if line and not line.startswith("#") and re.match(r"^\d{4}-\d{2}-\d{2}$", line):
+                        days.add(line)
+        except Exception:
+            pass
+    return days
+
+
+def normalize(text):
+    """去掉所有空白，用于文本精确去重/相似度。"""
+    return "".join((text or "").split())
+
+
+def connect_db(db_path):
+    """带 WAL + busy_timeout 的 SQLite 连接。"""
+    conn = sqlite3.connect(db_path, timeout=10)
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA busy_timeout=5000")
+    return conn

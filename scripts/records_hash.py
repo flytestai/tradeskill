@@ -10,9 +10,7 @@
 """
 import hashlib
 
-
-def _normalize(text):
-    return "".join((text or "").split())
+from common import normalize
 
 
 def content_hash(content="", image_path=""):
@@ -20,5 +18,5 @@ def content_hash(content="", image_path=""):
     if image_path:
         base = "img:" + image_path
     else:
-        base = _normalize(content)
+        base = normalize(content)
     return hashlib.md5(base.encode("utf-8")).hexdigest()

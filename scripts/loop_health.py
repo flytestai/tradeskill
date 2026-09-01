@@ -10,39 +10,14 @@ import subprocess
 import time
 from datetime import datetime, timezone, timedelta
 
+from common import find_bash, load_holidays
+
 SKILL_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 LOCK_FILE = os.path.join(SKILL_DIR, "data", "_feishu_loop.lock")
-HOLIDAYS_FILE = os.path.join(SKILL_DIR, "data", "holidays.txt")
 
-BASH = r"C:\Program Files\Git\usr\bin\bash.exe"
-if not os.path.exists(BASH):
-    BASH = r"C:\Program Files\Git\bin\bash.exe"
-if not os.path.exists(BASH):
-    BASH = "bash"
+BASH = find_bash()
 
 STALE_SEC = 180  # 超过 3 分钟未心跳视为停摆（30 秒轮询约漏 6 次心跳）
-
-# 2026年 A股 休市日（与 sync_feishu_auto.py 保持一致，需每年更新）
-HARDCODED_HOLIDAYS = {
-    "2026-01-01", "2026-01-02",
-    "2026-02-16", "2026-02-17", "2026-02-18", "2026-02-19", "2026-02-20", "2026-02-23",
-    "2026-04-06", "2026-05-01", "2026-05-04", "2026-05-05", "2026-06-19",
-    "2026-09-25", "2026-10-01", "2026-10-02", "2026-10-05", "2026-10-06", "2026-10-07",
-}
-
-
-def load_holidays():
-    days = set(HARDCODED_HOLIDAYS)
-    if os.path.exists(HOLIDAYS_FILE):
-        try:
-            with open(HOLIDAYS_FILE, encoding="utf-8") as f:
-                for line in f:
-                    line = line.strip()
-                    if line and not line.startswith("#") and len(line) == 10:
-                        days.add(line)
-        except Exception:
-            pass
-    return days
 
 
 def session_active():
@@ -50,7 +25,7 @@ def session_active():
     now = datetime.now(timezone(timedelta(hours=8)))
     if now.weekday() >= 5:
         return False
-    if now.strftime("%Y-%m-%d") in load_holidays():
+    if now.strftime("%Y-%m-%d") in load_holidays(SKILL_DIR):
         return False
     hm = now.hour * 100 + now.minute
     # 9:03-11:30 / 13:03-15:00 才检查，避开 9:00/13:00 循环拉起的竞争

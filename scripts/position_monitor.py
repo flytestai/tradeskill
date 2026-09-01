@@ -15,15 +15,13 @@ wu2198 仓位变化监控 — 第一时间捕捉加仓/减仓信号
 """
 import sqlite3, os, sys, time, argparse, subprocess
 
+from common import find_bash
+
 SKILL_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DB_PATH = os.path.join(SKILL_DIR, "data", "kol_opinions.db")
 STATE_FILE = os.path.join(SKILL_DIR, "data", "position_state.txt")
 
-BASH = r"C:\Program Files\Git\usr\bin\bash.exe"
-if not os.path.exists(BASH):
-    BASH = r"C:\Program Files\Git\bin\bash.exe"
-if not os.path.exists(BASH):
-    BASH = "bash"
+BASH = find_bash()
 
 def connect():
     conn = sqlite3.connect('file:' + DB_PATH + '?mode=ro', uri=True)
