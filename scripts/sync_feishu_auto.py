@@ -38,6 +38,7 @@ from datetime import datetime, timezone, timedelta
 
 from records_hash import content_hash
 from ocr_image import ocr
+from common import find_bash, load_holidays, normalize
 
 SKILL_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DB_PATH = os.path.join(SKILL_DIR, "data", "kol_opinions.db")
@@ -50,11 +51,7 @@ LOOP_LOCK_FILE = os.path.join(SKILL_DIR, "data", "_feishu_loop.lock")
 LOOP_STALE_SEC = 180  # 循环锁超过 180 秒未心跳视为残留，可被接管
 
 # Git Bash 的 bash.exe 完整路径（Windows 下 subprocess 调 "bash" 会误调 WSL bash 而失败）
-BASH = r"C:\Program Files\Git\usr\bin\bash.exe"
-if not os.path.exists(BASH):
-    BASH = r"C:\Program Files\Git\bin\bash.exe"
-if not os.path.exists(BASH):
-    BASH = "bash"
+BASH = find_bash()
 
 LOCAL_CONFIG_ENV = os.path.join(SKILL_DIR, "data", "local_config.env")
 
@@ -92,33 +89,7 @@ BOT_SENDER_TYPES = ("app", "bot")          # 机器人消息（wu2198 发言由�
 SIM_THRESHOLD = 0.97                        # 文本相似度去重阈值
 TEST_KEYWORDS = ["转发测试", "同步测试", "设备A同步测试", "test", "TEST"]
 
-# 2026年 A股 休市日（仅列工作日；来源：沪深北交易所公告，需每年更新）
-HOLIDAYS = {
-    "2026-01-01", "2026-01-02",                                                # 元旦
-    "2026-02-16", "2026-02-17", "2026-02-18", "2026-02-19", "2026-02-20", "2026-02-23",  # 春节
-    "2026-04-06",                                                               # 清明节
-    "2026-05-01", "2026-05-04", "2026-05-05",                                  # 劳动节
-    "2026-06-19",                                                               # 端午节
-    "2026-09-25",                                                               # 中秋节
-    "2026-10-01", "2026-10-02", "2026-10-05", "2026-10-06", "2026-10-07",      # 国庆节
-}
-
-HOLIDAYS_FILE = os.path.join(SKILL_DIR, "data", "holidays.txt")
-
-
-def load_holidays():
-    """加载节假日集合：硬编码 HOLIDAYS + data/holidays.txt（可配置，每年更新）"""
-    days = set(HOLIDAYS)
-    if os.path.exists(HOLIDAYS_FILE):
-        try:
-            with open(HOLIDAYS_FILE, "r", encoding="utf-8") as f:
-                for line in f:
-                    line = line.strip()
-                    if line and not line.startswith("#") and re.match(r"^\d{4}-\d{2}-\d{2}$", line):
-                        days.add(line)
-        except Exception:
-            pass
-    return days
+# 节假日从 common.load_holidays(skill_dir) 加载（硬编码兜底 + data/holidays.txt）
 
 
 def find_lark_cli():
@@ -190,7 +161,7 @@ def trading_time_guard():
     now = datetime.now(timezone(timedelta(hours=8)))
     if now.weekday() >= 5:
         return False, "非交易日（周末）"
-    if now.strftime("%Y-%m-%d") in load_holidays():
+    if now.strftime("%Y-%m-%d") in load_holidays(SKILL_DIR):
         return False, "非交易日（节假日）"
     hm = now.hour * 100 + now.minute
     # 盘中 9:00-11:30（9:00-9:30 也算盘中）/ 13:00-15:00，盘后 16:00 兜底一次
@@ -464,10 +435,6 @@ def is_test_message(text):
         if kw in text:
             return True
     return False
-
-
-def normalize(text):
-    return "".join(text.split())
 
 
 POS_SIZE_RE = re.compile(r"持仓[仅剩]?(\d+)\s*米")
