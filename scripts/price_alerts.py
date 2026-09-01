@@ -20,13 +20,16 @@ import re
 import secrets
 import subprocess
 import sys
+import time
 import urllib.request
 from datetime import datetime, timezone, timedelta
 
-from common import find_bash
+from common import find_bash, load_holidays
 
 SKILL_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 ALERTS_FILE = os.path.join(SKILL_DIR, "data", "price_alerts.json")
+LOOP_LOCK_FILE = os.path.join(SKILL_DIR, "data", "_price_alerts_loop.lock")
+LOOP_STALE_SEC = 180
 BASH = find_bash()
 
 API_URL = "https://bee-ai.integrity.com.cn/skills/v1/query2data"
@@ -42,9 +45,11 @@ INDEX_ALIASES = {
 }
 
 COND_KEYWORDS = {
-    "below": ["跌破", "下破", "跌到", "跌至", "跌破至", "以下"],
-    "above": ["突破", "上破", "站上", "涨破", "涨到", "涨至", "升破", "收复", "以上", "冲上"],
-    "range": ["区间", "之间", "震荡"],
+    "below": ["跌破", "下破", "跌到", "跌至", "跌破至", "以下", "低于", "掉到", "回落到",
+              "回踩到", "跌下", "向下到", "下探到", "跌下去", "跌破到", "回撤到"],
+    "above": ["突破", "上破", "站上", "涨破", "涨到", "涨至", "升破", "收复", "以上", "高于",
+              "冲上", "达到", "到达", "涨过", "上冲", "越过", "拉高到", "涨到", "上去"],
+    "range": ["区间", "之间", "震荡区间", "范围内", "到...之间", "到…之间"],
 }
 
 NUM_RE = re.compile(r"(\d+(?:\.\d+)?)")
@@ -105,7 +110,10 @@ def query_price(target):
 
 _FILLER = ["就", "要", "想", "提醒", "通知", "告诉", "一下", "的时候", "了", "元",
            "块", "到", "价", "帮我", "请", "给", "我", "你", "在", "是", "点",
-           "左右", "附近", "就提醒", "提醒我", "提醒一下", "帮我提醒", "设置", "加个"]
+           "左右", "附近", "就提醒", "提醒我", "提醒一下", "帮我提醒", "设置", "加个",
+           "设置提醒", "帮我设置", "帮我设置提醒", "当", "如果", "监控", "盯",
+           "盯一下", "盯着", "看着", "注意", "帮我盯", "帮我盯着", "麻烦", "麻烦帮我",
+           "帮我关注", "关注", "留意", "帮我留意", "个", "一条", "一个", "的"]
 
 
 def parse_alert_text(text):
@@ -138,8 +146,9 @@ def parse_alert_text(text):
                         pos = min(pos, p)
             target_part = text[:pos]
             target_part = NUM_RE.sub(" ", target_part)
-            for w in _FILLER:
+            for w in sorted(_FILLER, key=len, reverse=True):  # 先替换长词，避免“盯”把“盯着”拆散
                 target_part = target_part.replace(w, " ")
+            target_part = re.sub(r"[，。！？：；、,.!?;:()（）\[\]【】]", " ", target_part)
             target = "".join(target_part.split())
             work = text
     if not target:
@@ -232,22 +241,25 @@ def _triggered(cond, price, alert):
     return False
 
 
-def check_alerts(dry_run=False):
+def check_alerts(dry_run=False, quiet=False):
     alerts = _load()
     active = [a for a in alerts if a.get("status") == "active"]
     if not active:
-        print("[INFO] 无待触发提醒")
+        if not quiet:
+            print("[INFO] 无待触发提醒")
         return
     changed = False
     now = datetime.now(timezone(timedelta(hours=8))).strftime("%Y-%m-%d %H:%M:%S")
     for a in active:
         res = query_price(a["target"])
         if res is None:
-            print(f"[SKIP] 查询失败: {a['target']}")
+            if not quiet:
+                print(f"[SKIP] 查询失败: {a['target']}")
             continue
         price, name, chg = res
         if not _triggered(a["cond"], price, a):
-            print(f"[OK] {name} 现价 {price}，未触发 {a['cond']} {a['price']}")
+            if not quiet:
+                print(f"[OK] {name} 现价 {price}，未触发 {a['cond']} {a['price']}")
             continue
         # 触发
         cond_txt = {"below": "跌破", "above": "突破/涨到", "range": "进入区间"}[a["cond"]]
@@ -274,8 +286,89 @@ def check_alerts(dry_run=False):
         _save(alerts)
 
 
+def _acquire_lock():
+    """文件锁：防止多个 --loop 循环同时跑。"""
+    try:
+        fd = os.open(LOOP_LOCK_FILE, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        os.write(fd, str(time.time()).encode())
+        os.close(fd)
+        return True
+    except FileExistsError:
+        try:
+            with open(LOOP_LOCK_FILE) as f:
+                last = float(f.read().strip() or "0")
+            if time.time() - last < LOOP_STALE_SEC:
+                return False
+        except Exception:
+            pass
+        try:
+            os.remove(LOOP_LOCK_FILE)
+        except Exception:
+            return False
+        try:
+            fd = os.open(LOOP_LOCK_FILE, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            os.write(fd, str(time.time()).encode())
+            os.close(fd)
+            return True
+        except FileExistsError:
+            return False
+    except Exception:
+        return True
+
+
+def _touch_lock():
+    try:
+        with open(LOOP_LOCK_FILE, "w") as f:
+            f.write(str(time.time()))
+    except Exception:
+        pass
+
+
+def _release_lock():
+    try:
+        if os.path.exists(LOOP_LOCK_FILE):
+            os.remove(LOOP_LOCK_FILE)
+    except Exception:
+        pass
+
+
+def _trading_time():
+    now = datetime.now(timezone(timedelta(hours=8)))
+    if now.weekday() >= 5:
+        return False
+    if now.strftime("%Y-%m-%d") in load_holidays(SKILL_DIR):
+        return False
+    hm = now.hour * 100 + now.minute
+    return (900 <= hm <= 1130) or (1300 <= hm <= 1500)
+
+
+def run_loop(interval, force=False):
+    """盘中高频轮询：每 interval 秒查一次价，命中即群发提醒；非盘中自动退出。"""
+    interval = max(10, interval)
+    if not _acquire_lock():
+        print("[LOOP] 已有价格提醒循环在运行，本次跳过")
+        return
+    print("[LOOP] 价格提醒循环启动：每 %d 秒检查一次" % interval)
+    try:
+        while True:
+            _touch_lock()
+            if not force and not _trading_time():
+                print("[LOOP] 非盘中时间，循环退出")
+                return
+            try:
+                check_alerts(dry_run=False, quiet=True)
+            except Exception as e:
+                print("[LOOP] 检查异常: %s" % e)
+            time.sleep(interval)
+    finally:
+        _release_lock()
+
+
 def main():
     ap = argparse.ArgumentParser(description="价格提醒系统")
+    ap.add_argument("--loop", action="store_true", help="盘中高频轮询循环（每 --interval 秒检查一次）")
+    ap.add_argument("--interval", type=int, default=30, help="--loop 模式的检查间隔秒数（默认 30）")
+    ap.add_argument("--force", action="store_true", help="--loop 模式下忽略盘中时间守卫（测试用）")
     sub = ap.add_subparsers(dest="cmd")
 
     p_add = sub.add_parser("add", help="添加提醒")
@@ -296,6 +389,10 @@ def main():
     p_chk.add_argument("--dry-run", action="store_true")
 
     args = ap.parse_args()
+
+    if args.loop:
+        run_loop(args.interval, force=args.force)
+        return
 
     if args.cmd == "add":
         if args.text:
