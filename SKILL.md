@@ -446,10 +446,13 @@ python scripts/price_alerts.py list          # 列出
 python scripts/price_alerts.py remove --id <id>
 python scripts/price_alerts.py reset --id <id>   # 触发后重置，可再次提醒
 python scripts/price_alerts.py check --dry-run   # 预览检查
+
+# 盘中高频轮询循环（每30秒查一次，非盘中自动退出；文件锁防重复）
+python scripts/price_alerts.py --loop --interval 30
 ```
 
-- **检查**：盘中每 2 分钟由 Bee 定时任务跑 `check`，命中条件即通过飞书机器人发群提醒并标记已触发。
-- **存储**：`data/price_alerts.json`（gitignored）。
+- **检查**：盘中由看门狗定时任务（每 15 分钟）拉起 `--loop` 后台循环，循环内**每 30 秒**查一次价，命中条件即通过飞书机器人发群提醒并标记已触发。
+- **存储**：`data/price_alerts.json`（gitignored）；循环锁 `data/_price_alerts_loop.lock`。
 - **输入通道**：`scripts/fetch_mentions.py` 拉取群里「用户 @机器人」的文本，交给 AI 解析后调用 `add`（需实测飞书 @机器人 消息格式后微调）。
 
 ## 分析工作流

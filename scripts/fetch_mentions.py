@@ -188,10 +188,11 @@ def _process_one(ct, sender, text):
         print("[WARN] " + msg)
         _notify(msg)
         return
+    cur_price, name, chg = res
     add_alert(target, cond, price, price2, note=text, chat_id="")
     cond_txt = {"below": "跌破", "above": "突破/涨到", "range": "区间"}[cond]
     rng = f"{price}~{price2}" if price2 else str(price)
-    msg = f"✅ 已设置提醒：{target} {cond_txt} {rng}"
+    msg = f"✅ 已设置提醒：{name} {cond_txt} {rng} 就提醒（当前 {cur_price}）"
     print("[OK] " + msg)
     _notify(msg)
 
