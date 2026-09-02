@@ -42,23 +42,6 @@ LOOP_STALE_SEC = 180  # 锁超过 180 秒未心跳视为残留，可被接管
 TEST_KEYWORDS = ["转发测试", "同步测试", "test", "TEST"]
 
 
-def _trigger_qa_async():
-    """入队后立即拉起 trigger_qa.py（后台），让 AI 秒级响应而非等下次轮询。
-
-    trigger_qa.py 内部有触发锁防重复、队列为空则秒退，安全幂等。
-    """
-    try:
-        subprocess.Popen(
-            [sys.executable, os.path.join(SKILL_DIR, "scripts", "trigger_qa.py")],
-            cwd=SKILL_DIR,
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
-    except Exception as e:
-        print("[WARN] trigger_qa 拉起失败: %s" % e)
-
-
 def _env_value(key, default=""):
     try:
         with open(LOCAL_ENV, "r", encoding="utf-8") as f:
@@ -280,10 +263,6 @@ def run_once(dry_run=False):
             pass
     if not dry_run and new_wm:
         save_watermark(new_wm)
-
-    # 有新 @提问入队 → 立即拉起 AI 处理（异步），否则等 supervisor 的下一次轮询
-    if not dry_run and queued > 0:
-        _trigger_qa_async()
 
     print("[INFO] 本轮：拉到 %d 条消息，新入队 %d 条，水位 %s" % (len(messages), queued, new_wm or watermark))
     return 0

@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""每日收盘 / 午间汇总（后端版，观点行走一次轻量 AI 摘要）。
+"""每日收盘 / 午间汇总（零 token 后端版）。
 
 行情/成交额/主力资金直连 API，套固定模板发到「荔枝种植交流群」；
-仅「wu2198观点」一行用 AI 做一句话总结（每天最多 2 次，失败自动回退原文）。
+「wu2198观点」行取当天最后 1-2 条发言原文截断拼接（零 token）。
 替代原「wu2198收盘汇总提醒」「wu2198午休汇总提醒」两个 Bee 定时任务。
 
 用法:
@@ -18,7 +18,6 @@ import re
 import secrets
 import subprocess
 import sys
-import tempfile
 import urllib.request
 from datetime import datetime, timezone, timedelta
 
@@ -31,10 +30,6 @@ DB_PATH = os.path.join(SKILL_DIR, "data", "kol_opinions.db")
 LEVELS_FILE = os.path.join(SKILL_DIR, "data", "alert_levels.json")
 NOTIFY = os.path.join(SKILL_DIR, "scripts", "notify_group.sh")
 STATE_FILE = os.path.join(SKILL_DIR, "data", "_market_summary_state.txt")
-AUTH_FILE = os.path.join(os.path.expanduser("~"), "AppData", "Roaming", "bee_ai_test", "auth.json")
-CLAUDE_SHIM = os.path.join(os.path.expanduser("~"), "AppData", "Roaming", "bee_ai_test",
-                           "agent-runtime", "claude-cli", "bin", "claude")
-AI_MODEL = "gpt-5.4-mini-bee"
 
 INDICES = ["上证指数", "深证成指", "科创50", "创业板指"]
 DISPLAY = {"上证指数": "上证", "深证成指": "深证", "科创50": "科创50", "创业板指": "创业板"}
@@ -155,71 +150,15 @@ def raw_view_line(texts):
     return "；".join(out)
 
 
-def ai_summarize_one_sentence(texts):
-    """用 AI 把当天发言总结成一句话核心观点；失败返回 None 供调用方回退。"""
-    if not texts:
-        return None
-    # 只取最近若干条、每条截断，控制单次 token 与耗时
-    sample = [t[:80] for t in texts[-6:]]
-    prompt = ("你是财经观点摘要助手。把下面 wu2198 今天的发言总结成一句核心观点，"
-              "直接给结论，不超过 45 个字，不要解释、不要序号、不要引用符号：\n" +
-              "\n".join("- " + t for t in sample))
-    outpath = None
+def read_view_line(lunch):
+    """读取蜜蜂任务预生成的一句话观点；不存在/为空返回 None。"""
+    fn = "_view_lunch.txt" if lunch else "_view_close.txt"
     try:
-        with open(AUTH_FILE, encoding="utf-8") as f:
-            auth = json.load(f)
-        token = auth.get("token", "")
-        base_url = auth.get("baseUrl", "https://mifeng-test.integrity.com.cn")
-        if not token:
-            print("[WARN] 未找到鉴权 token，观点行回退原文")
-            return None
-        env = dict(os.environ)
-        env["ANTHROPIC_BASE_URL"] = base_url
-        env["ANTHROPIC_AUTH_TOKEN"] = token
-        env["ANTHROPIC_API_KEY"] = token
-        env["ANTHROPIC_MODEL"] = AI_MODEL
-
-        # 输出重定向到临时文件而非管道（避免孙进程持有管道导致超时卡死）
-        fd, outpath = tempfile.mkstemp(prefix="view_", suffix=".txt",
-                                       dir=os.path.join(SKILL_DIR, "data"))
-        os.close(fd)
-        logf = open(outpath, "w", encoding="utf-8")
-        p = subprocess.Popen(
-            [BASH, CLAUDE_SHIM, "-p", prompt, "--output-format", "text"],
-            cwd=SKILL_DIR, env=env, stdin=subprocess.DEVNULL,
-            stdout=logf, stderr=subprocess.STDOUT,
-        )
-        try:
-            p.wait(timeout=60)
-        except subprocess.TimeoutExpired:
-            # 杀掉整棵进程树，避免 claude 孤儿进程残留
-            try:
-                subprocess.run(["taskkill", "/F", "/T", "/PID", str(p.pid)],
-                               capture_output=True)
-            except Exception:
-                pass
-            print("[WARN] AI 总结超时，观点行回退原文")
-            return None
-        finally:
-            logf.close()
-
-        with open(outpath, encoding="utf-8", errors="ignore") as f:
-            out = f.read().strip()
-        out = re.sub(r"\s+", " ", out).strip()
-        out = re.sub(r"^[\"'“”]+", "", out)
-        out = re.sub(r"[\"'“”]+$", "", out)
-        if len(out) > 80:
-            out = out[:80] + "…"
-        return out or None
-    except Exception as e:
-        print("[WARN] AI 一句话总结失败，回退原文: %s" % e)
+        with open(os.path.join(SKILL_DIR, "data", fn), encoding="utf-8") as f:
+            t = f.read().strip()
+        return t or None
+    except Exception:
         return None
-    finally:
-        if outpath and os.path.exists(outpath):
-            try:
-                os.remove(outpath)
-            except Exception:
-                pass
 
 
 def key_levels_line():
@@ -276,8 +215,7 @@ def build_message(lunch=False):
     if not texts:
         views = "今日暂无发言"
     else:
-        ai_view = ai_summarize_one_sentence(texts)
-        views = ai_view if ai_view else raw_view_line(texts)
+        views = read_view_line(lunch) or raw_view_line(texts)
 
     title = "每日午间汇总" if lunch else "每日收盘汇总"
     focus_label = "下午关注" if lunch else "明日关注"
