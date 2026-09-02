@@ -4,8 +4,11 @@ description: >
   接收财经大V（KOL）的言论记录，持久化保存到 SQLite 数据库（按大V区分），
   结合行情数据、基本面、情绪面、量化指标等多维数据验证观点合理性，
   生成 HTML 格式分析报告并给出全市场 ETF 买入/卖出/持有建议。
+  同时支持荔枝群「用户 @机器人」的通用问答：拉取提问 → 蜜蜂 AI 分析 →
+  发送回群里并 @提问人，回答底部自动追加免责声明。
   Use when users provide KOL/influencer market commentary, want to save and analyze it,
-  or request ETF trading recommendations based on multi-dimensional cross-validation.
+  request ETF trading recommendations based on multi-dimensional cross-validation,
+  or ask the bot a market/stock/ETF question in the Litchi group via @mention.
 ---
 
 # 大V观点分析与 ETF 操作建议
@@ -91,6 +94,18 @@ SELECT * FROM kol_records WHERE kol_name='大V名称' AND content LIKE '%仅TA�
 ## 概述
 
 本技能实现「大V言论采集 → 持久化 → 多维数据验证 → HTML 报告 → ETF 建议」的完整闭环。
+
+## 运行架构（后端服务 + 蜜蜂 AI，省 token）
+
+**所有轮询/监控/行情数据走后端脚本（`scripts/supervisor.py`，零 token）**，**只有需要大模型理解和生成的地方才走蜜蜂 AI**。
+
+- 后端常驻 `supervisor.py` 托管：
+  - 3 个 30 秒循环：`sync_feishu_auto.py --loop`（wu2198 同步+VIP 推送）、`sync_litchi_auto.py --loop`（荔枝群 @机器人 轮询入队）、`price_alerts.py --loop`（价格提醒）。
+  - 定时脚本：`position_monitor.py`、`monitor_alerts.py`、`react.py cleanup`、盘后/收盘前 `sync_feishu_auto.py` 兜底同步。
+- 行情/财务数据直接用各 hithink 技能的 `scripts/cli.py` 拉取，**不需要经过蜜蜂**。
+- 蜜蜂 AI 只保留「荔枝群问答队列处理」这一件事（队列空则快速退出，几乎不耗 token）；该任务按需启用，其余 Bee 定时任务全部暂停。
+
+启动后端：`nohup python -u scripts/supervisor.py < /dev/null >> data/_supervisor.log 2>&1 &`
 
 ## 数据库
 
@@ -434,7 +449,7 @@ bash scripts/alert_once.sh "触发键" "状态" "提醒内容"
 
 ### 群里 @ 机器人（主要用法）
 
-在「荔枝种植交流群」里 @ 机器人，用自然语言下达指令（全天 7:00-23:00 每 5 分钟捕获一次）：
+在「荔枝种植交流群」里 @ 机器人，用自然语言下达指令（24 小时全天候，每 1 分钟捕获一次）：
 
 | 意图 | 示例 | 机器人反馈 |
 |------|------|-----------|
@@ -473,6 +488,71 @@ python scripts/price_alerts.py --loop --interval 30
 - **条件**：`below`=跌破（价 ≤ 触发价）、`above`=突破/涨到（价 ≥ 触发价）、`range`=进入区间（下界 ≤ 价 ≤ 上界）。
 - **存储**：`data/price_alerts.json`（gitignored）；循环锁 `data/_price_alerts_loop.lock`。
 - **输入通道**：`scripts/fetch_mentions.py` 拉取群里「用户 @机器人」的文本（含 sender 名称与 open_id，用于反馈与 @设置人），交给 AI 解析后调用 `add`。
+
+## 荔枝群通用问答（用户 @机器人 提任何问题）
+
+在「荔枝种植交流群」里，用户 @机器人 提出的**任何问题**（不限于价格提醒指令），都应由蜜蜂 AI 分析后，把回答发回群里并 **@提问人**，回答底部**自动追加免责声明**。这是本 skill 的核心群交互能力。
+
+### 触发与输入
+
+- 捕获节奏：由 `scripts/sync_litchi_auto.py --loop --interval 30` 脚本**每 30 秒按水位增量拉取**荔枝群消息（与 wu2198 五号群同步同构）；由「荔枝群30秒轮询看门狗」定时任务每 5 分钟拉起（文件锁防重复）。
+- 脚本只保留「普通用户 @机器人」的文本消息，跳过机器人自己、测试消息、已回答过的问题；给每条新 @消息加「敲键盘(Typing)」表情后，写入待处理队列 `data/group_qa_queue.json`。
+- 蜜蜂侧由「荔枝群问答队列处理」定时任务每分钟检查队列：队列为空则直接结束；有待处理项才解析并回复。
+- 队列项字段：`message_id / sender / sender_id / text / create_time`；管理脚本 `scripts/qa_queue.py`（`peek` / `done <message_id>` / `clear`）。
+- **敲键盘互动**：`sync_litchi_auto.py` 加表情，回复端（`group_reply.py --message-id` 或 `react.py remove`）处理完自动取消。
+- **兜底清理**：定时任务每 5 分钟跑 `react.py cleanup`，自动清除超过 10 分钟还没被取消的残留敲键盘表情（加表情时间戳记录在 `data/_typing_state.json`，已 gitignore）。
+
+### 分析（蜜蜂 AI）
+
+针对每个问题，用 Skill 工具并行调用相关数据技能（与「分析工作流 Step 3」一致，按需选择，不要过度查询）：
+
+| 问题类型 | 优先调用 |
+|---------|---------|
+| 个股/ETF/指数现价、涨跌幅、资金流向、技术指标 | `hithink-market-query` |
+| 财务指标、估值、ROE、营收利润 | `hithink-finance-query` |
+| 行业估值、板块排名、资金 | `hithink-industry-query` |
+| 相关资讯、政策、舆情 | `news-search` |
+| 研报评级、业绩预测 | `hithink-insresearch-query` |
+| 宏观背景 | `hithink-macro-query` |
+| 需要联网搜索补充 | `kimi-webbridge` |
+
+回答要求：**直接针对问题**、简洁、给出关键数据与明确结论；不要泛泛而谈，不要输出整篇研报。对「还能建仓吗」这类问题，给出当前价位、技术位置、资金/基本面支撑，以及相对明确的操作倾向（并提示风险）。回答中**不要**附加「数据来源：好人好股」之类的来源标注。
+
+### 回复（发送到群 + @提问人 + 免责声明）
+
+统一用 `scripts/group_reply.py` 发送（**不要**用 `notify_group.sh` 发通用问答，它不会 @人、也不会自动加免责声明）：
+
+```bash
+python <skill-dir>/scripts/group_reply.py \
+  --sender-id "<sender_id>" \
+  --sender "<sender>" \
+  --question "<问题原文>" \
+  --message-id "<message_id>" \
+  --text "<回答（Markdown，\n 换行）>"
+```
+
+- `--sender-id` 为提问人 open_id（`fetch_mentions.py` 输出的 `sender_id`），脚本会自动 `<at user_id>` @提问人；缺 open_id 时回退 `@昵称`
+- `--message-id` 为对应问题消息 ID（`fetch_mentions.py` 输出的 `message_id`），发送成功后脚本会**自动取消该消息上的「敲键盘」表情**
+- 消息首行格式固定为「**@昵称:问题原文**」（如 `@严容:厦门钨业呢？成本在 54`），紧跟回答正文，无需手动写抬头
+- 回答正文里的个股/ETF 名称会**自动加粗**：脚本内置「名称（代码）」规则（如 `厦门钨业（600549）` → `**厦门钨业（600549）**`、`创业板ETF（159915）` → `**创业板ETF（159915）**`）+ `data/stock_names.txt`（个股）与 `data/etf_names.txt`（ETF）两份名称清单（每行一个简称，可自行增删）；也可用 `--bold "<名称>"` 额外指定
+- 回答底部**自动追加**免责声明（`---` 分隔线 + ⚠️ 免责声明），无需手动加
+- `--dry-run` 只打印不发送，便于预览
+- `--text-file <文件>` 可从文件读回答（超长/多行回答更稳，避免命令行编码问题）
+
+发送失败会输出 `[ERROR]`，按需重试即可（幂等键 = 提问人+问题+回答，重复发送同内容不会刷屏）。
+
+### 去重（已回答过的问题不重复回答）
+
+- `group_reply.py` 发送成功即自动写入去重记录 `data/group_qa_answered.json`（键 = md5(提问人 open_id + 归一化问题文本)）。
+- `fetch_mentions.py` 拉取新消息时会**自动跳过已回答的问题**，不再输出给 AI，因此同一用户重复提同一个问题只回答一次。
+- 不同用户问同一个问题仍会各自回答（互不影响）。
+- 想重新回答已答过的问题时：`python scripts/qa_dedup.py clear`（清空全部）或 `python scripts/qa_dedup.py list`（查看记录）。
+
+### 兜底与边界
+
+- 问题确实无法分析（信息不足、标的查询不到等）：也回复一句说明 + 给 1-2 个可追问方向，而不是沉默。
+- 回复必须克制：不要刷屏、不要重复；同一问题只回一次。
+- 群里 @ 到其他人的消息（非 @机器人）不要回复。
 
 ## 分析工作流
 

@@ -19,6 +19,8 @@ import subprocess
 import sys
 
 from common import find_bash
+import qa_dedup
+import react
 
 SKILL_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 STATE_PATH = os.path.join(SKILL_DIR, "data", "_mentions_state.json")
@@ -125,6 +127,7 @@ def main():
     ap.add_argument("--chat-id", default="")
     ap.add_argument("--reset", action="store_true")
     ap.add_argument("--process", action="store_true", help="处理@指令：解析→设置提醒→群确认")
+    ap.add_argument("--react", action="store_true", help="给每条新@消息加「敲键盘」表情（处理完成后由回复端取消）")
     args = ap.parse_args()
 
     if args.reset:
@@ -149,6 +152,7 @@ def main():
 
     msgs = fetch_messages(chat_id, start_iso)
     new_wm = wm
+    answered = qa_dedup.load()
     for m in msgs:
         sender = (m.get("sender") or {})
         stype = sender.get("sender_type", "")
@@ -166,11 +170,19 @@ def main():
             continue
         sender_name = sender.get("name", "")
         sender_id = sender.get("id") or sender.get("open_id") or ""
+        message_id = m.get("message_id", "")
+        # 通用问答去重：已回答过的问题不再输出，避免重复回答
+        if qa_dedup.is_answered(sender_id, text, answered):
+            continue
+        # 加「敲键盘」互动表情（表示机器人正在处理），回答完成后由回复端取消
+        if args.react and message_id:
+            react.add_typing(message_id)
         if args.process:
             _process_one(ct, sender_name, sender_id, text)
         else:
             print(json.dumps({"create_time": ct, "sender": sender_name,
-                              "sender_id": sender_id, "text": text},
+                              "sender_id": sender_id, "message_id": message_id,
+                              "text": text},
                              ensure_ascii=False))
     if new_wm:
         # 水位前移 1 分钟，避免 --start 边界重复拉到同一条消息、反复处理/反复回复
