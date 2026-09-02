@@ -3,10 +3,9 @@
 """把 wu2198 当天发言 dump 成纯文本，供蜜蜂任务做 AI 一句话总结。"""
 import argparse
 import os
-import re
 from datetime import datetime, timezone, timedelta
 
-from common import connect_db
+from common import connect_db, clean_wu2198_text
 
 SKILL_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DB_PATH = os.path.join(SKILL_DIR, "data", "kol_opinions.db")
@@ -34,10 +33,7 @@ def main():
 
     texts = []
     for t in rows:
-        t = re.sub(r"【仅TA的真爱粉可见】", "", t or "")
-        t = re.sub(r"^\s*@?wu2198\s*", "", t, flags=re.I)
-        t = re.sub(r"(明白666|收到请回复|收到回复|明白)\s*$", "", t, flags=re.I)
-        t = re.sub(r"\s+", " ", t).strip()
+        t = clean_wu2198_text(t)
         if t:
             texts.append(t)
 

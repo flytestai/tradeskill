@@ -14,14 +14,13 @@
 import argparse
 import json
 import os
-import re
 import secrets
 import subprocess
 import sys
 import urllib.request
 from datetime import datetime, timezone, timedelta
 
-from common import find_bash, load_holidays, connect_db
+from common import find_bash, load_holidays, connect_db, clean_wu2198_text
 
 SKILL_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 BASH = find_bash()
@@ -131,10 +130,7 @@ def wu2198_texts(day, before_time=None):
 
     texts = []
     for t in rows:
-        t = re.sub(r"【仅TA的真爱粉可见】", "", t or "")
-        t = re.sub(r"^\s*@?wu2198\s*", "", t, flags=re.I)
-        t = re.sub(r"(明白666|收到请回复|收到回复|明白)\s*$", "", t, flags=re.I)
-        t = re.sub(r"\s+", " ", t).strip()
+        t = clean_wu2198_text(t)
         if t:
             texts.append(t)
     return texts

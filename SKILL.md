@@ -101,11 +101,14 @@ SELECT * FROM kol_records WHERE kol_name='大V名称' AND content LIKE '%仅TA�
 
 - 后端常驻 `supervisor.py` 托管：
   - 3 个 30 秒循环：`sync_feishu_auto.py --loop`（wu2198 同步+VIP 推送）、`sync_litchi_auto.py --loop`（荔枝群 @机器人 轮询入队）、`price_alerts.py --loop`（价格提醒）。
-  - 定时脚本：`position_monitor.py`、`monitor_alerts.py`、`react.py cleanup`、盘后/收盘前 `sync_feishu_auto.py` 兜底同步。
-- 行情/财务数据直接用各 hithink 技能的 `scripts/cli.py` 拉取，**不需要经过蜜蜂**。
-- 蜜蜂 AI 只保留「荔枝群问答队列处理」这一件事（队列空则快速退出，几乎不耗 token）；该任务按需启用，其余 Bee 定时任务全部暂停。
+  - 定时脚本：`position_monitor.py`、`monitor_alerts.py`、`react.py cleanup`。
+  - 每日定点任务：午间/收盘汇总（`market_summary.py`，11:35 / 15:05）、14:55 / 16:00 `sync_feishu_auto.py` 兜底同步。
+- 行情/成交额/主力资金由 `market_summary.py` 直连数据 API 拉取，**不需要经过蜜蜂**。
+- 蜜蜂 AI 只保留两类：
+  1. 「荔枝群问答队列处理」：分三档时段轮询（盘中 10 分钟、盘前盘后/周末 30 分钟、凌晨 0-8 点不跑），队列空则秒退。
+  2. 午间/收盘「观点一句话」：交易日 11:28 / 15:00 各一次，生成一句话观点写入文件，供后端汇总读取。
 
-启动后端：`nohup python -u scripts/supervisor.py < /dev/null >> data/_supervisor.log 2>&1 &`
+启动/自愈：`supervisor_watchdog.py`（Windows 计划任务每 5 分钟自愈 + 登录自启）。手动启动后端：`python scripts/supervisor_watchdog.py`。
 
 ## 数据库
 
@@ -113,13 +116,11 @@ SELECT * FROM kol_records WHERE kol_name='大V名称' AND content LIKE '%仅TA�
 
 - 数据库位置：`<skill-dir>/data/kol_opinions.db`
 - 初始化脚本：`scripts/db_init.py`
-- 保存脚本：`scripts/db_save.py`
 - 查询脚本：`scripts/db_query.py`
-- 批量导入：`scripts/db_batch.py`
-- 准确率追踪：`scripts/predict_track.py`
-- 关键点位监控：`scripts/level_monitor.py`
-- 多KOL对比：`scripts/kol_compare.py`
-- 跟单回测：`scripts/backtest.py`
+- 批量导入：`scripts/db_import.py`
+- 同步：`scripts/sync.py`
+
+> 已归档到 `archive/scripts/`（不再维护）：`trigger_qa.py`、`loop_health.py`、`fetch_mentions.py`、`db_cleanup.py`、`cleanup_lark.sh`。
 
 > **数据库已启用 WAL 模式 + busy_timeout**，避免多进程读写锁死。
 
@@ -378,8 +379,8 @@ python <skill-dir>/scripts/sync.py compact
 
 `scripts/sync_feishu_auto.py` 通过 lark-cli（OAuth 用户授权）从飞书群增量拉取 wu2198 发言：
 
-- **盘中高频轮询**：交易日盘中每 **30 秒** 拉取一次（由 Bee 定时任务每 30 分钟尝试拉起 `--loop` 循环，文件锁防重复，循环内部每 30 秒同步一次）
-- **循环心跳监控**：`scripts/loop_health.py` 每 5 分钟检查一次循环心跳（复用 `data/_feishu_loop.lock` 时间戳），停摆超 3 分钟自动重启并私信告警
+- **盘中高频轮询**：交易日盘中每 **30 秒** 拉取一次（由后端 `supervisor.py` 常驻托管 `--loop` 循环，文件锁防重复）
+- **循环自愈**：`supervisor.py` 检测循环退出后自动重启（带退避）；`supervisor_watchdog.py` 每 5 分钟检查 supervisor 心跳、停摆自动重启
 - **盘中时间**：交易日 9:00-11:30 / 13:00-15:00（**9:00-9:30 也算盘中**），另在盘后 16:00 兜底一次，其余时间自动跳过
 - **节假日**：法定休市日自动跳过；节假日列表在 `data/holidays.txt`（每行一个日期，每年年初更新），脚本内另有硬编码兜底
 - **增量拉取**：只记住「最后一次拉取的群消息时间」（水位，存于 `sync/feishu_sync_state.json`，随 GitHub 同步，多设备共享一致水位），仅拉取该时间之后的新消息
@@ -484,10 +485,10 @@ python scripts/price_alerts.py --loop --interval 30
 ```
 
 ### 运行机制
-- **检查**：盘中由看门狗定时任务（每 15 分钟）拉起 `--loop` 后台循环，循环内每 30 秒查一次价，命中即群发提醒并标记已触发。
+- **检查**：由后端 `supervisor.py` 盘中拉起 `--loop` 循环，循环内每 30 秒查一次价，命中即群发提醒并标记已触发。
 - **条件**：`below`=跌破（价 ≤ 触发价）、`above`=突破/涨到（价 ≥ 触发价）、`range`=进入区间（下界 ≤ 价 ≤ 上界）。
 - **存储**：`data/price_alerts.json`（gitignored）；循环锁 `data/_price_alerts_loop.lock`。
-- **输入通道**：`scripts/fetch_mentions.py` 拉取群里「用户 @机器人」的文本（含 sender 名称与 open_id，用于反馈与 @设置人），交给 AI 解析后调用 `add`。
+- **输入通道**：`scripts/sync_litchi_auto.py` 拉取群里「用户 @机器人」的文本（含 sender 名称与 open_id，用于反馈与 @设置人），入队后由蜜蜂问答任务解析并调用 `add`。
 
 ## 荔枝群通用问答（用户 @机器人 提任何问题）
 
@@ -495,9 +496,9 @@ python scripts/price_alerts.py --loop --interval 30
 
 ### 触发与输入
 
-- 捕获节奏：由 `scripts/sync_litchi_auto.py --loop --interval 30` 脚本**每 30 秒按水位增量拉取**荔枝群消息（与 wu2198 五号群同步同构）；由「荔枝群30秒轮询看门狗」定时任务每 5 分钟拉起（文件锁防重复）。
+- 捕获节奏：由 `scripts/sync_litchi_auto.py --loop --interval 30` 脚本**每 30 秒按水位增量拉取**荔枝群消息（与 wu2198 五号群同步同构）；由后端 `supervisor.py` 常驻托管（文件锁防重复）。
 - 脚本只保留「普通用户 @机器人」的文本消息，跳过机器人自己、测试消息、已回答过的问题；给每条新 @消息加「敲键盘(Typing)」表情后，写入待处理队列 `data/group_qa_queue.json`。
-- 蜜蜂侧由「荔枝群问答队列处理」定时任务每分钟检查队列：队列为空则直接结束；有待处理项才解析并回复。
+- 蜜蜂侧由「荔枝群问答队列处理」任务分三档时段轮询队列（盘中 10 分钟、盘前盘后/周末 30 分钟、凌晨 0-8 点不跑）：队列为空则直接结束；有待处理项才解析并回复。
 - 队列项字段：`message_id / sender / sender_id / text / create_time`；管理脚本 `scripts/qa_queue.py`（`peek` / `done <message_id>` / `clear`）。
 - **敲键盘互动**：`sync_litchi_auto.py` 加表情，回复端（`group_reply.py --message-id` 或 `react.py remove`）处理完自动取消。
 - **兜底清理**：定时任务每 5 分钟跑 `react.py cleanup`，自动清除超过 10 分钟还没被取消的残留敲键盘表情（加表情时间戳记录在 `data/_typing_state.json`，已 gitignore）。
@@ -531,8 +532,8 @@ python <skill-dir>/scripts/group_reply.py \
   --text "<回答（Markdown，\n 换行）>"
 ```
 
-- `--sender-id` 为提问人 open_id（`fetch_mentions.py` 输出的 `sender_id`），脚本会自动 `<at user_id>` @提问人；缺 open_id 时回退 `@昵称`
-- `--message-id` 为对应问题消息 ID（`fetch_mentions.py` 输出的 `message_id`），发送成功后脚本会**自动取消该消息上的「敲键盘」表情**
+- `--sender-id` 为提问人 open_id（`sync_litchi_auto.py` 输出的 `sender_id`），脚本会自动 `<at user_id>` @提问人；缺 open_id 时回退 `@昵称`
+- `--message-id` 为对应问题消息 ID（`sync_litchi_auto.py` 输出的 `message_id`），发送成功后脚本会**自动取消该消息上的「敲键盘」表情**
 - 消息首行格式固定为「**@昵称:问题原文**」（如 `@严容:厦门钨业呢？成本在 54`），紧跟回答正文，无需手动写抬头
 - 回答正文里的个股/ETF 名称会**自动加粗**：脚本内置「名称（代码）」规则（如 `厦门钨业（600549）` → `**厦门钨业（600549）**`、`创业板ETF（159915）` → `**创业板ETF（159915）**`）+ `data/stock_names.txt`（个股）与 `data/etf_names.txt`（ETF）两份名称清单（每行一个简称，可自行增删）；也可用 `--bold "<名称>"` 额外指定
 - 回答底部**自动追加**免责声明（`---` 分隔线 + ⚠️ 免责声明），无需手动加
@@ -544,7 +545,7 @@ python <skill-dir>/scripts/group_reply.py \
 ### 去重（已回答过的问题不重复回答）
 
 - `group_reply.py` 发送成功即自动写入去重记录 `data/group_qa_answered.json`（键 = md5(提问人 open_id + 归一化问题文本)）。
-- `fetch_mentions.py` 拉取新消息时会**自动跳过已回答的问题**，不再输出给 AI，因此同一用户重复提同一个问题只回答一次。
+- `sync_litchi_auto.py` 拉取新消息时会**自动跳过已回答的问题**，不再输出给 AI，因此同一用户重复提同一个问题只回答一次。
 - 不同用户问同一个问题仍会各自回答（互不影响）。
 - 想重新回答已答过的问题时：`python scripts/qa_dedup.py clear`（清空全部）或 `python scripts/qa_dedup.py list`（查看记录）。
 

@@ -45,6 +45,14 @@ def normalize(text):
     return "".join((text or "").split())
 
 
+def clean_wu2198_text(text):
+    """清洗 wu2198 发言：去 VIP 标记、去 @wu2198 前缀、去语气词，压缩空白。"""
+    t = re.sub(r"【仅TA的真爱粉可见】", "", text or "")
+    t = re.sub(r"^\s*@?wu2198\s*", "", t, flags=re.I)
+    t = re.sub(r"(明白666|收到请回复|收到回复|明白)\s*$", "", t, flags=re.I)
+    return re.sub(r"\s+", " ", t).strip()
+
+
 def connect_db(db_path):
     """带 WAL + busy_timeout 的 SQLite 连接。"""
     conn = sqlite3.connect(db_path, timeout=10)

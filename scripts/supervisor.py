@@ -151,7 +151,7 @@ def run_once_script_async(args):
 
 def rotate_logs_if_needed():
     """日志超过阈值就截断，避免长期运行后无限增长。"""
-    for name in ("_supervisor.log", "_loop.log", "_litchi_loop.log", "_price_alerts_loop.log"):
+    for name in ("_supervisor.log", "_loop.log", "_litchi_loop.log", "_price_alerts_loop.log", "sync_errors.log"):
         p = os.path.join(SKILL_DIR, "data", name)
         try:
             if os.path.exists(p) and os.path.getsize(p) > 2 * 1024 * 1024:
