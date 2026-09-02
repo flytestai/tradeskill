@@ -250,8 +250,9 @@ def list_alerts():
         st = "✅已触发" if a["status"] == "triggered" else "🟢待触发"
         cond_txt = {"below": "跌破", "above": "突破/涨到", "range": "区间"}[a["cond"]]
         rng = f"{a['price']} ~ {a['price2']}" if a["price2"] else str(a["price"])
+        code = f"({a['code']})" if a.get("code") else ""
         who = f" ｜@{a['created_by']}" if a.get("created_by") else ""
-        print(f"  [{a['id']}] {st} {a['target']} {cond_txt} {rng}{who}"
+        print(f"  [{a['id']}] {st} {a['target']}{code} {cond_txt} {rng}{who}"
               + (f" ｜{a['note']}" if a.get("note") else ""))
 
 

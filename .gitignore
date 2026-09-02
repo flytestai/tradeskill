@@ -30,3 +30,7 @@ scripts/kol_analysis_*.html
 # Python 缓存
 __pycache__/
 *.pyc
+
+# 荔枝群问答运行时状态（含用户 open_id 等个人数据，不纳入 git）
+data/group_qa_queue.json
+data/group_qa_answered.json

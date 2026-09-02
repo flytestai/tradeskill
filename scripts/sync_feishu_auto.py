@@ -28,6 +28,7 @@ import argparse
 import json
 import os
 import re
+import shlex
 import shutil
 import sqlite3
 import subprocess
@@ -122,8 +123,17 @@ def check_auth(lark_cli):
     except Exception:
         pass
     try:
-        r = subprocess.run([lark_cli, "auth", "status"], capture_output=True, text=True, timeout=15)
-        data = json.loads(r.stdout)
+        # 走 Git Bash POSIX 版 lark-cli（Windows 的 .CMD 版本会卡死）
+        tmp = os.path.join(SKILL_DIR, "data", "_lark_auth_out.json")
+        try:
+            if os.path.exists(tmp):
+                os.remove(tmp)
+        except Exception:
+            pass
+        cmd = " ".join(shlex.quote(p) for p in ["timeout", "-k", "3", "15", "lark-cli", "auth", "status"]) + " > data/_lark_auth_out.json 2>&1"
+        subprocess.run([BASH, "-c", cmd], capture_output=True, timeout=20, cwd=SKILL_DIR)
+        with open(tmp, "r", encoding="utf-8") as f:
+            data = json.loads(f.read())
     except Exception as e:
         print("[AUTH] 无法检查授权状态: %s" % e)
         return  # 失败不缓存，下一轮重试
@@ -353,33 +363,41 @@ def push_vip_to_group(text, ct):
         return False
 
 
-def fetch_messages_since(lark_cli, chat_id, start_iso=None):
-    """通过 lark-cli 拉取 start_iso 之后的消息（升序，自动分页）"""
-    cmd = [
-        lark_cli, "im", "+chat-messages-list",
-        "--chat-id", chat_id,
-        "--as", "user",
-        "--order", "asc",
-        "--page-all",
-        "--page-limit", "1000",
-        "--no-reactions",
-        "--json",
-    ]
-    if start_iso:
-        cmd += ["--start", start_iso]
+def fetch_messages_since(lark_cli=None, chat_id=None, start_iso=None):
+    """通过 Git Bash POSIX 版 lark-cli 拉取 start_iso 之后的消息（升序，自动分页）。
+
+    Windows 的 lark-cli.CMD 版本「输出后进程不退出」会卡死，所以走 bash -c 调 POSIX 版。
+    """
+    tmp = os.path.join(SKILL_DIR, "data", "_lark_chat_out.json")
+    os.makedirs(os.path.dirname(tmp), exist_ok=True)
     try:
-        r = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+        if os.path.exists(tmp):
+            os.remove(tmp)
+    except Exception:
+        pass
+    parts = ["timeout", "-k", "3", "60", "lark-cli", "im", "+chat-messages-list",
+             "--chat-id", chat_id, "--as", "user", "--order", "asc",
+             "--page-all", "--page-limit", "1000", "--no-reactions", "--json"]
+    if start_iso:
+        parts += ["--start", start_iso]
+    cmd = " ".join(shlex.quote(p) for p in parts) + " > data/_lark_chat_out.json 2>&1"
+    try:
+        subprocess.run([BASH, "-c", cmd], capture_output=True, timeout=75, cwd=SKILL_DIR)
     except subprocess.TimeoutExpired:
         print("[ERROR] lark-cli 拉取超时")
         log_error("lark-cli 拉取超时")
         return None
-    if r.returncode != 0:
-        err = r.stderr[:300] or r.stdout[:300]
-        print("[ERROR] lark-cli 拉取失败: %s" % err)
-        log_error("lark-cli 拉取失败: %s" % err)
+    except Exception as e:
+        print("[ERROR] lark-cli 拉取异常: %s" % str(e)[:200])
+        log_error("lark-cli 拉取异常: %s" % str(e)[:200])
         return None
     try:
-        data = json.loads(r.stdout)
+        with open(tmp, "r", encoding="utf-8") as f:
+            out = f.read()
+    except Exception:
+        return None
+    try:
+        data = json.loads(out)
     except json.JSONDecodeError:
         print("[ERROR] 解析 lark-cli 输出失败")
         log_error("解析 lark-cli 输出失败")
@@ -623,7 +641,9 @@ def run_once(args, skip_guard=False):
 
     # 4. 入库（按 content_hash 精确去重；增量依据水位；测试消息跳过）
     conn = sqlite3.connect(args.db, timeout=30)
+    conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA busy_timeout=30000")
+    conn.execute("PRAGMA synchronous=NORMAL")
     ensure_schema(conn)
     cur = conn.cursor()
 
@@ -691,7 +711,7 @@ def run_once(args, skip_guard=False):
                  record_date, position_size, position_action, position_note, image_path, is_vip, content_hash)
                 VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
                 (args.kol_name, "飞书群", "[图片消息]", extracted, "", ct, None, "", "飞书群图片",
-                 local_path or img_key, 0, content_hash("[图片消息]", image_key=img_key)))
+                 local_path or img_key, 0, content_hash("[图片消息]", image_path=img_key)))
         seen_img.add(img_key)
         img_inserted += 1
 
@@ -721,12 +741,18 @@ def run_once(args, skip_guard=False):
     push_ok = None
     if not args.dry_run and not args.no_push and (inserted > 0 or img_inserted > 0 or watermark_advanced):
         print("[6/6] 有新增，导出并推送到 GitHub ...")
-        r = subprocess.run([sys.executable, SYNC_SCRIPT, "push"], capture_output=True, text=True, timeout=180)
-        push_ok = r.returncode == 0
+        push_ok = None
+        try:
+            r = subprocess.run([sys.executable, SYNC_SCRIPT, "push"], capture_output=True, text=True, timeout=180)
+            push_ok = r.returncode == 0
+            tail = (r.stdout + r.stderr).strip().splitlines()
+        except Exception as e:
+            print("      [WARN] sync.py push 异常: %s" % str(e)[:200])
+            log_error("GitHub 推送异常: %s" % str(e)[:200])
+            tail = []
         if not push_ok:
             log_error("GitHub 推送失败")
             alert_feishu("推送失败", "🚨 **【同步告警】**\nGitHub 推送失败（已自动重试），请检查网络")
-        tail = (r.stdout + r.stderr).strip().splitlines()
         for line in tail[-6:]:
             print("      " + line)
     else:
