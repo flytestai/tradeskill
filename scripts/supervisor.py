@@ -33,6 +33,13 @@ import threading
 import time
 from datetime import datetime, timezone, timedelta
 
+# 统一输出编码，避免不同解释器下日志 GBK/UTF-8 混杂
+try:
+    sys.stdout.reconfigure(encoding="utf-8")
+    sys.stderr.reconfigure(encoding="utf-8")
+except Exception:
+    pass
+
 SKILL_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 os.chdir(SKILL_DIR)
 
@@ -142,6 +149,19 @@ def run_once_script_async(args):
     threading.Thread(target=run_once_script, args=(args,), daemon=True).start()
 
 
+def rotate_logs_if_needed():
+    """日志超过阈值就截断，避免长期运行后无限增长。"""
+    for name in ("_supervisor.log", "_loop.log", "_litchi_loop.log", "_price_alerts_loop.log"):
+        p = os.path.join(SKILL_DIR, "data", name)
+        try:
+            if os.path.exists(p) and os.path.getsize(p) > 2 * 1024 * 1024:
+                with open(p, "w", encoding="utf-8") as f:
+                    f.write("")
+                print("[supervisor] 日志已截断: %s" % name)
+        except Exception:
+            pass
+
+
 def main():
     print("[supervisor] 启动 %s" % now8().strftime("%Y-%m-%d %H:%M:%S"))
 
@@ -160,72 +180,80 @@ def main():
     daily_done = {name: "" for name, *_ in DAILY_AT}
 
     while True:
-        now = time.time()
-        write_heartbeat()
+        try:
+            now = time.time()
+            write_heartbeat()
+            rotate_logs_if_needed()
 
-        # 1) 维护常驻循环：该跑但没跑 → 按退避策略拉起
-        for name, cfg in procs.items():
-            p = cfg["proc"]
-            alive = p is not None and p.poll() is None
+            # 1) 维护常驻循环：该跑但没跑 → 按退避策略拉起
+            for name, cfg in procs.items():
+                p = cfg["proc"]
+                alive = p is not None and p.poll() is None
 
-            if not loop_should_run(cfg["trading_only"]):
-                # 非运行时段，若还活着则终止（脚本一般会自行退出，这里兜底）
-                if alive:
-                    try:
-                        p.terminate()
-                    except Exception:
-                        pass
-                    cfg["proc"] = None
-                cfg["restart_at"] = 0.0
-                cfg["backoff"] = BACKOFF_BASE
-                continue
-
-            if alive:
-                # 运行正常，重置退避
-                cfg["backoff"] = BACKOFF_BASE
-                cfg["restart_at"] = 0.0
-                continue
-
-            # 已死且该跑
-            if cfg["restart_at"] == 0.0:
-                # 第一次发现它死了：排定重启时间，并翻倍退避
-                cfg["restart_at"] = now + cfg["backoff"]
-                cfg["backoff"] = min(cfg["backoff"] * 2, BACKOFF_MAX)
-                print("[supervisor] 循环 %s 已退出，%.0f 秒后重启（退避 %.0fs）"
-                      % (name, cfg["restart_at"] - now, cfg["backoff"]))
-            elif now >= cfg["restart_at"]:
-                print("[supervisor] 拉起循环 %s" % name)
-                cfg["proc"] = spawn(cfg["args"], cfg["logfile"])
-                cfg["restart_at"] = 0.0
-
-        # 2) 定时任务到点就跑
-        for name, interval, args, trading_only in PERIODIC:
-            if trading_only and not is_trading_time():
-                continue
-            if now - last_run[name] >= interval:
-                last_run[name] = now
-                run_once_script_async(args)
-
-        # 3) 每日定点任务（交易日才跑，错过容错窗口本日不再补发）
-        if is_trading_day():
-            d = now8()
-            key = d.strftime("%Y-%m-%d")
-            now_mins = d.hour * 60 + d.minute
-            for name, times, args in DAILY_AT:
-                if daily_done[name] == key:
+                if not loop_should_run(cfg["trading_only"]):
+                    # 非运行时段，若还活着则终止（脚本一般会自行退出，这里兜底）
+                    if alive:
+                        try:
+                            p.terminate()
+                        except Exception:
+                            pass
+                        cfg["proc"] = None
+                    cfg["restart_at"] = 0.0
+                    cfg["backoff"] = BACKOFF_BASE
                     continue
-                for hh, mm in times:
-                    sched = hh * 60 + mm
-                    if now_mins >= sched + DAILY_GRACE_MIN:
-                        # 已错过窗口，标记完成，避免重启后错时补发
-                        daily_done[name] = key
-                        break
-                    if now_mins >= sched:
-                        daily_done[name] = key
-                        run_once_script_async(args)
-                        break
 
-        time.sleep(10)
+                if alive:
+                    # 运行正常，重置退避
+                    cfg["backoff"] = BACKOFF_BASE
+                    cfg["restart_at"] = 0.0
+                    continue
+
+                # 已死且该跑
+                if cfg["restart_at"] == 0.0:
+                    # 第一次发现它死了：排定重启时间，并翻倍退避
+                    cfg["restart_at"] = now + cfg["backoff"]
+                    cfg["backoff"] = min(cfg["backoff"] * 2, BACKOFF_MAX)
+                    print("[supervisor] 循环 %s 已退出，%.0f 秒后重启（退避 %.0fs）"
+                          % (name, cfg["restart_at"] - now, cfg["backoff"]))
+                elif now >= cfg["restart_at"]:
+                    print("[supervisor] 拉起循环 %s" % name)
+                    cfg["proc"] = spawn(cfg["args"], cfg["logfile"])
+                    cfg["restart_at"] = 0.0
+
+            # 2) 定时任务到点就跑
+            for name, interval, args, trading_only in PERIODIC:
+                if trading_only and not is_trading_time():
+                    continue
+                if now - last_run[name] >= interval:
+                    last_run[name] = now
+                    run_once_script_async(args)
+
+            # 3) 每日定点任务（交易日才跑，错过容错窗口本日不再补发）
+            if is_trading_day():
+                d = now8()
+                key = d.strftime("%Y-%m-%d")
+                now_mins = d.hour * 60 + d.minute
+                for name, times, args in DAILY_AT:
+                    if daily_done[name] == key:
+                        continue
+                    for hh, mm in times:
+                        sched = hh * 60 + mm
+                        if now_mins >= sched + DAILY_GRACE_MIN:
+                            # 已错过窗口，标记完成，避免重启后错时补发
+                            daily_done[name] = key
+                            break
+                        if now_mins >= sched:
+                            daily_done[name] = key
+                            run_once_script_async(args)
+                            break
+
+            time.sleep(10)
+        except Exception as e:
+            print("[supervisor] 主循环异常: %s" % e)
+            try:
+                time.sleep(10)
+            except Exception:
+                pass
 
 
 if __name__ == "__main__":
