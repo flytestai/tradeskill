@@ -79,7 +79,6 @@ PERIODIC = [
     ("position_monitor", 300, ["scripts/position_monitor.py", "--notify"], True),
     ("monitor_alerts", 600, ["scripts/monitor_alerts.py"], True),
     ("react_cleanup", 300, ["scripts/react.py", "cleanup"], False),
-    ("qa_trigger", 60, ["scripts/trigger_qa.py"], False),
 ]
 
 # 每日定点任务：(名称, [(时, 分), ...], 脚本参数)
