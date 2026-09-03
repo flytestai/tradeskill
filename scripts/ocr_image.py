@@ -10,6 +10,7 @@
 """
 import shutil
 import subprocess
+import common  # noqa: F401  触发静默运行补丁
 
 
 def _find_tesseract():

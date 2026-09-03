@@ -43,12 +43,14 @@ except Exception:
 SKILL_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 os.chdir(SKILL_DIR)
 
-from common import load_holidays  # noqa: E402
+from common import load_holidays, pythonw_path  # noqa: E402
 
-PY = sys.executable
+PY = pythonw_path()  # 用 pythonw.exe 拉起子进程，整条链路不弹黑窗
 HEARTBEAT_FILE = os.path.join(SKILL_DIR, "data", "_supervisor.lock")
 BACKOFF_BASE = 10.0
 BACKOFF_MAX = 300.0
+# Windows 下不弹黑窗（子进程静默运行）
+NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
 
 def now8():
@@ -77,7 +79,8 @@ def is_trading_time():
 # (名称, 脚本参数, 是否仅在交易时间运行, 日志文件)
 LOOPS = [
     ("litchi_poll", ["-u", "scripts/sync_litchi_auto.py", "--loop", "--interval", "30"], False, "data/_litchi_loop.log"),
-    ("feishu_sync", ["-u", "scripts/sync_feishu_auto.py", "--loop", "--interval", "30"], True, "data/_loop.log"),
+    ("review_poll", ["-u", "scripts/sync_litchi_auto.py", "--loop", "--interval", "30", "--group", "review"], False, "data/_review_loop.log"),
+    ("feishu_sync", ["-u", "scripts/sync_feishu_auto.py", "--loop", "--interval", "30", "--download-images"], True, "data/_loop.log"),
     ("price_alerts", ["-u", "scripts/price_alerts.py", "--loop", "--interval", "30"], True, "data/_price_alerts_loop.log"),
 ]
 
@@ -123,6 +126,7 @@ def spawn(args, logfile=None):
             stdin=subprocess.DEVNULL,
             stdout=logf or subprocess.DEVNULL,
             stderr=subprocess.STDOUT,
+            creationflags=NO_WINDOW,
         )
     except Exception as e:
         print("[supervisor] spawn 失败 %s: %s" % (args, e))
@@ -136,7 +140,8 @@ def loop_should_run(trading_only):
 def run_once_script(args):
     try:
         r = subprocess.run([PY] + args, cwd=SKILL_DIR,
-                           capture_output=True, text=True, timeout=240)
+                           capture_output=True, text=True, timeout=240,
+                           creationflags=NO_WINDOW)
         tail = (r.stdout or "").strip().splitlines()
         if tail:
             print("[supervisor] %s -> %s" % (args[0], tail[-1][:120]))

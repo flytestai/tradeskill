@@ -17,6 +17,7 @@ import sqlite3, json, os, sys, subprocess, argparse, time
 from datetime import datetime
 
 from records_hash import content_hash
+import common  # noqa: F401  触发静默运行补丁
 
 SKILL_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SYNC_DIR = os.path.join(SKILL_DIR, "sync")
