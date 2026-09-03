@@ -73,7 +73,7 @@ def is_trading_time():
     if not is_trading_day():
         return False
     hm = now8().hour * 100 + now8().minute
-    return (900 <= hm <= 1130) or (1300 <= hm <= 1500)
+    return (900 <= hm <= 1130) or (1300 <= hm <= 1600)
 
 
 # (名称, 脚本参数, 是否仅在交易时间运行, 日志文件)

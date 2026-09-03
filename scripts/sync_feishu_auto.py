@@ -173,8 +173,8 @@ def trading_time_guard():
     if now.strftime("%Y-%m-%d") in load_holidays(SKILL_DIR):
         return False, "非交易日（节假日）"
     hm = now.hour * 100 + now.minute
-    # 盘中 9:00-11:30（9:00-9:30 也算盘中）/ 13:00-15:00，盘后 16:00 兜底一次
-    if (900 <= hm <= 1130) or (1300 <= hm <= 1500) or (1555 <= hm <= 1605):
+    # 盘中 9:00-11:30（9:00-9:30 也算盘中）/ 13:00-16:00（收盘后延长至 16:00）
+    if (900 <= hm <= 1130) or (1300 <= hm <= 1600):
         return True, ""
     return False, "非盘中/盘后时间（当前 %02d:%02d）" % (now.hour, now.minute)
 

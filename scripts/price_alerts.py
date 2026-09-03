@@ -372,7 +372,7 @@ def _trading_time():
     if now.strftime("%Y-%m-%d") in load_holidays(SKILL_DIR):
         return False
     hm = now.hour * 100 + now.minute
-    return (900 <= hm <= 1130) or (1300 <= hm <= 1500)
+    return (900 <= hm <= 1130) or (1300 <= hm <= 1600)
 
 
 def run_loop(interval, force=False):
