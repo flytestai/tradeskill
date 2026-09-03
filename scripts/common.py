@@ -72,6 +72,8 @@ _HARDCODED_HOLIDAYS = {
 def load_holidays(skill_dir):
     """加载节假日集合：硬编码兜底 + data/holidays.txt。"""
     days = set(_HARDCODED_HOLIDAYS)
+    if not skill_dir:
+        return days
     path = os.path.join(skill_dir, "data", "holidays.txt")
     if os.path.exists(path):
         try:
@@ -83,6 +85,33 @@ def load_holidays(skill_dir):
         except Exception:
             pass
     return days
+
+
+def beijing_now():
+    """北京时间（UTC+8）当前时刻。"""
+    from datetime import datetime, timezone, timedelta
+    return datetime.now(timezone(timedelta(hours=8)))
+
+
+def is_trading_day(skill_dir=None):
+    """交易日：周一~周五且非节假日（北京时间）。"""
+    d = beijing_now()
+    if d.weekday() >= 5:
+        return False
+    return d.strftime("%Y-%m-%d") not in load_holidays(skill_dir)
+
+
+def is_trading_time(skill_dir=None):
+    """交易时段：9:00-11:30 / 13:00-16:00（北京时间）。
+
+    统一放在 common，supervisor / price_alerts / sync_feishu 都从这里取，
+    避免各脚本各自维护时间窗口导致不一致、循环被反复拉起又退出。
+    """
+    if not is_trading_day(skill_dir):
+        return False
+    d = beijing_now()
+    hm = d.hour * 100 + d.minute
+    return (900 <= hm <= 1130) or (1300 <= hm <= 1600)
 
 
 def normalize(text):

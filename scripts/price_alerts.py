@@ -24,7 +24,7 @@ import time
 import urllib.request
 from datetime import datetime, timezone, timedelta
 
-from common import find_bash, load_holidays
+from common import find_bash, is_trading_time as _c_is_trading_time, load_holidays
 
 SKILL_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 ALERTS_FILE = os.path.join(SKILL_DIR, "data", "price_alerts.json")
@@ -366,13 +366,7 @@ def _release_lock():
 
 
 def _trading_time():
-    now = datetime.now(timezone(timedelta(hours=8)))
-    if now.weekday() >= 5:
-        return False
-    if now.strftime("%Y-%m-%d") in load_holidays(SKILL_DIR):
-        return False
-    hm = now.hour * 100 + now.minute
-    return (900 <= hm <= 1130) or (1300 <= hm <= 1600)
+    return _c_is_trading_time(SKILL_DIR)
 
 
 def run_loop(interval, force=False):

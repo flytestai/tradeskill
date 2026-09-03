@@ -38,7 +38,7 @@ from datetime import datetime, timezone, timedelta
 
 from records_hash import content_hash
 from ocr_image import ocr
-from common import find_bash, load_holidays, pythonw_path
+from common import find_bash, is_trading_day as _c_is_trading_day, is_trading_time as _c_is_trading_time, load_holidays, pythonw_path
 
 SKILL_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DB_PATH = os.path.join(SKILL_DIR, "data", "kol_opinions.db")
@@ -131,7 +131,7 @@ def check_auth(lark_cli):
                 os.remove(tmp)
         except Exception:
             pass
-        cmd = " ".join(shlex.quote(p) for p in ["timeout", "-k", "3", "15", "lark-cli", "auth", "status"]) + " > data/_lark_auth_out.json 2>&1"
+        cmd = " ".join(shlex.quote(p) for p in ["timeout", "-k", "3", "15", "lark-cli", "auth", "status"]) + " > data/_lark_auth_out.json 2>/dev/null"
         subprocess.run([BASH, "-c", cmd], capture_output=True, timeout=20, cwd=SKILL_DIR)
         with open(tmp, "r", encoding="utf-8") as f:
             data = json.loads(f.read())
@@ -167,14 +167,13 @@ def check_auth(lark_cli):
 
 def trading_time_guard():
     """交易日(含节假日) + 盘中/盘后时间守卫（北京时间）。返回 (是否可运行, 原因)"""
-    now = datetime.now(timezone(timedelta(hours=8)))
+    from common import beijing_now
+    now = beijing_now()
     if now.weekday() >= 5:
         return False, "非交易日（周末）"
-    if now.strftime("%Y-%m-%d") in load_holidays(SKILL_DIR):
+    if not _c_is_trading_day(SKILL_DIR):
         return False, "非交易日（节假日）"
-    hm = now.hour * 100 + now.minute
-    # 盘中 9:00-11:30（9:00-9:30 也算盘中）/ 13:00-16:00（收盘后延长至 16:00）
-    if (900 <= hm <= 1130) or (1300 <= hm <= 1600):
+    if _c_is_trading_time(SKILL_DIR):
         return True, ""
     return False, "非盘中/盘后时间（当前 %02d:%02d）" % (now.hour, now.minute)
 
@@ -540,7 +539,7 @@ def fetch_messages_since(lark_cli=None, chat_id=None, start_iso=None):
              "--page-all", "--page-limit", "1000", "--no-reactions", "--json"]
     if start_iso:
         parts += ["--start", start_iso]
-    cmd = " ".join(shlex.quote(p) for p in parts) + " > data/_lark_chat_out.json 2>&1"
+    cmd = " ".join(shlex.quote(p) for p in parts) + " > data/_lark_chat_out.json 2>/dev/null"
     try:
         subprocess.run([BASH, "-c", cmd], capture_output=True, timeout=75, cwd=SKILL_DIR)
     except subprocess.TimeoutExpired:

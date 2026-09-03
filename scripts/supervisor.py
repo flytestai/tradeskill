@@ -43,7 +43,7 @@ except Exception:
 SKILL_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 os.chdir(SKILL_DIR)
 
-from common import load_holidays, pythonw_path  # noqa: E402
+from common import is_trading_day as _c_is_trading_day, is_trading_time as _c_is_trading_time, load_holidays, pythonw_path  # noqa: E402
 
 PY = pythonw_path()  # 用 pythonw.exe 拉起子进程，整条链路不弹黑窗
 HEARTBEAT_FILE = os.path.join(SKILL_DIR, "data", "_supervisor.lock")
@@ -58,22 +58,11 @@ def now8():
 
 
 def is_trading_day():
-    d = now8()
-    if d.weekday() >= 5:
-        return False
-    return d.strftime("%Y-%m-%d") not in load_holidays(SKILL_DIR)
+    return _c_is_trading_day(SKILL_DIR)
 
 
 def is_trading_time():
-    """交易日盘中，排除午休（11:30-13:00）。
-
-    与 sync_feishu_auto / price_alerts 内部的交易时段守卫保持一致，
-    避免午休期间脚本自行退出、supervisor 又反复拉起造成退避空转。
-    """
-    if not is_trading_day():
-        return False
-    hm = now8().hour * 100 + now8().minute
-    return (900 <= hm <= 1130) or (1300 <= hm <= 1600)
+    return _c_is_trading_time(SKILL_DIR)
 
 
 # (名称, 脚本参数, 是否仅在交易时间运行, 日志文件)
@@ -93,9 +82,9 @@ PERIODIC = [
 
 # 每日定点任务：(名称, [(时, 分), ...], 脚本参数)
 DAILY_AT = [
-    ("summary_lunch", [(11, 35)], ["scripts/market_summary.py", "--lunch"]),
+    # ("summary_lunch", [(11, 35)], ["scripts/market_summary.py", "--lunch"]),  # 暂停：每日午间汇总
     ("sync_preclose", [(14, 55)], ["scripts/sync_feishu_auto.py"]),
-    ("summary_close", [(15, 5)], ["scripts/market_summary.py"]),
+    # ("summary_close", [(15, 5)], ["scripts/market_summary.py"]),  # 暂停：每日收盘汇总
     ("sync_afterclose", [(16, 0)], ["scripts/sync_feishu_auto.py"]),
 ]
 
