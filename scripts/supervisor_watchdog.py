@@ -15,6 +15,8 @@ import subprocess
 import sys
 import time
 
+from common import pythonw_path
+
 SKILL_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 HEARTBEAT_FILE = os.path.join(SKILL_DIR, "data", "_supervisor.lock")
 SUPERVISOR_SCRIPT = os.path.join(SKILL_DIR, "scripts", "supervisor.py")
@@ -22,7 +24,8 @@ SUPERVISOR_LOG = os.path.join(SKILL_DIR, "data", "_supervisor.log")
 
 # Windows 下从计划任务里启动时，脱离父进程/作业对象，避免随守护进程退出被一起杀掉
 DETACHED = (getattr(subprocess, "DETACHED_PROCESS", 0)
-            | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0))
+            | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+            | getattr(subprocess, "CREATE_NO_WINDOW", 0))
 
 
 def heartbeat_age():
@@ -42,7 +45,7 @@ def restart():
         logf = subprocess.DEVNULL
     try:
         subprocess.Popen(
-            [sys.executable, "-u", SUPERVISOR_SCRIPT],
+            [pythonw_path(), "-u", SUPERVISOR_SCRIPT],
             cwd=SKILL_DIR,
             stdin=subprocess.DEVNULL,
             stdout=logf,

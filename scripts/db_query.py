@@ -23,6 +23,7 @@ import argparse
 import json
 import time
 from datetime import datetime, timedelta
+import common  # noqa: F401  触发静默运行补丁
 
 
 def get_default_db_path():
@@ -190,7 +191,7 @@ def auto_sync_from_github():
         # 2. 调用 db_import.py（读 records.jsonl，幂等导入，跨设备统一格式）
         db_import = os.path.join(skill_dir, 'scripts', 'db_import.py')
         if os.path.exists(db_import):
-            r = subprocess.run([sys.executable, db_import],
+            r = subprocess.run([common.pythonw_path(), db_import],
                               capture_output=True, timeout=20,
                               encoding='utf-8', errors='ignore')
             out = (r.stdout or '').strip()

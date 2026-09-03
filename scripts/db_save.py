@@ -19,6 +19,7 @@ import json
 from datetime import datetime
 
 from records_hash import content_hash
+import common  # noqa: F401  触发静默运行补丁
 
 
 def get_default_db_path():

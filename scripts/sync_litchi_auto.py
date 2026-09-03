@@ -34,12 +34,21 @@ SKILL_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 BASH = find_bash()
 
 LOCAL_ENV = os.path.join(SKILL_DIR, "data", "local_config.env")
-WATERMARK_FILE = os.path.join(SKILL_DIR, "data", "_litchi_watermark.json")
-LEGACY_WATERMARK_FILE = os.path.join(SKILL_DIR, "data", "_mentions_state.json")
-LOOP_LOCK_FILE = os.path.join(SKILL_DIR, "data", "_litchi_loop.lock")
 LOOP_STALE_SEC = 180  # 锁超过 180 秒未心跳视为残留，可被接管
 
 TEST_KEYWORDS = ["转发测试", "同步测试", "test", "TEST"]
+
+# 群配置：group -> (chat_id 的 env key, 水位文件名, 锁文件名, 旧水位文件名)
+GROUPS = {
+    "litchi": ("VIP_PUSH_CHAT_ID", "_litchi_watermark.json", "_litchi_loop.lock", "_mentions_state.json"),
+    "review": ("REVIEW_CHAT_ID", "_review_watermark.json", "_review_loop.lock", ""),
+}
+
+# 运行时由 apply_group() 按 --group 填充
+DEFAULT_CHAT_ID = ""
+WATERMARK_FILE = ""
+LEGACY_WATERMARK_FILE = ""
+LOOP_LOCK_FILE = ""
 
 
 def _env_value(key, default=""):
@@ -57,7 +66,13 @@ def _env_value(key, default=""):
     return default
 
 
-DEFAULT_CHAT_ID = _env_value("VIP_PUSH_CHAT_ID", "")
+def apply_group(group):
+    global DEFAULT_CHAT_ID, WATERMARK_FILE, LEGACY_WATERMARK_FILE, LOOP_LOCK_FILE
+    chat_key, wm, lock, legacy = GROUPS.get(group, GROUPS["litchi"])
+    DEFAULT_CHAT_ID = _env_value(chat_key, "")
+    WATERMARK_FILE = os.path.join(SKILL_DIR, "data", wm)
+    LEGACY_WATERMARK_FILE = os.path.join(SKILL_DIR, "data", legacy) if legacy else ""
+    LOOP_LOCK_FILE = os.path.join(SKILL_DIR, "data", lock)
 
 
 def find_lark_cli():
@@ -243,6 +258,7 @@ def run_once(dry_run=False):
             "sender_id": sender_id,
             "text": text,
             "create_time": ct,
+            "chat_id": chat_id,
             "status": "pending",
         }
         if not dry_run:
@@ -293,7 +309,10 @@ def main():
     ap.add_argument("--interval", type=int, default=30, help="--loop 模式轮询间隔秒数（默认30）")
     ap.add_argument("--reset-watermark", action="store_true", help="重置增量水位")
     ap.add_argument("--dry-run", action="store_true", help="只预览不写入")
+    ap.add_argument("--group", choices=list(GROUPS.keys()), default="litchi",
+                    help="群标识（litchi=荔枝群，review=每日复盘群）")
     args = ap.parse_args()
+    apply_group(args.group)
 
     if args.reset_watermark:
         for p in (WATERMARK_FILE, LEGACY_WATERMARK_FILE):

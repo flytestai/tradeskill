@@ -38,7 +38,7 @@ from datetime import datetime, timezone, timedelta
 
 from records_hash import content_hash
 from ocr_image import ocr
-from common import find_bash, load_holidays
+from common import find_bash, load_holidays, pythonw_path
 
 SKILL_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DB_PATH = os.path.join(SKILL_DIR, "data", "kol_opinions.db")
@@ -74,6 +74,7 @@ def _env_value(key, default=""):
 
 DEFAULT_CHAT_ID = _env_value("WU2198_CHAT_ID")
 VIP_PUSH_CHAT_ID = _env_value("VIP_PUSH_CHAT_ID")
+REVIEW_CHAT_ID = _env_value("REVIEW_CHAT_ID")
 
 
 def _load_vip_markers():
@@ -290,6 +291,50 @@ def alert_feishu(key, msg):
         pass
 
 
+FAIL_COUNT_FILE = os.path.join(SKILL_DIR, "data", "_feishu_pull_fail_count.txt")
+REVIEW_FORWARD_WATERMARK = os.path.join(SKILL_DIR, "data", "_review_forward_watermark.txt")
+
+
+def _record_pull_fail():
+    """拉取失败计数 +1，返回当前连续失败次数。"""
+    n = 0
+    try:
+        with open(FAIL_COUNT_FILE, encoding="utf-8") as f:
+            n = int(f.read().strip() or "0")
+    except Exception:
+        pass
+    n += 1
+    try:
+        with open(FAIL_COUNT_FILE, "w", encoding="utf-8") as f:
+            f.write(str(n))
+    except Exception:
+        pass
+    return n
+
+
+def _reset_pull_fail():
+    try:
+        with open(FAIL_COUNT_FILE, "w", encoding="utf-8") as f:
+            f.write("0")
+    except Exception:
+        pass
+
+
+def _commit_with_retry(conn, retries=5):
+    """提交事务，遇 database is locked 指数退避重试。"""
+    delay = 1.0
+    for i in range(retries):
+        try:
+            conn.commit()
+            return
+        except sqlite3.OperationalError as e:
+            if "locked" in str(e).lower() and i < retries - 1:
+                time.sleep(delay)
+                delay *= 2
+                continue
+            raise
+
+
 WEEKDAYS_CN = ["星期一", "星期二", "星期三", "星期四", "星期五", "星期六", "星期日"]
 
 
@@ -361,6 +406,121 @@ def push_vip_to_group(text, ct):
     except Exception as e:
         log_error("VIP 推送异常: %s" % e)
         return False
+
+
+def _send_review_image(image_path, ct):
+    """转发本地图片到每日复盘群，返回是否成功。"""
+    try:
+        full = image_path if os.path.isabs(image_path) else os.path.join(SKILL_DIR, image_path)
+        if not os.path.exists(full):
+            log_error("复盘群图片转发跳过（本地文件不存在）: %s" % image_path)
+            return False
+        rel = image_path.replace("\\", "/")
+        idem_key = "review_img_" + content_hash(image_path + "|" + (ct or ""))
+        cmd = ('timeout -k 3 30 lark-cli im +messages-send '
+               '--chat-id %s --idempotency-key %s --as bot --image "%s"'
+               % (REVIEW_CHAT_ID, idem_key, rel))
+        ok = False
+        last_err = ""
+        for attempt in range(3):
+            r = subprocess.run([BASH, "-c", cmd], capture_output=True, timeout=50, cwd=SKILL_DIR)
+            out = (r.stdout or b"") + (r.stderr or b"")
+            if b'"ok": true' in out or b'"ok":true' in out:
+                ok = True
+                break
+            last_err = out.decode("utf-8", "ignore")[:200]
+            if attempt < 2:
+                time.sleep(2)
+        if not ok:
+            log_error("复盘群图片转发失败: %s | err=%s" % (ct, last_err))
+        return ok
+    except Exception as e:
+        log_error("复盘群图片转发异常: %s" % e)
+        return False
+
+
+def push_to_review_group(text, ct, is_vip=False, image_path=""):
+    """把 wu2198 发言转发到每日复盘群，返回是否成功。
+
+    - 图片消息：转发本地图片文件
+    - VIP 消息：🔒 VIP 格式
+    - 普通消息：🕐 时间 + 正文
+    """
+    try:
+        if image_path:
+            return _send_review_image(image_path, ct)
+        body = strip_vip_markers(text)
+        if is_vip:
+            msg = ("🔒 VIP・仅TA的真爱粉可见\n\n🕐%s\n\n%s" % (fmt_vip_time(ct), body))
+        else:
+            msg = ("🕐%s\n\n%s" % (fmt_vip_time(ct), body))
+        tmp = os.path.join(SKILL_DIR, "data", "_review_push_tmp.txt")
+        with open(tmp, "w", encoding="utf-8") as f:
+            f.write(msg)
+        idem_key = "review_" + content_hash(text + "|" + (ct or ""))
+        cmd = ('timeout -k 3 30 lark-cli im +messages-send '
+               '--chat-id %s '
+               '--idempotency-key %s '
+               '--as bot --markdown "$(cat data/_review_push_tmp.txt)"' % (REVIEW_CHAT_ID, idem_key))
+        ok = False
+        last_err = ""
+        for attempt in range(3):
+            r = subprocess.run([BASH, "-c", cmd], capture_output=True, timeout=50, cwd=SKILL_DIR)
+            out = (r.stdout or b"") + (r.stderr or b"")
+            if b'"ok": true' in out or b'"ok":true' in out:
+                ok = True
+                break
+            last_err = out.decode("utf-8", "ignore")[:200]
+            if attempt < 2:
+                time.sleep(2)
+        try:
+            os.remove(tmp)
+        except Exception:
+            pass
+        if not ok:
+            log_error("复盘群转发失败: %s | err=%s" % (ct, last_err))
+        return ok
+    except Exception as e:
+        log_error("复盘群转发异常: %s" % e)
+        return False
+
+
+def forward_all_to_review_group(conn):
+    """把 wu2198 当天(及之后)的发言转发到每日复盘群（VIP+公开+图片，跳过测试消息）。
+
+    用 data/_review_forward_watermark.txt 记录已转发的最后一条 record_date；
+    首次运行默认从今天 00:00 起（只补今天，不补历史）。
+    """
+    if not REVIEW_CHAT_ID:
+        return
+    today00 = datetime.now(timezone(timedelta(hours=8))).strftime("%Y-%m-%d 00:00")
+    wm = today00
+    try:
+        with open(REVIEW_FORWARD_WATERMARK, encoding="utf-8") as f:
+            v = f.read().strip()
+            if v:
+                wm = v
+    except Exception:
+        pass
+    cur = conn.cursor()
+    rows = cur.execute(
+        "SELECT content, record_date, is_vip, image_path FROM kol_records WHERE kol_name='wu2198' AND record_date > ? ORDER BY record_date ASC",
+        (wm,)).fetchall()
+    last_ct = wm
+    for content, ct, is_vip, image_path in rows:
+        if content and is_test_message(content):
+            last_ct = ct
+            continue
+        if push_to_review_group(content or "", ct, is_vip=bool(is_vip), image_path=image_path or ""):
+            last_ct = ct
+        else:
+            # 图片本地不存在时也算「已处理」，前移水位避免每轮重试同一张；下一条继续
+            last_ct = ct
+    try:
+        with open(REVIEW_FORWARD_WATERMARK, "w", encoding="utf-8") as f:
+            f.write(last_ct)
+    except Exception:
+        pass
 
 
 def fetch_messages_since(lark_cli=None, chat_id=None, start_iso=None):
@@ -500,7 +660,7 @@ def ensure_schema(conn):
     cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='kol_records'")
     if cur.fetchone() is None:
         print("[INIT] 数据库表不存在，初始化中 ...")
-        subprocess.run([sys.executable, os.path.join(SKILL_DIR, "scripts", "db_init.py")],
+        subprocess.run([pythonw_path(), os.path.join(SKILL_DIR, "scripts", "db_init.py")],
                        capture_output=True, timeout=60)
 
 
@@ -603,8 +763,11 @@ def run_once(args, skip_guard=False):
     messages = fetch_messages_since(lark_cli, args.chat_id, start_iso)
     if messages is None:
         print("[FAIL] 拉取失败，本轮结束")
-        alert_feishu("拉取失败", "🚨 **【同步告警】**\n飞书群消息拉取失败，请检查 lark-cli 授权或网络")
+        n = _record_pull_fail()
+        if n == 3:
+            alert_feishu("拉取失败", "🚨 **【同步告警】**\n飞书群消息已连续 3 次拉取失败，请检查 lark-cli 授权或网络")
         return 1
+    _reset_pull_fail()
     print("[1/5] 拉到 %d 条新消息" % len(messages))
 
     # 2. 过滤机器人消息（水位只按机器人消息前移，避免群里闲聊/系统消息触发高频 GitHub 推送）
@@ -724,7 +887,9 @@ def run_once(args, skip_guard=False):
                 cur.execute("UPDATE kol_records SET vip_pushed=1 WHERE id=?", (pid,))
 
     if not args.dry_run:
-        conn.commit()
+        _commit_with_retry(conn)
+        # 4d. 转发全部消息（VIP+公开）到每日复盘群，仅今天起
+        forward_all_to_review_group(conn)
         # 5. 保存新水位（记录本次拉取到的最新群消息时间）
         if new_watermark:
             save_watermark(new_watermark)
@@ -743,7 +908,7 @@ def run_once(args, skip_guard=False):
         print("[6/6] 有新增，导出并推送到 GitHub ...")
         push_ok = None
         try:
-            r = subprocess.run([sys.executable, SYNC_SCRIPT, "push"], capture_output=True, text=True, timeout=180)
+            r = subprocess.run([pythonw_path(), SYNC_SCRIPT, "push"], capture_output=True, text=True, timeout=180)
             push_ok = r.returncode == 0
             tail = (r.stdout + r.stderr).strip().splitlines()
         except Exception as e:

@@ -4,6 +4,51 @@
 import os
 import re
 import sqlite3
+import subprocess
+import sys
+
+# Windows 下子进程静默运行，不弹黑窗
+NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+
+
+def pythonw_path():
+    """返回 pythonw.exe（无控制台窗口版）路径；不存在则回退当前解释器。
+
+    venv 的 python.exe 是启动器，会再拉起真实解释器（带控制台），
+    用 pythonw.exe 则整条链路都无控制台窗口。
+    """
+    exe = sys.executable
+    if exe.lower().endswith("python.exe"):
+        cand = exe[: -len("python.exe")] + "pythonw.exe"
+        if os.path.exists(cand):
+            return cand
+    return exe
+
+
+def silence_subprocess():
+    """让本进程后续所有 subprocess 调用默认不弹黑窗（Windows）。
+
+    后端脚本调用 lark-cli / bash / python 时，cmd 黑窗会反复闪烁打扰用户；
+    这里给 subprocess.run / Popen 打补丁，默认加上 CREATE_NO_WINDOW。
+    """
+    if not NO_WINDOW:
+        return
+    _run = subprocess.run
+    _popen = subprocess.Popen
+
+    def _run_w(*a, **kw):
+        kw.setdefault("creationflags", NO_WINDOW)
+        return _run(*a, **kw)
+
+    def _popen_w(*a, **kw):
+        kw.setdefault("creationflags", NO_WINDOW)
+        return _popen(*a, **kw)
+
+    subprocess.run = _run_w
+    subprocess.Popen = _popen_w
+
+
+silence_subprocess()
 
 
 def find_bash():
