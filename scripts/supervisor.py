@@ -43,7 +43,7 @@ except Exception:
 SKILL_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 os.chdir(SKILL_DIR)
 
-from common import is_trading_day as _c_is_trading_day, is_trading_time as _c_is_trading_time, load_holidays, pythonw_path  # noqa: E402
+from common import is_trading_day as _c_is_trading_day, is_trading_time as _c_is_trading_time, is_group_sync_time as _c_is_group_sync_time, load_holidays, pythonw_path  # noqa: E402
 
 PY = pythonw_path()  # 用 pythonw.exe 拉起子进程，整条链路不弹黑窗
 HEARTBEAT_FILE = os.path.join(SKILL_DIR, "data", "_supervisor.lock")
@@ -65,12 +65,15 @@ def is_trading_time():
     return _c_is_trading_time(SKILL_DIR)
 
 
-# (名称, 脚本参数, 是否仅在交易时间运行, 日志文件)
+def is_group_sync_time():
+    return _c_is_group_sync_time(SKILL_DIR)
+
+
+# (名称, 脚本参数, 运行时间门控: always=常驻 / group_sync=交易日9:00-16:00含午间 / trading=仅交易时段, 日志文件)
 LOOPS = [
-    ("litchi_poll", ["-u", "scripts/sync_litchi_auto.py", "--loop", "--interval", "30"], False, "data/_litchi_loop.log"),
-    ("review_poll", ["-u", "scripts/sync_litchi_auto.py", "--loop", "--interval", "30", "--group", "review"], False, "data/_review_loop.log"),
-    ("feishu_sync", ["-u", "scripts/sync_feishu_auto.py", "--loop", "--interval", "30", "--download-images"], True, "data/_loop.log"),
-    ("price_alerts", ["-u", "scripts/price_alerts.py", "--loop", "--interval", "30"], True, "data/_price_alerts_loop.log"),
+    ("qa_listener", ["-u", "scripts/sync_qa_auto.py"], "always", "data/_qa_loop.log"),
+    ("feishu_sync", ["-u", "scripts/sync_feishu_auto.py", "--loop", "--interval", "30", "--download-images"], "group_sync", "data/_loop.log"),
+    ("price_alerts", ["-u", "scripts/price_alerts.py", "--loop", "--interval", "30"], "trading", "data/_price_alerts_loop.log"),
 ]
 
 # (名称, 间隔秒, 脚本参数, 是否仅在交易时间运行)
@@ -122,8 +125,12 @@ def spawn(args, logfile=None):
         return None
 
 
-def loop_should_run(trading_only):
-    return (not trading_only) or is_trading_time()
+def loop_should_run(gate):
+    if gate == "always":
+        return True
+    if gate == "group_sync":
+        return is_group_sync_time()
+    return is_trading_time()
 
 
 def run_once_script(args):
@@ -161,12 +168,12 @@ def main():
 
     # 常驻循环进程表：restart_at=下次允许重启时间戳；backoff=当前退避秒数
     procs = {}
-    for name, args, trading_only, logfile in LOOPS:
+    for name, args, gate, logfile in LOOPS:
         procs[name] = {
-            "args": args, "trading_only": trading_only, "logfile": logfile,
+            "args": args, "gate": gate, "logfile": logfile,
             "proc": None, "restart_at": 0.0, "backoff": BACKOFF_BASE,
         }
-        if loop_should_run(trading_only):
+        if loop_should_run(gate):
             procs[name]["proc"] = spawn(args, logfile)
 
     # 定时任务上次运行时间表 / 每日定点任务已执行日期
@@ -184,7 +191,7 @@ def main():
                 p = cfg["proc"]
                 alive = p is not None and p.poll() is None
 
-                if not loop_should_run(cfg["trading_only"]):
+                if not loop_should_run(cfg["gate"]):
                     # 非运行时段，若还活着则终止（脚本一般会自行退出，这里兜底）
                     if alive:
                         try:
