@@ -38,7 +38,7 @@ from datetime import datetime, timezone, timedelta
 
 from records_hash import content_hash
 from ocr_image import ocr
-from common import find_bash, is_trading_day as _c_is_trading_day, is_trading_time as _c_is_trading_time, load_holidays, pythonw_path
+from common import find_bash, is_trading_day as _c_is_trading_day, is_trading_time as _c_is_trading_time, is_group_sync_time as _c_is_group_sync_time, load_holidays, pythonw_path
 
 SKILL_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DB_PATH = os.path.join(SKILL_DIR, "data", "kol_opinions.db")
@@ -166,16 +166,19 @@ def check_auth(lark_cli):
 
 
 def trading_time_guard():
-    """交易日(含节假日) + 盘中/盘后时间守卫（北京时间）。返回 (是否可运行, 原因)"""
+    """交易日(含节假日) + 群消息同步时段守卫（北京时间）。返回 (是否可运行, 原因)
+
+    群消息同步覆盖 9:00-16:00（含午间 11:30-13:00），比交易时段更宽。
+    """
     from common import beijing_now
     now = beijing_now()
     if now.weekday() >= 5:
         return False, "非交易日（周末）"
     if not _c_is_trading_day(SKILL_DIR):
         return False, "非交易日（节假日）"
-    if _c_is_trading_time(SKILL_DIR):
+    if _c_is_group_sync_time(SKILL_DIR):
         return True, ""
-    return False, "非盘中/盘后时间（当前 %02d:%02d）" % (now.hour, now.minute)
+    return False, "非群消息同步时段（当前 %02d:%02d）" % (now.hour, now.minute)
 
 
 def to_iso(ts):
@@ -842,21 +845,24 @@ def run_once(args, skip_guard=False):
                 VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
                 (args.kol_name, "飞书群", text, "", "", ct, pos_size, pos_action,
                  pos_note or "飞书群自动同步", vip, h))
-            if vip:
-                if push_vip_to_group(text, ct):
-                    cur.execute("UPDATE kol_records SET vip_pushed=1 WHERE id=?", (cur.lastrowid,))
+            # 不在写事务内调用 lark-cli 推送：先落库提交，统一交给 4c 补推
         inserted += 1
+
+    # 文本入库先提交、释放写锁；后续图片下载 / VIP 推送均含 lark-cli 子进程，不能持有写事务
+    if not args.dry_run:
+        _commit_with_retry(conn)
 
     # 4b. 图片消息入库（按 image_key 精确去重）
     img_inserted = 0
     img_dup = 0
     if not args.dry_run:
-        cur.execute("SELECT image_path FROM kol_records WHERE kol_name=? AND image_path != ''", (args.kol_name,))
+        cur.execute("SELECT content_hash FROM kol_records WHERE kol_name=? AND content_hash != ''", (args.kol_name,))
         seen_img = {r[0] for r in cur.fetchall() if r[0]}
     else:
         seen_img = set()
     for ct, mid, img_key in reversed(bot_images):
-        if img_key in seen_img:
+        img_hash = content_hash("[图片消息]", image_path=img_key)
+        if img_hash in seen_img:
             img_dup += 1
             continue
         local_path = ""
@@ -868,13 +874,20 @@ def run_once(args, skip_guard=False):
                 ocr_text = ocr(os.path.join(SKILL_DIR, local_path))
         if not args.dry_run:
             extracted = ("OCR: " + ocr_text[:2000]) if ocr_text else ""
-            cur.execute("""INSERT INTO kol_records
-                (kol_name, platform, content, extracted_viewpoints, related_assets,
-                 record_date, position_size, position_action, position_note, image_path, is_vip, content_hash)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
-                (args.kol_name, "飞书群", "[图片消息]", extracted, "", ct, None, "", "飞书群图片",
-                 local_path or img_key, 0, content_hash("[图片消息]", image_path=img_key)))
-        seen_img.add(img_key)
+            try:
+                cur.execute("""INSERT INTO kol_records
+                    (kol_name, platform, content, extracted_viewpoints, related_assets,
+                     record_date, position_size, position_action, position_note, image_path, is_vip, content_hash)
+                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
+                    (args.kol_name, "飞书群", "[图片消息]", extracted, "", ct, None, "", "飞书群图片",
+                     local_path or img_key, 0, img_hash))
+                _commit_with_retry(conn)
+            except sqlite3.IntegrityError:
+                # 图片已存在（此前可能已部分入库），按重复跳过，避免整轮同步中断
+                img_dup += 1
+                seen_img.add(img_hash)
+                continue
+        seen_img.add(img_hash)
         img_inserted += 1
 
     # 4c. 补推未推送成功的 VIP 消息（数据已入库，推送失败的下次自动补）
@@ -884,6 +897,7 @@ def run_once(args, skip_guard=False):
         for pid, pcontent, pct in pending_vip:
             if push_vip_to_group(pcontent, pct):
                 cur.execute("UPDATE kol_records SET vip_pushed=1 WHERE id=?", (pid,))
+                _commit_with_retry(conn)
 
     if not args.dry_run:
         _commit_with_retry(conn)

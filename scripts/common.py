@@ -114,6 +114,19 @@ def is_trading_time(skill_dir=None):
     return (900 <= hm <= 1130) or (1300 <= hm <= 1600)
 
 
+def is_group_sync_time(skill_dir=None):
+    """群消息同步时段：交易日 9:00-16:00（含午间 11:30-13:00，北京时间）。
+
+    wu2198 五号群在午间也会持续发言，群消息/仓位同步不依赖实时行情，
+    因此比交易时段多覆盖午间窗口，用于 sync_feishu 等群消息同步循环。
+    """
+    if not is_trading_day(skill_dir):
+        return False
+    d = beijing_now()
+    hm = d.hour * 100 + d.minute
+    return 900 <= hm <= 1600
+
+
 def normalize(text):
     """去掉所有空白，用于文本精确去重/相似度。"""
     return "".join((text or "").split())

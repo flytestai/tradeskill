@@ -151,6 +151,16 @@ def build_message(sender_id, sender, question, answer, add_disclaimer=True):
     return "\n".join(lines)
 
 
+def build_p2p_message(answer, add_disclaimer=True):
+    """私信回复：只发回答正文 + 免责声明，不需要 @提问人。"""
+    lines = [(answer or "").strip()]
+    if add_disclaimer:
+        lines.append("")
+        lines.append("---")
+        lines.append(DISCLAIMER)
+    return "\n".join(lines)
+
+
 def send_to_group(markdown, chat_id, idem_key):
     """通过 lark-cli（机器人身份）发到群，返回是否成功。"""
     tmp = os.path.join(SKILL_DIR, "data", "_group_reply_tmp.txt")
@@ -190,7 +200,8 @@ def main():
     ap.add_argument("--text", default="", help="回答内容（Markdown，\\n 换行）")
     ap.add_argument("--text-file", default="", help="从文件读取回答内容（优先于 --text）")
     ap.add_argument("--bold", action="append", default=[], help="额外指定要加粗的个股名称（可多次）")
-    ap.add_argument("--chat-id", default="", help="目标群 chat_id（默认 VIP_PUSH_CHAT_ID）")
+    ap.add_argument("--chat-id", default="", help="目标 chat_id（群聊默认 VIP_PUSH_CHAT_ID；私信必填）")
+    ap.add_argument("--chat-type", default="group", choices=["group", "p2p"], help="发送目标：group=群聊 / p2p=私信（默认 group）")
     ap.add_argument("--no-disclaimer", action="store_true", help="不加免责声明（默认加）")
     ap.add_argument("--dry-run", action="store_true", help="只打印消息，不发送")
     args = ap.parse_args()
@@ -211,19 +222,29 @@ def main():
 
     question = _unescape(args.question)
     answer = auto_bold(answer, args.bold)
-    markdown = build_message(args.sender_id, args.sender, question, answer,
-                             add_disclaimer=not args.no_disclaimer)
+    if args.chat_type == "p2p":
+        markdown = build_p2p_message(answer, add_disclaimer=not args.no_disclaimer)
+    else:
+        markdown = build_message(args.sender_id, args.sender, question, answer,
+                                 add_disclaimer=not args.no_disclaimer)
 
     if args.dry_run:
         print(markdown)
         return
 
-    chat_id = args.chat_id or _env_value("VIP_PUSH_CHAT_ID", "")
-    if not chat_id:
-        print("[ERROR] 未配置目标群（--chat-id 或 local_config.env 的 VIP_PUSH_CHAT_ID）", file=sys.stderr)
-        sys.exit(1)
+    if args.chat_type == "p2p":
+        chat_id = args.chat_id
+        if not chat_id:
+            print("[ERROR] 私信回复必须提供 --chat-id（p2p 会话 chat_id）", file=sys.stderr)
+            sys.exit(1)
+    else:
+        chat_id = args.chat_id or _env_value("VIP_PUSH_CHAT_ID", "")
+        if not chat_id:
+            print("[ERROR] 未配置目标群（--chat-id 或 local_config.env 的 VIP_PUSH_CHAT_ID）", file=sys.stderr)
+            sys.exit(1)
 
-    idem_key = "qa_" + hashlib.md5(
+    idem_prefix = "p2p_" if args.chat_type == "p2p" else "qa_"
+    idem_key = idem_prefix + hashlib.md5(
         ("%s|%s|%s" % (args.sender_id or args.sender, question, answer)).encode("utf-8")
     ).hexdigest()[:16]
     ok, err = send_to_group(markdown, chat_id, idem_key)
@@ -233,7 +254,10 @@ def main():
         # 回答完成后取消问题消息上的「敲键盘」表情
         if args.message_id:
             react.remove_typing(args.message_id)
-        print("[OK] 已发送群回复 @%s（已记录去重）" % (args.sender or args.sender_id or "用户"))
+        if args.chat_type == "p2p":
+            print("[OK] 已发送私信回复 %s（已记录去重）" % (args.sender or args.sender_id or "用户"))
+        else:
+            print("[OK] 已发送群回复 @%s（已记录去重）" % (args.sender or args.sender_id or "用户"))
     else:
         print("[ERROR] 发送失败: %s" % err, file=sys.stderr)
         sys.exit(1)
