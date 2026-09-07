@@ -47,6 +47,7 @@ from common import is_trading_day as _c_is_trading_day, is_trading_time as _c_is
 
 PY = pythonw_path()  # 用 pythonw.exe 拉起子进程，整条链路不弹黑窗
 HEARTBEAT_FILE = os.path.join(SKILL_DIR, "data", "_supervisor.lock")
+PIDFILE = os.path.join(SKILL_DIR, "data", "_supervisor.pid")
 BACKOFF_BASE = 10.0
 BACKOFF_MAX = 300.0
 # Windows 下不弹黑窗（子进程静默运行）
@@ -55,6 +56,27 @@ NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
 def now8():
     return datetime.now(timezone(timedelta(hours=8)))
+
+
+def _another_supervisor_running():
+    """检测是否已有 supervisor 在运行（用 PIDFILE 存活的 PID 判断），防重复启动导致重复推送/告警。"""
+    try:
+        with open(PIDFILE, "r", encoding="utf-8") as f:
+            pid = int(f.read().strip() or "0")
+    except Exception:
+        return False
+    if pid <= 0 or pid == os.getpid():
+        return False
+    try:
+        import ctypes
+        PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+        h = ctypes.windll.kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
+        if h:
+            ctypes.windll.kernel32.CloseHandle(h)
+            return True
+    except Exception:
+        return False
+    return False
 
 
 def is_trading_day():
@@ -72,7 +94,7 @@ def is_group_sync_time():
 # (名称, 脚本参数, 运行时间门控: always=常驻 / group_sync=交易日9:00-16:00含午间 / trading=仅交易时段, 日志文件)
 LOOPS = [
     ("qa_listener", ["-u", "scripts/sync_qa_auto.py"], "always", "data/_qa_loop.log"),
-    ("feishu_sync", ["-u", "scripts/sync_feishu_auto.py", "--loop", "--interval", "30", "--download-images"], "group_sync", "data/_loop.log"),
+    ("feishu_sync", ["-u", "scripts/sync_feishu_auto.py", "--loop", "--interval", "10", "--download-images"], "group_sync", "data/_loop.log"),
     ("price_alerts", ["-u", "scripts/price_alerts.py", "--loop", "--interval", "30"], "trading", "data/_price_alerts_loop.log"),
 ]
 
@@ -165,6 +187,15 @@ def rotate_logs_if_needed():
 
 def main():
     print("[supervisor] 启动 %s" % now8().strftime("%Y-%m-%d %H:%M:%S"))
+    if _another_supervisor_running():
+        print("[supervisor] 已有 supervisor 在运行（PID 见 data/_supervisor.pid），本次退出，避免重复推送")
+        return
+    try:
+        os.makedirs(os.path.dirname(PIDFILE), exist_ok=True)
+        with open(PIDFILE, "w", encoding="utf-8") as f:
+            f.write(str(os.getpid()))
+    except Exception:
+        pass
 
     # 常驻循环进程表：restart_at=下次允许重启时间戳；backoff=当前退避秒数
     procs = {}
