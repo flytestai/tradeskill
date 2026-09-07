@@ -416,7 +416,7 @@ def _send_review_image(image_path, ct):
         full = image_path if os.path.isabs(image_path) else os.path.join(SKILL_DIR, image_path)
         if not os.path.exists(full):
             log_error("复盘群图片转发跳过（本地文件不存在）: %s" % image_path)
-            return False
+            return "skip"
         rel = image_path.replace("\\", "/")
         idem_key = "review_img_" + content_hash(image_path + "|" + (ct or ""))
         cmd = ('timeout -k 3 30 lark-cli im +messages-send '
@@ -513,11 +513,14 @@ def forward_all_to_review_group(conn):
         if content and is_test_message(content):
             last_ct = ct
             continue
-        if push_to_review_group(content or "", ct, is_vip=bool(is_vip), image_path=image_path or ""):
+        result = push_to_review_group(content or "", ct, is_vip=bool(is_vip), image_path=image_path or "")
+        if result == "skip":
+            # 图片本地缺失，无法恢复，前移水位避免每轮重试同一张
             last_ct = ct
+        elif result:
+            last_ct = ct  # 转发成功
         else:
-            # 图片本地不存在时也算「已处理」，前移水位避免每轮重试同一张；下一条继续
-            last_ct = ct
+            break  # 转发失败，不推进水位，下轮重试，避免漏发
     try:
         with open(REVIEW_FORWARD_WATERMARK, "w", encoding="utf-8") as f:
             f.write(last_ct)
