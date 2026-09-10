@@ -93,11 +93,10 @@ TEST_KEYWORDS = ["转发测试", "同步测试", "设备A同步测试", "test", 
 
 
 def find_lark_cli():
-    """定位 lark-cli 可执行文件（兼容 PATH 与常见全局安装目录）"""
-    p = shutil.which("lark-cli")
-    if p:
-        return p
+    """定位 lark-cli 可执行文件（优先绝对路径，兼容 PATH 与常见全局安装目录）"""
     candidates = [
+        os.path.expandvars(r"%APPDATA%\bee_ai_test\agent-runtime\npm-global\lark-cli"),
+        os.path.expandvars(r"%APPDATA%\bee_ai_test\agent-runtime\npm-global\lark-cli.cmd"),
         os.path.expandvars(r"%APPDATA%\npm\lark-cli"),
         os.path.expandvars(r"%APPDATA%\npm\lark-cli.cmd"),
         os.path.expanduser("~/.npm-global-user/lark-cli"),
@@ -106,6 +105,9 @@ def find_lark_cli():
     for c in candidates:
         if c and os.path.exists(c):
             return c
+    p = shutil.which("lark-cli")
+    if p:
+        return p
     return "lark-cli"
 
 
@@ -295,6 +297,7 @@ def alert_feishu(key, msg):
 
 FAIL_COUNT_FILE = os.path.join(SKILL_DIR, "data", "_feishu_pull_fail_count.txt")
 REVIEW_FORWARD_WATERMARK = os.path.join(SKILL_DIR, "data", "_review_forward_watermark.txt")
+LITCHI_FORWARD_WATERMARK = os.path.join(SKILL_DIR, "data", "_litchi_forward_watermark.txt")
 
 
 def _record_pull_fail():
@@ -370,7 +373,7 @@ def push_vip_to_group(text, ct):
     try:
         # 去掉正文里重复的 VIP 标记，让排版更干净
         body = strip_vip_markers(text)
-        msg = ("🔒 VIP・仅TA的真爱粉可见\n"
+        msg = ("👑 VIP尊享·仅 TA 的真爱粉可见\n"
                f"\n"
                f"🕐{fmt_vip_time(ct)}\n"
                f"\n"
@@ -382,14 +385,14 @@ def push_vip_to_group(text, ct):
         # 用 BASH -c 内联执行，捕获输出判断是否成功（lark-cli 返回 ok:true 即成功）；失败重试 3 次
         # 幂等键：同一(内容+时间)只发一次，防止重试/补推重复发
         idem_key = "vip_" + content_hash(text + "|" + (ct or ""))
-        cmd = ('timeout -k 3 30 lark-cli im +messages-send '
+        cmd = ('timeout -k 3 60 lark-cli im +messages-send '
                '--chat-id %s '
                '--idempotency-key %s '
                '--as bot --markdown "$(cat data/_vip_push_tmp.txt)"' % (VIP_PUSH_CHAT_ID, idem_key))
         ok = False
         last_err = ""
         for attempt in range(3):
-            r = subprocess.run([BASH, "-c", cmd], capture_output=True, timeout=50, cwd=SKILL_DIR)
+            r = subprocess.run([BASH, "-c", cmd], capture_output=True, timeout=90, cwd=SKILL_DIR)
             out = (r.stdout or b"") + (r.stderr or b"")
             if b'"ok": true' in out or b'"ok":true' in out:
                 ok = True
@@ -410,22 +413,22 @@ def push_vip_to_group(text, ct):
         return False
 
 
-def _send_review_image(image_path, ct):
-    """转发本地图片到每日复盘群，返回是否成功。"""
+def _send_image(image_path, ct, chat_id, idem_prefix, log_label):
+    """转发本地图片到指定群，返回 'skip'(本地缺失)/True/False。"""
     try:
         full = image_path if os.path.isabs(image_path) else os.path.join(SKILL_DIR, image_path)
         if not os.path.exists(full):
-            log_error("复盘群图片转发跳过（本地文件不存在）: %s" % image_path)
+            log_error("%s图片转发跳过（本地文件不存在）: %s" % (log_label, image_path))
             return "skip"
         rel = image_path.replace("\\", "/")
-        idem_key = "review_img_" + content_hash(image_path + "|" + (ct or ""))
-        cmd = ('timeout -k 3 30 lark-cli im +messages-send '
+        idem_key = "%s_img_" % idem_prefix + content_hash(image_path + "|" + (ct or ""))
+        cmd = ('timeout -k 3 60 lark-cli im +messages-send '
                '--chat-id %s --idempotency-key %s --as bot --image "%s"'
-               % (REVIEW_CHAT_ID, idem_key, rel))
+               % (chat_id, idem_key, rel))
         ok = False
         last_err = ""
         for attempt in range(3):
-            r = subprocess.run([BASH, "-c", cmd], capture_output=True, timeout=50, cwd=SKILL_DIR)
+            r = subprocess.run([BASH, "-c", cmd], capture_output=True, timeout=90, cwd=SKILL_DIR)
             out = (r.stdout or b"") + (r.stderr or b"")
             if b'"ok": true' in out or b'"ok":true' in out:
                 ok = True
@@ -434,40 +437,35 @@ def _send_review_image(image_path, ct):
             if attempt < 2:
                 time.sleep(2)
         if not ok:
-            log_error("复盘群图片转发失败: %s | err=%s" % (ct, last_err))
+            log_error("%s图片转发失败: %s | err=%s" % (log_label, ct, last_err))
         return ok
     except Exception as e:
-        log_error("复盘群图片转发异常: %s" % e)
+        log_error("%s图片转发异常: %s" % (log_label, e))
         return False
 
 
-def push_to_review_group(text, ct, is_vip=False, image_path=""):
-    """把 wu2198 发言转发到每日复盘群，返回是否成功。
-
-    - 图片消息：转发本地图片文件
-    - VIP 消息：🔒 VIP 格式
-    - 普通消息：🕐 时间 + 正文
-    """
+def push_to_group(text, ct, is_vip=False, image_path="", chat_id="", idem_prefix="", log_label=""):
+    """把 wu2198 发言转发到指定群（VIP+公开+图片），返回 True/False/'skip'。"""
     try:
         if image_path:
-            return _send_review_image(image_path, ct)
+            return _send_image(image_path, ct, chat_id, idem_prefix, log_label)
         body = strip_vip_markers(text)
         if is_vip:
-            msg = ("🔒 VIP・仅TA的真爱粉可见\n\n🕐%s\n\n%s" % (fmt_vip_time(ct), body))
+            msg = ("👑 VIP尊享·仅 TA 的真爱粉可见\n\n🕐%s\n\n%s\n\n" % (fmt_vip_time(ct), body))
         else:
-            msg = ("🕐%s\n\n%s" % (fmt_vip_time(ct), body))
-        tmp = os.path.join(SKILL_DIR, "data", "_review_push_tmp.txt")
+            msg = ("📣 公开微博\n\n🕐%s\n\n%s\n\n" % (fmt_vip_time(ct), body))
+        tmp = os.path.join(SKILL_DIR, "data", "_forward_push_tmp.txt")
         with open(tmp, "w", encoding="utf-8") as f:
             f.write(msg)
-        idem_key = "review_" + content_hash(text + "|" + (ct or ""))
-        cmd = ('timeout -k 3 30 lark-cli im +messages-send '
+        idem_key = "%s_" % idem_prefix + content_hash(text + "|" + (ct or ""))
+        cmd = ('timeout -k 3 60 lark-cli im +messages-send '
                '--chat-id %s '
                '--idempotency-key %s '
-               '--as bot --markdown "$(cat data/_review_push_tmp.txt)"' % (REVIEW_CHAT_ID, idem_key))
+               '--as bot --markdown "$(cat data/_forward_push_tmp.txt)"' % (chat_id, idem_key))
         ok = False
         last_err = ""
         for attempt in range(3):
-            r = subprocess.run([BASH, "-c", cmd], capture_output=True, timeout=50, cwd=SKILL_DIR)
+            r = subprocess.run([BASH, "-c", cmd], capture_output=True, timeout=90, cwd=SKILL_DIR)
             out = (r.stdout or b"") + (r.stderr or b"")
             if b'"ok": true' in out or b'"ok":true' in out:
                 ok = True
@@ -480,25 +478,21 @@ def push_to_review_group(text, ct, is_vip=False, image_path=""):
         except Exception:
             pass
         if not ok:
-            log_error("复盘群转发失败: %s | err=%s" % (ct, last_err))
+            log_error("%s转发失败: %s | err=%s" % (log_label, ct, last_err))
         return ok
     except Exception as e:
-        log_error("复盘群转发异常: %s" % e)
+        log_error("%s转发异常: %s" % (log_label, e))
         return False
 
 
-def forward_all_to_review_group(conn):
-    """把 wu2198 当天(及之后)的发言转发到每日复盘群（VIP+公开+图片，跳过测试消息）。
-
-    用 data/_review_forward_watermark.txt 记录已转发的最后一条 record_date；
-    首次运行默认从今天 00:00 起（只补今天，不补历史）。
-    """
-    if not REVIEW_CHAT_ID:
+def forward_all_to_group(conn, chat_id, watermark_file, idem_prefix, log_label):
+    """把 wu2198 当天(及之后)的发言转发到指定群（VIP+公开+图片，跳过测试消息）。"""
+    if not chat_id:
         return
     today00 = datetime.now(timezone(timedelta(hours=8))).strftime("%Y-%m-%d 00:00")
     wm = today00
     try:
-        with open(REVIEW_FORWARD_WATERMARK, encoding="utf-8") as f:
+        with open(watermark_file, encoding="utf-8") as f:
             v = f.read().strip()
             if v:
                 wm = v
@@ -513,7 +507,8 @@ def forward_all_to_review_group(conn):
         if content and is_test_message(content):
             last_ct = ct
             continue
-        result = push_to_review_group(content or "", ct, is_vip=bool(is_vip), image_path=image_path or "")
+        result = push_to_group(content or "", ct, is_vip=bool(is_vip), image_path=image_path or "",
+                               chat_id=chat_id, idem_prefix=idem_prefix, log_label=log_label)
         if result == "skip":
             # 图片本地缺失，无法恢复，前移水位避免每轮重试同一张
             last_ct = ct
@@ -522,10 +517,20 @@ def forward_all_to_review_group(conn):
         else:
             break  # 转发失败，不推进水位，下轮重试，避免漏发
     try:
-        with open(REVIEW_FORWARD_WATERMARK, "w", encoding="utf-8") as f:
+        with open(watermark_file, "w", encoding="utf-8") as f:
             f.write(last_ct)
     except Exception:
         pass
+
+
+def forward_all_to_litchi_group(conn):
+    """转发全部消息（VIP+公开）到荔枝种植交流群。"""
+    return forward_all_to_group(conn, VIP_PUSH_CHAT_ID, LITCHI_FORWARD_WATERMARK, "litchi", "荔枝群")
+
+
+def forward_all_to_review_group(conn):
+    """转发全部消息（VIP+公开）到每日复盘群。"""
+    return forward_all_to_group(conn, REVIEW_CHAT_ID, REVIEW_FORWARD_WATERMARK, "review", "复盘群")
 
 
 def fetch_messages_since(lark_cli=None, chat_id=None, start_iso=None):
@@ -540,14 +545,18 @@ def fetch_messages_since(lark_cli=None, chat_id=None, start_iso=None):
             os.remove(tmp)
     except Exception:
         pass
-    parts = ["timeout", "-k", "3", "60", "lark-cli", "im", "+chat-messages-list",
+    # 用绝对路径（转 POSIX 形式），避免后台进程 PATH 过期导致 lark-cli 找不到
+    _lark = find_lark_cli().replace("\\", "/")
+    if re.match(r"^[A-Za-z]:/", _lark):
+        _lark = "/" + _lark[0].lower() + _lark[2:]
+    parts = ["timeout", "-k", "3", "90", _lark, "im", "+chat-messages-list",
              "--chat-id", chat_id, "--as", "user", "--order", "asc",
              "--page-all", "--page-limit", "1000", "--no-reactions", "--json"]
     if start_iso:
         parts += ["--start", start_iso]
     cmd = " ".join(shlex.quote(p) for p in parts) + " > data/_lark_chat_out.json 2>/dev/null"
     try:
-        subprocess.run([BASH, "-c", cmd], capture_output=True, timeout=75, cwd=SKILL_DIR)
+        subprocess.run([BASH, "-c", cmd], capture_output=True, timeout=120, cwd=SKILL_DIR)
     except subprocess.TimeoutExpired:
         print("[ERROR] lark-cli 拉取超时")
         log_error("lark-cli 拉取超时")
@@ -776,12 +785,15 @@ def run_once(args, skip_guard=False):
     print("[1/5] 拉到 %d 条新消息" % len(messages))
 
     # 2. 过滤机器人消息（水位只按机器人消息前移，避免群里闲聊/系统消息触发高频 GitHub 推送）
+    # 兼容：wu 的 VIP 发言偶尔由用户账号直接发到群里，也按机器人消息处理同步
     bot_msgs = []
     for m in messages:
         s = m.get("sender") or {}
         stype = s.get("sender_type", "")
         sname = s.get("name", "")
-        if stype not in BOT_SENDER_TYPES and sname != args.bot_name:
+        is_bot = stype in BOT_SENDER_TYPES or sname == args.bot_name
+        is_user_vip = stype == "user" and is_vip_text(extract_text(m))
+        if not is_bot and not is_user_vip:
             continue
         bot_msgs.append(m)
 
@@ -893,18 +905,10 @@ def run_once(args, skip_guard=False):
         seen_img.add(img_hash)
         img_inserted += 1
 
-    # 4c. 补推未推送成功的 VIP 消息（数据已入库，推送失败的下次自动补）
-    if not args.dry_run:
-        cur.execute("SELECT id, content, record_date FROM kol_records WHERE kol_name=? AND is_vip=1 AND vip_pushed=0 ORDER BY id ASC", (args.kol_name,))
-        pending_vip = cur.fetchall()
-        for pid, pcontent, pct in pending_vip:
-            if push_vip_to_group(pcontent, pct):
-                cur.execute("UPDATE kol_records SET vip_pushed=1 WHERE id=?", (pid,))
-                _commit_with_retry(conn)
-
     if not args.dry_run:
         _commit_with_retry(conn)
-        # 4d. 转发全部消息（VIP+公开）到每日复盘群，仅今天起
+        # 4c/4d. 转发全部消息（VIP+公开）到荔枝群和每日复盘群
+        forward_all_to_litchi_group(conn)
         forward_all_to_review_group(conn)
         # 5. 保存新水位（记录本次拉取到的最新群消息时间）
         if new_watermark:

@@ -94,7 +94,7 @@ def is_group_sync_time():
 # (名称, 脚本参数, 运行时间门控: always=常驻 / group_sync=交易日9:00-16:00含午间 / trading=仅交易时段, 日志文件)
 LOOPS = [
     ("qa_listener", ["-u", "scripts/sync_qa_auto.py"], "always", "data/_qa_loop.log"),
-    ("feishu_sync", ["-u", "scripts/sync_feishu_auto.py", "--loop", "--interval", "10", "--download-images"], "group_sync", "data/_loop.log"),
+    ("feishu_sync", ["-u", "scripts/sync_feishu_auto.py", "--loop", "--interval", "30", "--download-images"], "group_sync", "data/_loop.log"),
     ("price_alerts", ["-u", "scripts/price_alerts.py", "--loop", "--interval", "30"], "trading", "data/_price_alerts_loop.log"),
 ]
 
