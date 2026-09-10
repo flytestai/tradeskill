@@ -33,7 +33,9 @@ def find_lark_cli():
     p = shutil.which("lark-cli")
     if p:
         return p
-    for c in (os.path.expandvars(r"%APPDATA%\npm\lark-cli"),
+    for c in (os.path.expandvars(r"%APPDATA%\bee_ai_test\agent-runtime\npm-global\lark-cli"),
+              os.path.expandvars(r"%APPDATA%\bee_ai_test\agent-runtime\npm-global\lark-cli.cmd"),
+              os.path.expandvars(r"%APPDATA%\npm\lark-cli"),
               os.path.expandvars(r"%APPDATA%\npm\lark-cli.cmd")):
         if c and os.path.exists(c):
             return c
