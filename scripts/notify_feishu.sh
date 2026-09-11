@@ -28,10 +28,19 @@ fi
 # 把输入里的 \n 转成真实换行（bash 双引号不会自动解释 \n）
 MSG=$(printf '%b' "$MSG")
 
-# 同步发送，确保消息送达；timeout 兜底杀掉不退出的进程
-timeout -k 3 20 lark-cli im +messages-send \
-    --user-id "$USER_OPEN_ID" \
-    --as bot \
-    --markdown "$MSG" >/dev/null 2>&1
-
-exit 0
+# 优先调用原生 lark-cli.exe，避免 POSIX 包装脚本的 node 子进程不退出。
+APPDATA_POSIX="$(cygpath -u "${APPDATA:-}" 2>/dev/null || printf '%s' "${APPDATA:-}")"
+LARK_EXE="$APPDATA_POSIX/bee_ai_test/agent-runtime/npm-global/node_modules/@larksuite/cli/bin/lark-cli.exe"
+if [ -f "$LARK_EXE" ]; then
+    timeout -k 3 20 "$LARK_EXE" im +messages-send \
+        --user-id "$USER_OPEN_ID" \
+        --as bot \
+        --markdown "$MSG" >/dev/null 2>&1
+else
+    timeout -k 3 20 lark-cli im +messages-send \
+        --user-id "$USER_OPEN_ID" \
+        --as bot \
+        --markdown "$MSG" >/dev/null 2>&1
+fi
+rc=$?
+exit $rc

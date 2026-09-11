@@ -16,7 +16,7 @@
   - 自动在消息里 @提问人（优先 open_id，回退昵称），并在底部追加免责声明
   - 用机器人身份（--as bot）发到群，需机器人已在该群
   - 幂等键 = 提问人+问题+回答 的 md5，重复调用同一内容不会重复发送
-  - 写入临时文件后发送，避免 Windows 命令行中文/多行编码损坏；timeout 兜底
+  - 使用 Card 2.0 分区发送，避免 Windows 命令行中文/多行编码损坏
 """
 import argparse
 import hashlib
@@ -28,7 +28,7 @@ import sys
 import time
 from datetime import datetime, timezone, timedelta
 
-from common import find_bash
+from common import find_bash, send_card
 import qa_dedup
 import react
 
@@ -162,33 +162,9 @@ def build_p2p_message(answer, add_disclaimer=True):
 
 
 def send_to_group(markdown, chat_id, idem_key):
-    """通过 lark-cli（机器人身份）发到群，返回是否成功。"""
-    tmp = os.path.join(SKILL_DIR, "data", "_group_reply_tmp.txt")
-    os.makedirs(os.path.dirname(tmp), exist_ok=True)
-    try:
-        with open(tmp, "w", encoding="utf-8") as f:
-            f.write(markdown)
-        cmd = ('timeout -k 3 30 lark-cli im +messages-send '
-               '--chat-id %s '
-               '--idempotency-key %s '
-               '--as bot --markdown "$(cat data/_group_reply_tmp.txt)"' % (chat_id, idem_key))
-        last_err = ""
-        for attempt in range(3):
-            r = subprocess.run([BASH, "-c", cmd], capture_output=True, timeout=50, cwd=SKILL_DIR)
-            out = (r.stdout or b"") + (r.stderr or b"")
-            if b'"ok": true' in out or b'"ok":true' in out:
-                return True, ""
-            last_err = out.decode("utf-8", "ignore")[:200]
-            if attempt < 2:
-                time.sleep(2)
-        return False, last_err
-    except Exception as e:
-        return False, str(e)[:200]
-    finally:
-        try:
-            os.remove(tmp)
-        except Exception:
-            pass
+    """通过 Card 2.0（机器人身份）发到群，返回是否成功。"""
+    return send_card(markdown, chat_id=chat_id, title="荔枝群问答",
+                      subtitle="AI回复", template="blue", idem_key=idem_key)
 
 
 def main():

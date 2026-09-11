@@ -38,10 +38,21 @@ fi
 # 把 \n 转成真实换行（从命令行传参时）
 MSG=$(printf '%b' "$MSG")
 
-# 同步发送，确保消息送达；timeout 兜底杀掉不退出的进程
-timeout -k 3 20 lark-cli im +messages-send \
-    --chat-id "$GROUP_ID" \
-    --as bot \
-    --markdown "$MSG" >/dev/null 2>&1
+# 优先调用 lark-cli 原生 exe，避免 POSIX 启动脚本拉起的 node 子进程不退出。
+APPDATA_POSIX="$(cygpath -u "${APPDATA:-}" 2>/dev/null || printf '%s' "${APPDATA:-}")"
+LARK_EXE="$APPDATA_POSIX/bee_ai_test/agent-runtime/npm-global/node_modules/@larksuite/cli/bin/lark-cli.exe"
+if [ -f "$LARK_EXE" ]; then
+    timeout -k 3 20 "$LARK_EXE" im +messages-send \
+        --chat-id "$GROUP_ID" \
+        --as bot \
+        --markdown "$MSG" >/dev/null 2>&1
+else
+    timeout -k 3 20 lark-cli im +messages-send \
+        --chat-id "$GROUP_ID" \
+        --as bot \
+        --markdown "$MSG" >/dev/null 2>&1
+fi
+rc=$?
 
-exit 0
+# 把 lark-cli 的真实退出码返回给调用方，便于盘前播报记录发送失败并重试。
+exit $rc
