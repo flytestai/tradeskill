@@ -15,6 +15,7 @@ import argparse
 import json
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -22,24 +23,44 @@ import time
 from datetime import datetime, timezone, timedelta
 
 import qa_queue
+from common import find_bash
 
 SKILL_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+BASH = find_bash()
 
 TEST_KEYWORDS = ["转发测试", "同步测试", "test", "TEST"]
 
 
+def _posix_path(path):
+    """把 Windows 路径转换为 Git Bash 可执行的 POSIX 路径。"""
+    p = (path or "").replace("\\", "/")
+    if re.match(r"^[A-Za-z]:/", p):
+        return "/" + p[0].lower() + p[2:]
+    return p
+
+
+def _prefer_posix_cli(path):
+    """优先使用 npm 生成的 POSIX 启动脚本，避免直接 Popen .cmd 触发 WinError 193。"""
+    if path and path.lower().endswith(".cmd"):
+        posix = path[:-4]
+        if os.path.exists(posix):
+            return posix
+    return path
+
+
 def find_lark_cli():
-    p = shutil.which("lark-cli")
-    if p:
-        return p
-    for c in (os.path.expandvars(r"%APPDATA%\bee_ai_test\agent-runtime\npm-global\lark-cli"),
-              os.path.expandvars(r"%APPDATA%\bee_ai_test\agent-runtime\npm-global\lark-cli.cmd"),
-              os.path.expandvars(r"%APPDATA%\npm\lark-cli"),
-              os.path.expandvars(r"%APPDATA%\npm\lark-cli.cmd")):
+    candidates = (
+        os.path.expandvars(r"%APPDATA%\bee_ai_test\agent-runtime\npm-global\lark-cli"),
+        os.path.expandvars(r"%APPDATA%\bee_ai_test\agent-runtime\npm-global\lark-cli.cmd"),
+        os.path.expandvars(r"%APPDATA%\npm\lark-cli"),
+        os.path.expandvars(r"%APPDATA%\npm\lark-cli.cmd"),
+    )
+    for c in candidates:
         if c and os.path.exists(c):
-            return c
-    return "lark-cli"
+            return _prefer_posix_cli(c)
+    p = shutil.which("lark-cli")
+    return _prefer_posix_cli(p) if p else "lark-cli"
 
 
 def ms_to_dt(ms):
@@ -113,14 +134,24 @@ def handle_event(obj, dry_run=False):
 
 
 def consume(dry_run=False):
-    lark = find_lark_cli()
+    lark = _posix_path(find_lark_cli())
     backoff = 5
     while True:
+        proc = None
         try:
-            cmd = [lark, "event", "consume", "im.message.receive_v1", "--as", "bot"]
-            proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                                    stderr=subprocess.STDOUT, text=True, bufsize=1,
-                                    encoding="utf-8", creationflags=NO_WINDOW)
+            # Windows 不能直接 Popen npm 的 .cmd/无扩展脚本；统一经 Git Bash 启动，
+            # 否则会反复出现 WinError 193，进程看似存活但实际上收不到事件。
+            cli_cmd = " ".join(shlex.quote(x) for x in [lark, "event", "consume", "im.message.receive_v1", "--as", "bot"])
+            proc = subprocess.Popen(
+                [BASH, "-c", "exec " + cli_cmd],
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                bufsize=1,
+                encoding="utf-8",
+                creationflags=NO_WINDOW,
+            )
             print("[QA] 统一问答监听已启动（群聊@机器人 + 私信）")
             backoff = 5
             for line in proc.stdout:
@@ -137,6 +168,12 @@ def consume(dry_run=False):
                     print("[QA] 处理事件异常: %s" % str(e)[:200], file=sys.stderr)
         except Exception as e:
             print("[QA] 消费异常: %s" % str(e)[:200], file=sys.stderr)
+        finally:
+            if proc is not None and proc.stdout is not None:
+                try:
+                    proc.stdout.close()
+                except Exception:
+                    pass
         time.sleep(backoff)
         backoff = min(backoff * 2, 60)
 

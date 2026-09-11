@@ -33,6 +33,7 @@ import shutil
 import sqlite3
 import subprocess
 import sys
+import threading
 import time
 from datetime import datetime, timezone, timedelta
 
@@ -94,8 +95,25 @@ SKIP_KEYWORDS = ["qq", "续费", "会员即将到期", "测试"]
 # 节假日从 common.load_holidays(skill_dir) 加载（硬编码兜底 + data/holidays.txt）
 
 
+def _posix_path(path):
+    """把 Windows 路径转换为 Git Bash 可执行的 POSIX 路径。"""
+    p = (path or "").replace("\\", "/")
+    if re.match(r"^[A-Za-z]:/", p):
+        return "/" + p[0].lower() + p[2:]
+    return p
+
+
+def _prefer_posix_cli(path):
+    """优先使用 POSIX 启动脚本，避免 Windows 直接执行 .cmd。"""
+    if path and path.lower().endswith(".cmd"):
+        posix = path[:-4]
+        if os.path.exists(posix):
+            return posix
+    return path
+
+
 def find_lark_cli():
-    """定位 lark-cli 可执行文件（优先绝对路径，兼容 PATH 与常见全局安装目录）"""
+    """定位 lark-cli，优先返回可由 Git Bash 执行的 POSIX 脚本。"""
     candidates = [
         os.path.expandvars(r"%APPDATA%\bee_ai_test\agent-runtime\npm-global\lark-cli"),
         os.path.expandvars(r"%APPDATA%\bee_ai_test\agent-runtime\npm-global\lark-cli.cmd"),
@@ -106,11 +124,28 @@ def find_lark_cli():
     ]
     for c in candidates:
         if c and os.path.exists(c):
-            return c
+            return _prefer_posix_cli(c)
     p = shutil.which("lark-cli")
-    if p:
-        return p
-    return "lark-cli"
+    return _prefer_posix_cli(p) if p else "lark-cli"
+
+
+def _parse_json_output(raw):
+    """解析 lark-cli 输出，兼容前后混入少量启动提示的情况。"""
+    text = (raw or "").strip()
+    if not text:
+        raise ValueError("lark-cli 输出为空")
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        start, end = text.find("{"), text.rfind("}")
+        if start >= 0 and end > start:
+            return json.loads(text[start:end + 1])
+        raise
+
+
+def _lark_shell_cmd(lark_cli, args):
+    parts = [_posix_path(lark_cli)] + list(args)
+    return " ".join(shlex.quote(str(p)) for p in parts)
 
 
 def check_auth(lark_cli):
@@ -128,20 +163,18 @@ def check_auth(lark_cli):
     except Exception:
         pass
     try:
-        # 走 Git Bash POSIX 版 lark-cli（Windows 的 .CMD 版本会卡死）
-        tmp = os.path.join(SKILL_DIR, "data", "_lark_auth_out.json")
-        try:
-            if os.path.exists(tmp):
-                os.remove(tmp)
-        except Exception:
-            pass
-        cmd = " ".join(shlex.quote(p) for p in ["timeout", "-k", "3", "15", "lark-cli", "auth", "status"]) + " > data/_lark_auth_out.json 2>/dev/null"
-        subprocess.run([BASH, "-c", cmd], capture_output=True, timeout=20, cwd=SKILL_DIR)
-        with open(tmp, "r", encoding="utf-8") as f:
-            data = json.loads(f.read())
+        # 走 Git Bash POSIX 版 lark-cli，并在内存中解析输出，避免多个循环
+        # 共享临时 JSON 文件造成空文件/半写入，进而误报授权或同步失败。
+        cmd = "timeout -k 3 15 " + _lark_shell_cmd(lark_cli, ["auth", "status"])
+        r = subprocess.run([BASH, "-c", cmd], capture_output=True, text=True,
+                           timeout=20, cwd=SKILL_DIR)
+        if r.returncode != 0:
+            raise RuntimeError("lark-cli auth status exit=%s: %s" %
+                               (r.returncode, (r.stderr or "").strip()[:160]))
+        data = _parse_json_output(r.stdout)
     except Exception as e:
         print("[AUTH] 无法检查授权状态: %s" % e)
-        return  # 失败不缓存，下一轮重试
+        return  # 失败不缓存，下一轮自动重试
     try:
         os.makedirs(os.path.dirname(AUTH_CACHE_FILE), exist_ok=True)
         with open(AUTH_CACHE_FILE, "w") as f:
@@ -298,6 +331,8 @@ def alert_feishu(key, msg):
 
 
 FAIL_COUNT_FILE = os.path.join(SKILL_DIR, "data", "_feishu_pull_fail_count.txt")
+PUSH_LOCK_FILE = os.path.join(SKILL_DIR, "data", "_sync_push.lock")
+PUSH_LOCK_STALE_SEC = 600
 REVIEW_FORWARD_WATERMARK = os.path.join(SKILL_DIR, "data", "_review_forward_watermark.txt")
 LITCHI_FORWARD_WATERMARK = os.path.join(SKILL_DIR, "data", "_litchi_forward_watermark.txt")
 
@@ -325,6 +360,65 @@ def _reset_pull_fail():
             f.write("0")
     except Exception:
         pass
+
+
+def _acquire_push_lock():
+    """获取后台 GitHub 推送锁，避免多个轮询同时执行 git push。"""
+    try:
+        os.makedirs(os.path.dirname(PUSH_LOCK_FILE), exist_ok=True)
+        fd = os.open(PUSH_LOCK_FILE, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        os.write(fd, str(time.time()).encode())
+        os.close(fd)
+        return True
+    except FileExistsError:
+        try:
+            with open(PUSH_LOCK_FILE, "r", encoding="utf-8") as f:
+                last = float(f.read().strip() or "0")
+            if time.time() - last < PUSH_LOCK_STALE_SEC:
+                return False
+            os.remove(PUSH_LOCK_FILE)
+            return _acquire_push_lock()
+        except Exception:
+            return False
+    except Exception:
+        return False
+
+
+def _release_push_lock():
+    try:
+        if os.path.exists(PUSH_LOCK_FILE):
+            os.remove(PUSH_LOCK_FILE)
+    except Exception:
+        pass
+
+
+def push_sync_async():
+    """后台执行 GitHub push，绝不阻塞飞书消息轮询。"""
+    if not _acquire_push_lock():
+        print("[SYNC] GitHub 推送已在后台进行，本轮跳过重复推送")
+        return
+
+    def worker():
+        try:
+            r = subprocess.run([pythonw_path(), SYNC_SCRIPT, "push"],
+                               capture_output=True, text=True, timeout=180,
+                               cwd=SKILL_DIR)
+            tail = ((r.stdout or "") + (r.stderr or "")).strip().splitlines()
+            if r.returncode == 0:
+                print("[SYNC] GitHub 后台推送完成")
+            else:
+                msg = tail[-1][:240] if tail else "exit=%s" % r.returncode
+                print("[SYNC] GitHub 后台推送失败: %s" % msg)
+                log_error("GitHub 推送失败: %s" % msg)
+                alert_feishu("推送失败", "🚨 **【同步告警】**\\nGitHub 推送失败（后台重试后仍失败），请检查网络")
+        except Exception as e:
+            print("[SYNC] GitHub 后台推送异常: %s" % str(e)[:200])
+            log_error("GitHub 推送异常: %s" % str(e)[:200])
+        finally:
+            _release_push_lock()
+
+    threading.Thread(target=worker, name="github-sync", daemon=True).start()
+    print("[SYNC] GitHub 推送已转入后台，不阻塞消息同步")
 
 
 def _commit_with_retry(conn, retries=5):
@@ -536,54 +630,46 @@ def forward_all_to_review_group(conn):
 
 
 def fetch_messages_since(lark_cli=None, chat_id=None, start_iso=None):
-    """通过 Git Bash POSIX 版 lark-cli 拉取 start_iso 之后的消息（升序，自动分页）。
+    """通过 Git Bash POSIX 版 lark-cli 拉取增量消息（升序，自动分页）。
 
-    Windows 的 lark-cli.CMD 版本「输出后进程不退出」会卡死，所以走 bash -c 调 POSIX 版。
+    输出直接在内存中解析，不再使用共享临时 JSON 文件；这样不会因为轮询重入、
+    进程退出或文件半写入而把正常响应误判为空。短暂的空响应/非法 JSON 自动重试一次。
     """
-    tmp = os.path.join(SKILL_DIR, "data", "_lark_chat_out.json")
-    os.makedirs(os.path.dirname(tmp), exist_ok=True)
-    try:
-        if os.path.exists(tmp):
-            os.remove(tmp)
-    except Exception:
-        pass
-    # 用绝对路径（转 POSIX 形式），避免后台进程 PATH 过期导致 lark-cli 找不到
-    _lark = find_lark_cli().replace("\\", "/")
-    if re.match(r"^[A-Za-z]:/", _lark):
-        _lark = "/" + _lark[0].lower() + _lark[2:]
-    parts = ["timeout", "-k", "3", "90", _lark, "im", "+chat-messages-list",
-             "--chat-id", chat_id, "--as", "user", "--order", "asc",
-             "--page-all", "--page-limit", "1000", "--no-reactions", "--json"]
+    parts = ["im", "+chat-messages-list", "--chat-id", chat_id, "--as", "user",
+             "--order", "asc", "--page-all", "--page-limit", "1000",
+             "--no-reactions", "--json"]
     if start_iso:
         parts += ["--start", start_iso]
-    cmd = " ".join(shlex.quote(p) for p in parts) + " > data/_lark_chat_out.json 2>/dev/null"
-    try:
-        subprocess.run([BASH, "-c", cmd], capture_output=True, timeout=120, cwd=SKILL_DIR)
-    except subprocess.TimeoutExpired:
-        print("[ERROR] lark-cli 拉取超时")
-        log_error("lark-cli 拉取超时")
-        return None
-    except Exception as e:
-        print("[ERROR] lark-cli 拉取异常: %s" % str(e)[:200])
-        log_error("lark-cli 拉取异常: %s" % str(e)[:200])
-        return None
-    try:
-        with open(tmp, "r", encoding="utf-8") as f:
-            out = f.read()
-    except Exception:
-        return None
-    try:
-        data = json.loads(out)
-    except json.JSONDecodeError:
-        print("[ERROR] 解析 lark-cli 输出失败")
-        log_error("解析 lark-cli 输出失败")
-        return None
-    if not data.get("ok"):
-        err = json.dumps(data.get("error", {}), ensure_ascii=False)[:200]
-        print("[ERROR] lark-cli 返回异常: %s" % err)
-        log_error("lark-cli 返回异常: %s" % err)
-        return None
-    return data.get("data", {}).get("messages", []) or []
+    cmd = "timeout -k 3 90 " + _lark_shell_cmd(lark_cli or find_lark_cli(), parts)
+
+    last_error = ""
+    for attempt in range(2):
+        try:
+            r = subprocess.run([BASH, "-c", cmd], capture_output=True, text=True,
+                               timeout=120, cwd=SKILL_DIR)
+            if r.returncode != 0:
+                last_error = "exit=%s %s" % (r.returncode, (r.stderr or "").strip()[:180])
+            else:
+                try:
+                    data = _parse_json_output(r.stdout)
+                except (ValueError, json.JSONDecodeError) as e:
+                    last_error = "%s (stdout=%d bytes)" % (e, len(r.stdout or ""))
+                else:
+                    if not data.get("ok"):
+                        err = json.dumps(data.get("error", {}), ensure_ascii=False)[:200]
+                        last_error = "lark-cli 返回异常: " + err
+                    else:
+                        return data.get("data", {}).get("messages", []) or []
+        except subprocess.TimeoutExpired:
+            last_error = "lark-cli 拉取超时"
+        except Exception as e:
+            last_error = "lark-cli 拉取异常: " + str(e)[:180]
+        if attempt == 0:
+            time.sleep(1)
+
+    print("[ERROR] lark-cli 拉取失败: %s" % last_error)
+    log_error("lark-cli 拉取失败: %s" % last_error)
+    return None
 
 
 def extract_text(msg):
@@ -613,14 +699,13 @@ def extract_image_key(msg):
 
 
 def download_image(lark_cli, message_id, image_key):
-    """下载图片到 assets/feishu_images/，成功返回相对路径，失败返回空串"""
+    """下载图片到 assets/feishu_images/，成功返回相对路径，失败返回空串。"""
     rel = "assets/feishu_images/" + image_key
     try:
-        r = subprocess.run(
-            [lark_cli, "im", "+messages-resources-download",
-             "--message-id", message_id, "--file-key", image_key,
-             "--type", "image", "--output", rel, "--json"],
-            capture_output=True, text=True, timeout=60, cwd=SKILL_DIR)
+        args = ["im", "+messages-resources-download", "--message-id", message_id,
+                "--file-key", image_key, "--type", "image", "--output", rel, "--json"]
+        r = subprocess.run([BASH, "-c", _lark_shell_cmd(lark_cli, args)],
+                           capture_output=True, text=True, timeout=60, cwd=SKILL_DIR)
         if r.returncode == 0:
             # 实际文件名可能带扩展名，回退用 key 作为路径
             for fn in os.listdir(os.path.join(SKILL_DIR, "assets", "feishu_images")):
@@ -924,25 +1009,14 @@ def run_once(args, skip_guard=False):
     conn.close()
     print("[4/5] 入库完成")
 
-    # 6. GitHub 推送（有新记录，或水位前移时也推送，保证多设备水位一致）
+    # 6. GitHub 推送（有新记录，或水位前移时也推送，保证多设备水位一致）。
+    # 推送可能受网络影响，必须后台执行，否则一次失败会阻塞下一轮飞书拉取数分钟。
     watermark_advanced = bool(new_watermark and new_watermark != watermark)
     push_ok = None
     if not args.dry_run and not args.no_push and (inserted > 0 or img_inserted > 0 or watermark_advanced):
-        print("[6/6] 有新增，导出并推送到 GitHub ...")
-        push_ok = None
-        try:
-            r = subprocess.run([pythonw_path(), SYNC_SCRIPT, "push"], capture_output=True, text=True, timeout=180)
-            push_ok = r.returncode == 0
-            tail = (r.stdout + r.stderr).strip().splitlines()
-        except Exception as e:
-            print("      [WARN] sync.py push 异常: %s" % str(e)[:200])
-            log_error("GitHub 推送异常: %s" % str(e)[:200])
-            tail = []
-        if not push_ok:
-            log_error("GitHub 推送失败")
-            alert_feishu("推送失败", "🚨 **【同步告警】**\nGitHub 推送失败（已自动重试），请检查网络")
-        for line in tail[-6:]:
-            print("      " + line)
+        print("[6/6] 有新增，GitHub 推送转入后台 ...")
+        push_sync_async()
+        push_ok = True  # 入队成功；最终结果由后台线程记录日志
     else:
         print("[6/6] 跳过推送（dry-run=%s, inserted=%d, no-push=%s）"
               % (args.dry_run, inserted, args.no_push))
@@ -959,7 +1033,7 @@ def run_once(args, skip_guard=False):
           % (dup_skipped + test_skipped + empty_skipped, dup_skipped, test_skipped, empty_skipped))
     print("  数据库 wu2198 总条数: %d" % total)
     if push_ok is not None:
-        print("  GitHub 推送: %s" % ("成功" if push_ok else "失败（见上方日志）"))
+        print("  GitHub 推送: 已转入后台（最终结果见同步日志）")
     print("=" * 56)
     return 0
 
