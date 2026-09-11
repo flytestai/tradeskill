@@ -31,12 +31,20 @@ FIELDS = ["kol_name", "platform", "content", "extracted_viewpoints",
           "position_action", "position_note", "image_path", "is_vip", "content_hash"]
 
 
-def run(cmd, cwd=None):
-    """Run shell command, return (ok, output)"""
+def run(cmd, cwd=None, timeout=60):
+    """Run a non-interactive git command with a bounded timeout."""
+    env = os.environ.copy()
+    # 后台同步不能等待凭据/编辑器输入，否则 sync_feishu 会卡满 180 秒，
+    # 表面上看起来就是“消息没有及时同步”。
+    env["GIT_TERMINAL_PROMPT"] = "0"
+    env["GCM_INTERACTIVE"] = "Never"
     try:
         r = subprocess.run(cmd, shell=True, cwd=cwd or SKILL_DIR,
-                           capture_output=True, text=True, timeout=180)
-        return r.returncode == 0, r.stdout + r.stderr
+                           capture_output=True, text=True, timeout=timeout,
+                           env=env)
+        return r.returncode == 0, (r.stdout or "") + (r.stderr or "")
+    except subprocess.TimeoutExpired:
+        return False, "command timeout after %ss: %s" % (timeout, cmd)
     except Exception as e:
         return False, str(e)
 
@@ -190,56 +198,67 @@ def import_incremental():
 
 
 def git_push():
-    """Git add sync/ + commit + push"""
-    ok, out = run("git add sync/")
+    """Git add sync/ + commit + push，失败时短退避重试且不阻塞轮询。"""
+    ok, out = run("git add sync/", timeout=30)
     if not ok:
-        print(f"[GIT] add failed: {out}"); return False
+        print(f"[GIT] add failed: {out}")
+        return False
 
     ts = datetime.now().strftime("%Y-%m-%d %H:%M")
-    ok, out = run(f'git commit -m "sync: {ts}" -- sync/')
-    if not ok and "nothing to commit" not in out:
+    ok, out = run(f'git commit -m "sync: {ts}" -- sync/', timeout=30)
+    if not ok and "nothing to commit" not in out.lower():
         print(f"[GIT] commit skipped: {out.strip()}")
 
-    ok, out = run("git push")
-    if ok:
-        print(f"[GIT] pushed → remote")
-    else:
-        for i in range(1, 6):
-            print(f"[GIT] push 失败，第 {i} 次重试（等 6 秒）...")
-            time.sleep(6)
-            ok, out = run("git push")
-            if ok:
-                print(f"[GIT] pushed → remote（第 {i} 次重试成功）")
-                break
-        if not ok:
-            print(f"[GIT] push failed: {out.strip()}")
-            print("  (可能需要配置 GitHub 凭证)")
-    return ok
+    last_out = out
+    for attempt in range(0, 4):
+        if attempt:
+            delay = 5 * attempt
+            print(f"[GIT] push 失败，第 {attempt} 次重试（等 {delay} 秒）...")
+            time.sleep(delay)
+        ok, last_out = run("git push", timeout=45)
+        if ok:
+            suffix = "" if attempt == 0 else f"（第 {attempt} 次重试成功）"
+            print(f"[GIT] pushed → remote{suffix}")
+            return True
+
+    print(f"[GIT] push failed: {last_out.strip()}")
+    print("  (请检查 GitHub 网络连通性和凭据；后台任务不会等待交互输入)")
+    return False
 
 
 def git_pull():
-    """Git pull latest sync data（--autostash 处理本地未提交改动）"""
-    ok, out = run("git pull --rebase --autostash")
-    if ok:
-        print(f"[GIT] pulled from remote")
-    else:
-        print(f"[GIT] pull failed: {out.strip()}")
-    return ok
+    """Git pull latest sync data（--autostash 处理本地未提交改动）。"""
+    last_out = ""
+    for attempt in range(2):
+        if attempt:
+            time.sleep(3)
+        ok, last_out = run("git pull --rebase --autostash", timeout=45)
+        if ok:
+            print("[GIT] pulled from remote")
+            return True
+    print(f"[GIT] pull failed: {last_out.strip()}")
+    return False
 
 
 def cmd_push():
-    """Full push: 先拉取合并 → 导入 → 增量导出 → 推送"""
-    git_pull()
+    """Full push: 先拉取合并 → 导入 → 增量导出 → 推送。"""
+    pull_ok = git_pull()
+    if not pull_ok:
+        print("[WARN] git pull failed, continuing with local data...")
     import_incremental()
-    export_incremental()
-    git_push()
+    export_ok = export_incremental()
+    push_ok = git_push()
+    # pull 失败会保留警告，但只要本地导出和最终 push 成功，推送链路本身就是成功的。
+    return bool(export_ok and push_ok)
 
 
 def cmd_pull():
-    """Full pull: git pull → 导入"""
-    if not git_pull():
+    """Full pull: git pull → 导入。"""
+    pull_ok = git_pull()
+    if not pull_ok:
         print("[WARN] git pull failed, trying local import anyway...")
     import_incremental()
+    return pull_ok
 
 
 def cmd_export():
@@ -330,7 +349,7 @@ if __name__ == "__main__":
                        help="push=merge+upload, pull=download+import, export/import/compact/rebuild=local only, status=show info")
     args = parser.parse_args()
 
-    {
+    result = {
         "push": cmd_push,
         "pull": cmd_pull,
         "export": cmd_export,
@@ -339,3 +358,7 @@ if __name__ == "__main__":
         "rebuild": cmd_rebuild,
         "status": cmd_status,
     }[args.action]()
+    if isinstance(result, bool):
+        sys.exit(0 if result else 1)
+    if isinstance(result, int):
+        sys.exit(result)

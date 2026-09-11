@@ -4,8 +4,9 @@
 set -u
 cd "$(dirname "$0")/.."
 
-# 修复 SSL 证书问题（历史遗留，仅本仓库 .git/config 生效）
-git config http.sslVerify false
+# 后台同步禁止等待终端输入；证书校验由 Git 默认配置决定，不在脚本中关闭。
+export GIT_TERMINAL_PROMPT=0
+export GCM_INTERACTIVE=Never
 
 # 统一走 sync.py push：git pull → import → 增量导出 records.jsonl → git push
 python scripts/sync.py push
