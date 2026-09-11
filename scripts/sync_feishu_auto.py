@@ -88,6 +88,8 @@ def _load_vip_markers():
 VIP_MARKERS = _load_vip_markers()
 BOT_SENDER_TYPES = ("app", "bot")          # 机器人消息（wu2198 发言由自定义机器人发出）
 TEST_KEYWORDS = ["转发测试", "同步测试", "设备A同步测试", "test", "TEST"]
+# 群管理/续费提醒等消息（带 qq、续费、会员即将到期、测试），直接屏蔽不转发
+SKIP_KEYWORDS = ["qq", "续费", "会员即将到期", "测试"]
 
 # 节假日从 common.load_holidays(skill_dir) 加载（硬编码兜底 + data/holidays.txt）
 
@@ -631,11 +633,12 @@ def download_image(lark_cli, message_id, image_key):
 
 
 def is_test_message(text):
-    """测试消息判定：命中关键词则跳过（不入库、不同步）。"""
+    """测试/群管理消息判定：命中关键词则跳过（不入库、不同步）。"""
     if not text:
         return True
-    for kw in TEST_KEYWORDS:
-        if kw in text:
+    low = (text or "").lower()
+    for kw in TEST_KEYWORDS + SKIP_KEYWORDS:
+        if kw.lower() in low:
             return True
     return False
 
