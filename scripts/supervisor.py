@@ -107,6 +107,8 @@ PERIODIC = [
 
 # 每日定点任务：(名称, [(时, 分), ...], 脚本参数)
 DAILY_AT = [
+    # 交易日 08:45 盘前播报；启动后 30 分钟内仍允许补发，避免登录稍晚而漏播。
+    ("summary_premarket", [(8, 45)], ["scripts/market_summary.py", "--premarket"]),
     # ("summary_lunch", [(11, 35)], ["scripts/market_summary.py", "--lunch"]),  # 暂停：每日午间汇总
     ("sync_preclose", [(14, 55)], ["scripts/sync_feishu_auto.py"]),
     # ("summary_close", [(15, 5)], ["scripts/market_summary.py"]),  # 暂停：每日收盘汇总

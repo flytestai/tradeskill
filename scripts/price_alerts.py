@@ -307,7 +307,7 @@ def check_alerts(dry_run=False, quiet=False):
             print(f"[DRY] {msg}")
         else:
             try:
-                subprocess.run([BASH, os.path.join(SKILL_DIR, "scripts", "notify_group.sh"), msg],
+                subprocess.run([BASH, os.path.join(SKILL_DIR, "scripts", "notify_feishu.sh"), msg],
                                capture_output=True, timeout=30, cwd=SKILL_DIR)
                 print(f"[ALERT] 已发送提醒: {name} {cond_txt} {rng}")
             except Exception as e:

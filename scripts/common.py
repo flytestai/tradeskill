@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """公共工具：bash 路径、节假日、文本归一化、DB 连接（消除各脚本重复）。"""
+import json
 import os
 import re
 import sqlite3
@@ -146,3 +147,81 @@ def connect_db(db_path):
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA busy_timeout=5000")
     return conn
+
+
+def _native_lark_cli():
+    appdata = os.environ.get("APPDATA", "")
+    if not appdata:
+        return ""
+    path = os.path.join(appdata, "bee_ai_test", "agent-runtime", "npm-global",
+                        "node_modules", "@larksuite", "cli", "bin", "lark-cli.exe")
+    return path if os.path.exists(path) else ""
+
+
+def _card_body_sections(markdown):
+    sections, current = [], []
+    for line in (markdown or "").splitlines():
+        if line.strip() == "---":
+            if current:
+                sections.append("\\n".join(current).strip())
+                current = []
+            continue
+        if not line.strip():
+            if current:
+                sections.append("\\n".join(current).strip())
+                current = []
+            continue
+        current.append(line)
+    if current:
+        sections.append("\\n".join(current).strip())
+    return [s for s in sections if s]
+
+
+def build_card(markdown, title, subtitle="", template="blue"):
+    """构造只读 Card 2.0 分区卡片，组消息和私信共用。"""
+    elements = []
+    for idx, section in enumerate(_card_body_sections(markdown)):
+        if "免责声明" in section:
+            elements.append({"tag": "markdown", "content": section.replace("\\n", "<br>"),
+                             "text_size": "notation"})
+            continue
+        backgrounds = [("blue-50", "blue-100"), ("grey-50", "grey-200"),
+                       ("violet-50", "violet-100")]
+        background, border = backgrounds[idx % len(backgrounds)]
+        elements.append({
+            "tag": "interactive_container", "width": "fill", "has_border": True,
+            "border_color": border, "corner_radius": "8px", "background_style": background,
+            "padding": "12px 12px 12px 12px", "vertical_spacing": "4px",
+            "elements": [{"tag": "markdown", "content": section.replace("\\n", "<br>")}],
+        })
+    return {
+        "schema": "2.0", "config": {"wide_screen_mode": True},
+        "header": {"title": {"tag": "plain_text", "content": title},
+                   "subtitle": {"tag": "plain_text", "content": subtitle},
+                   "template": template,
+                   "icon": {"tag": "standard_icon", "token": "myai_colorful"}},
+        "body": {"direction": "vertical", "padding": "12px 12px 20px 12px",
+                 "vertical_spacing": "8px", "elements": elements},
+    }
+
+
+def send_card(markdown, chat_id=None, user_id=None, title="通知", subtitle="", template="blue", idem_key=""):
+    """发送 Card 2.0，返回 (成功, 错误文本)。"""
+    native = _native_lark_cli()
+    if not native or not (chat_id or user_id):
+        return False, "native lark-cli 或收件人缺失"
+    args = [native, "im", "+messages-send"]
+    args += ["--chat-id", chat_id] if chat_id else ["--user-id", user_id]
+    args += ["--as", "bot", "--msg-type", "interactive",
+             "--content", json.dumps(build_card(markdown, title, subtitle, template), ensure_ascii=False),
+             "--json"]
+    if idem_key:
+        args += ["--idempotency-key", idem_key[:50]]
+    try:
+        result = subprocess.run(args, capture_output=True, text=True, timeout=45)
+        data = json.loads(result.stdout or "{}")
+        if result.returncode == 0 and data.get("ok"):
+            return True, ""
+        return False, (result.stderr or result.stdout or "")[:300]
+    except Exception as exc:
+        return False, str(exc)[:300]

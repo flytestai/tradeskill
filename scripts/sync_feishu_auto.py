@@ -39,7 +39,7 @@ from datetime import datetime, timezone, timedelta
 
 from records_hash import content_hash
 from ocr_image import ocr
-from common import find_bash, is_trading_day as _c_is_trading_day, is_trading_time as _c_is_trading_time, is_group_sync_time as _c_is_group_sync_time, load_holidays, pythonw_path
+from common import find_bash, send_card, is_trading_day as _c_is_trading_day, is_trading_time as _c_is_trading_time, is_group_sync_time as _c_is_group_sync_time, load_holidays, pythonw_path
 
 SKILL_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DB_PATH = os.path.join(SKILL_DIR, "data", "kol_opinions.db")
@@ -465,48 +465,16 @@ def strip_vip_markers(text):
 
 
 def push_vip_to_group(text, ct):
-    """VIP 消息推送到群（荔枝种植交流群），返回是否成功"""
-    try:
-        # 去掉正文里重复的 VIP 标记，让排版更干净
-        body = strip_vip_markers(text)
-        msg = ("👑 VIP尊享·仅 TA 的真爱粉可见\n"
-               f"\n"
-               f"🕐{fmt_vip_time(ct)}\n"
-               f"\n"
-               f"{body}")
-        # 写入临时文件（避免命令行传中文/多行在 Windows 下编码损坏）
-        tmp = os.path.join(SKILL_DIR, "data", "_vip_push_tmp.txt")
-        with open(tmp, "w", encoding="utf-8") as f:
-            f.write(msg)
-        # 用 BASH -c 内联执行，捕获输出判断是否成功（lark-cli 返回 ok:true 即成功）；失败重试 3 次
-        # 幂等键：同一(内容+时间)只发一次，防止重试/补推重复发
-        idem_key = "vip_" + content_hash(text + "|" + (ct or ""))
-        cmd = ('timeout -k 3 60 lark-cli im +messages-send '
-               '--chat-id %s '
-               '--idempotency-key %s '
-               '--as bot --markdown "$(cat data/_vip_push_tmp.txt)"' % (VIP_PUSH_CHAT_ID, idem_key))
-        ok = False
-        last_err = ""
-        for attempt in range(3):
-            r = subprocess.run([BASH, "-c", cmd], capture_output=True, timeout=90, cwd=SKILL_DIR)
-            out = (r.stdout or b"") + (r.stderr or b"")
-            if b'"ok": true' in out or b'"ok":true' in out:
-                ok = True
-                break
-            last_err = out.decode("utf-8", "ignore")[:200]
-            if attempt < 2:
-                time.sleep(2)
-        try:
-            os.remove(tmp)
-        except Exception:
-            pass
-        if not ok:
-            log_error("VIP 消息推送失败: %s | err=%s" % (ct, last_err))
-            alert_feishu("VIP推送失败", "🔒 **【VIP推送告警】**\n有 VIP 消息推送到「荔枝种植交流群」失败，将在后续轮次自动补推。\n🕐 %s" % ct)
-        return ok
-    except Exception as e:
-        log_error("VIP 推送异常: %s" % e)
-        return False
+    """VIP 消息以 Card 2.0 推送到荔枝群。"""
+    body = strip_vip_markers(text)
+    msg = "👑 **VIP尊享·仅 TA 的真爱粉可见**\n\n🕐 %s\n\n%s" % (fmt_vip_time(ct), body)
+    idem_key = "vip_" + content_hash(text + "|" + (ct or ""))
+    ok, err = send_card(msg, chat_id=VIP_PUSH_CHAT_ID, title="VIP观点推送",
+                        subtitle=fmt_vip_time(ct), template="violet", idem_key=idem_key)
+    if not ok:
+        log_error("VIP 消息推送失败: %s | err=%s" % (ct, err))
+        alert_feishu("VIP推送失败", "🔒 **【VIP推送告警】**\nVIP观点卡片推送失败，将在后续轮次自动补推。\n🕐 %s" % ct)
+    return ok
 
 
 def _send_image(image_path, ct, chat_id, idem_prefix, log_label):
@@ -541,40 +509,19 @@ def _send_image(image_path, ct, chat_id, idem_prefix, log_label):
 
 
 def push_to_group(text, ct, is_vip=False, image_path="", chat_id="", idem_prefix="", log_label=""):
-    """把 wu2198 发言转发到指定群（VIP+公开+图片），返回 True/False/'skip'。"""
+    """把 wu2198 发言转发到指定群（文字用 Card 2.0，图片保持图片消息）。"""
     try:
         if image_path:
             return _send_image(image_path, ct, chat_id, idem_prefix, log_label)
         body = strip_vip_markers(text)
-        if is_vip:
-            msg = ("👑 VIP尊享·仅 TA 的真爱粉可见\n\n🕐%s\n\n%s\n\n" % (fmt_vip_time(ct), body))
-        else:
-            msg = ("📣 公开微博\n\n🕐%s\n\n%s\n\n" % (fmt_vip_time(ct), body))
-        tmp = os.path.join(SKILL_DIR, "data", "_forward_push_tmp.txt")
-        with open(tmp, "w", encoding="utf-8") as f:
-            f.write(msg)
+        title = "VIP观点" if is_vip else "公开微博"
+        msg = ("🕐 %s\n\n%s" % (fmt_vip_time(ct), body))
         idem_key = "%s_" % idem_prefix + content_hash(text + "|" + (ct or ""))
-        cmd = ('timeout -k 3 60 lark-cli im +messages-send '
-               '--chat-id %s '
-               '--idempotency-key %s '
-               '--as bot --markdown "$(cat data/_forward_push_tmp.txt)"' % (chat_id, idem_key))
-        ok = False
-        last_err = ""
-        for attempt in range(3):
-            r = subprocess.run([BASH, "-c", cmd], capture_output=True, timeout=90, cwd=SKILL_DIR)
-            out = (r.stdout or b"") + (r.stderr or b"")
-            if b'"ok": true' in out or b'"ok":true' in out:
-                ok = True
-                break
-            last_err = out.decode("utf-8", "ignore")[:200]
-            if attempt < 2:
-                time.sleep(2)
-        try:
-            os.remove(tmp)
-        except Exception:
-            pass
+        ok, err = send_card(msg, chat_id=chat_id, title=title,
+                            subtitle=fmt_vip_time(ct),
+                            template="violet" if is_vip else "blue", idem_key=idem_key)
         if not ok:
-            log_error("%s转发失败: %s | err=%s" % (log_label, ct, last_err))
+            log_error("%s转发失败: %s | err=%s" % (log_label, ct, err))
         return ok
     except Exception as e:
         log_error("%s转发异常: %s" % (log_label, e))
