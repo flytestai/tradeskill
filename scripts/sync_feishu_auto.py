@@ -464,12 +464,15 @@ def strip_vip_markers(text):
     return t.strip()
 
 
+VIP_CARD_TITLE = "👑 VIP 尊享・仅 TA 的真爱粉可见"
+
+
 def push_vip_to_group(text, ct):
-    """VIP 消息以 Card 2.0 推送到荔枝群。"""
+    """VIP 消息以 Card 2.0 推送到荔枝群（标题统一为真爱粉可见，时间只在 subtitle 显示一次）。"""
     body = strip_vip_markers(text)
-    msg = "👑 **VIP尊享·仅 TA 的真爱粉可见**\n\n🕐 %s\n\n%s" % (fmt_vip_time(ct), body)
+    msg = body
     idem_key = "vip_" + content_hash(text + "|" + (ct or ""))
-    ok, err = send_card(msg, chat_id=VIP_PUSH_CHAT_ID, title="VIP观点推送",
+    ok, err = send_card(msg, chat_id=VIP_PUSH_CHAT_ID, title=VIP_CARD_TITLE,
                         subtitle=fmt_vip_time(ct), template="violet", idem_key=idem_key)
     if not ok:
         log_error("VIP 消息推送失败: %s | err=%s" % (ct, err))
@@ -509,15 +512,23 @@ def _send_image(image_path, ct, chat_id, idem_prefix, log_label):
 
 
 def push_to_group(text, ct, is_vip=False, image_path="", chat_id="", idem_prefix="", log_label=""):
-    """把 wu2198 发言转发到指定群（文字用 Card 2.0，图片保持图片消息）。"""
+    """把 wu2198 发言转发到指定群（文字用 Card 2.0，图片保持图片消息）。
+
+    VIP 卡片标题统一为「👑 VIP 尊享・仅 TA 的真爱粉可见」；时间只在 subtitle 显示一次，
+    正文不再重复时间行。两群用不同卡片配色区分：荔枝紫色、复盘青绿。
+    """
     try:
         if image_path:
             return _send_image(image_path, ct, chat_id, idem_prefix, log_label)
         body = strip_vip_markers(text)
-        labels = {"litchi": ("荔枝·VIP观点", "violet"), "review": ("复盘·VIP观点", "turquoise")}
-        title, template = labels.get(idem_prefix, ("VIP观点" if is_vip else "公开微博",
-                                                   "violet" if is_vip else "blue"))
-        msg = ("🕐 %s\n\n%s" % (fmt_vip_time(ct), body))
+        templates = {"litchi": "violet", "review": "turquoise"}
+        if is_vip:
+            title = VIP_CARD_TITLE
+            msg = body
+        else:
+            title = "📣 公开微博"
+            msg = body
+        template = templates.get(idem_prefix, "violet" if is_vip else "blue")
         idem_key = "%s_" % idem_prefix + content_hash(text + "|" + (ct or ""))
         ok, err = send_card(msg, chat_id=chat_id, title=title,
                             subtitle=fmt_vip_time(ct),
