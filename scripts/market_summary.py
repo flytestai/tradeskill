@@ -172,6 +172,25 @@ def query_ndx_quote():
     return None
 
 
+def query_etf_amount():
+    """读取纳指ETF易方达（159696）当日成交额（元），失败返回 None。"""
+    url = "https://qt.gtimg.cn/q=sz159696"
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"}, method="GET")
+        with urllib.request.urlopen(req, timeout=15) as r:
+            text = r.read().decode("gbk", "replace")
+        for line in text.split(";"):
+            if '="' not in line:
+                continue
+            _, body = line.split('="', 1)
+            parts = body.rstrip('"').split("~")
+            if len(parts) > 37 and parts[37]:
+                return float(parts[37]) * 1e4  # 腾讯返回万元
+    except Exception as e:
+        print("[WARN] 纳指ETF成交额查询失败: %s" % e)
+    return None
+
+
 def query_ndx_risk():
     """读取公开Yahoo日线，计算ATR14及短中期实现波动率。失败时返回空。"""
     url = "https://query1.finance.yahoo.com/v8/finance/chart/%5ENDX?range=180d&interval=1d"
@@ -705,6 +724,7 @@ def build_premarket_message(intraday=False):
     ndx_levels = query_ndx_levels()
     risk_info = query_ndx_risk()
     etf = query_ndx_etf()
+    etf_amount = query_etf_amount() if intraday else None
 
     price = quote.get("price") if quote else None
     pct = quote.get("pct") if quote else None
@@ -775,6 +795,9 @@ def build_premarket_message(intraday=False):
             "（上一交易日收盘）" if etf.get("price_is_fallback") else ""),
         "💰 **溢价率**：%s（%s）" % (
             fmt_optional(etf_premium, "%"), etf.get("premium_level", "数据缺失")),
+    ] + ([
+        "💵 **上午成交额**：%s" % (fmt_yi(etf_amount) if etf_amount else "--"),
+    ] if intraday else []) + [
         "",
         "⚡ **超短线（1～3日）**：%s｜建议仓位：%s" % (short_quant["action"], short_quant["layers"]),
         "🧮 **超短线评分**：%d/100" % short_quant["total"],
