@@ -514,12 +514,14 @@ def push_to_group(text, ct, is_vip=False, image_path="", chat_id="", idem_prefix
         if image_path:
             return _send_image(image_path, ct, chat_id, idem_prefix, log_label)
         body = strip_vip_markers(text)
-        title = "VIP观点" if is_vip else "公开微博"
+        labels = {"litchi": ("荔枝·VIP观点", "violet"), "review": ("复盘·VIP观点", "turquoise")}
+        title, template = labels.get(idem_prefix, ("VIP观点" if is_vip else "公开微博",
+                                                   "violet" if is_vip else "blue"))
         msg = ("🕐 %s\n\n%s" % (fmt_vip_time(ct), body))
         idem_key = "%s_" % idem_prefix + content_hash(text + "|" + (ct or ""))
         ok, err = send_card(msg, chat_id=chat_id, title=title,
                             subtitle=fmt_vip_time(ct),
-                            template="violet" if is_vip else "blue", idem_key=idem_key)
+                            template=template, idem_key=idem_key)
         if not ok:
             log_error("%s转发失败: %s | err=%s" % (log_label, ct, err))
         return ok
@@ -528,8 +530,8 @@ def push_to_group(text, ct, is_vip=False, image_path="", chat_id="", idem_prefix
         return False
 
 
-def forward_all_to_group(conn, chat_id, watermark_file, idem_prefix, log_label):
-    """把 wu2198 当天(及之后)的发言转发到指定群（VIP+公开+图片，跳过测试消息）。"""
+def forward_all_to_group(conn, chat_id, watermark_file, idem_prefix, log_label, vip_only=False):
+    """转发 wu2198 发言；vip_only=True 时只发送 VIP，公开微博仅推进水位不转发。"""
     if not chat_id:
         return
     today00 = datetime.now(timezone(timedelta(hours=8))).strftime("%Y-%m-%d 00:00")
@@ -550,6 +552,10 @@ def forward_all_to_group(conn, chat_id, watermark_file, idem_prefix, log_label):
         if content and is_test_message(content):
             last_ct = ct
             continue
+        if vip_only and not is_vip:
+            # 荔枝群只接收 VIP；公开微博直接跳过，但水位仍需前移，避免重复检查。
+            last_ct = ct
+            continue
         result = push_to_group(content or "", ct, is_vip=bool(is_vip), image_path=image_path or "",
                                chat_id=chat_id, idem_prefix=idem_prefix, log_label=log_label)
         if result == "skip":
@@ -568,12 +574,12 @@ def forward_all_to_group(conn, chat_id, watermark_file, idem_prefix, log_label):
 
 def forward_all_to_litchi_group(conn):
     """转发全部消息（VIP+公开）到荔枝种植交流群。"""
-    return forward_all_to_group(conn, VIP_PUSH_CHAT_ID, LITCHI_FORWARD_WATERMARK, "litchi", "荔枝群")
+    return forward_all_to_group(conn, VIP_PUSH_CHAT_ID, LITCHI_FORWARD_WATERMARK, "litchi", "荔枝群", vip_only=True)
 
 
 def forward_all_to_review_group(conn):
-    """转发全部消息（VIP+公开）到每日复盘群。"""
-    return forward_all_to_group(conn, REVIEW_CHAT_ID, REVIEW_FORWARD_WATERMARK, "review", "复盘群")
+    """把 VIP 消息转发到每日复盘群（公开微博不转发）。"""
+    return forward_all_to_group(conn, REVIEW_CHAT_ID, REVIEW_FORWARD_WATERMARK, "review", "复盘群", vip_only=True)
 
 
 def fetch_messages_since(lark_cli=None, chat_id=None, start_iso=None):
@@ -942,7 +948,7 @@ def run_once(args, skip_guard=False):
 
     if not args.dry_run:
         _commit_with_retry(conn)
-        # 4c/4d. 转发全部消息（VIP+公开）到荔枝群和每日复盘群
+        # 4c/4d. 仅把 VIP 消息转发到荔枝群和每日复盘群（公开微博不转发）
         forward_all_to_litchi_group(conn)
         forward_all_to_review_group(conn)
         # 5. 保存新水位（记录本次拉取到的最新群消息时间）
