@@ -311,6 +311,26 @@ def query_ndx_etf():
             except (TypeError, ValueError):
                 pass
     closes.sort(key=lambda x: x[0])
+    # 盘前A股尚未开盘时，"最新收盘价"可能为空；回退到最近一个交易日收盘。
+    price_is_fallback = False
+    if price is None and closes:
+        price = closes[-1][1]
+        price_is_fallback = True
+    if price_is_fallback:
+        pct = None
+        if len(closes) >= 2 and closes[-2][1]:
+            pct = (closes[-1][1] / closes[-2][1] - 1) * 100
+        if ma is None:
+            ma_values = []
+            for key, value in item.items():
+                if key.startswith("ma["):
+                    try:
+                        ma_values.append((key, float(value)))
+                    except (TypeError, ValueError):
+                        pass
+            ma_values.sort(key=lambda x: x[0])
+            if ma_values:
+                ma = ma_values[-1][1]
     trend5 = None
     trend20 = None
     if len(closes) >= 2 and closes[0][1] > 0:
@@ -354,6 +374,7 @@ def query_ndx_etf():
         "code": "159696",
         "price": price,
         "pct": pct,
+        "price_is_fallback": price_is_fallback,
         "trend5": trend5,
         "trend20": trend20,
         "ma": ma,
@@ -675,7 +696,7 @@ def quant_evaluation(quote, valuation, high_info, levels, etf, risk_info=None):
     }
 
 
-def build_premarket_message():
+def build_premarket_message(intraday=False):
     """构建交易日盘前播报，区分纳指指数信号与 ETF 实际交易评估。"""
     now = datetime.now(timezone(timedelta(hours=8)))
     quote = query_ndx_quote()
@@ -735,7 +756,7 @@ def build_premarket_message():
         risk_line = "⚠️ **波动风险**：ATR/波动率数据暂缺，建议控制仓位"
 
     lines = [
-        "📣 **【盘前播报】**",
+        "📣 **【盘中播报】**" if intraday else "📣 **【盘前播报】**",
         "🕐 **时间**：%s" % now.strftime("%Y-%m-%d %H:%M"),
         "",
         "🌙 **纳斯达克100（NDX）**",
@@ -747,10 +768,11 @@ def build_premarket_message():
             fmt_optional(high), period, fmt_optional(drawdown, "%")),
         "",
         "📦 **纳指ETF易方达（159696）**",
-        "📈 **行情走势**：%s（%s）｜近5日 %s｜近20日 %s｜MA5 %s" % (
+        "📈 **行情走势**：%s（%s）｜近5日 %s｜近20日 %s｜MA5 %s%s" % (
             fmt_optional(etf.get("price"), decimals=3), fmt_optional(etf.get("pct"), "%"),
             fmt_optional(etf.get("trend5"), "%"), fmt_optional(etf.get("trend20"), "%"),
-            fmt_optional(etf.get("ma"))),
+            fmt_optional(etf.get("ma")),
+            "（上一交易日收盘）" if etf.get("price_is_fallback") else ""),
         "💰 **溢价率**：%s（%s）" % (
             fmt_optional(etf_premium, "%"), etf.get("premium_level", "数据缺失")),
         "",
@@ -874,9 +896,11 @@ def is_trading_day():
     return d.strftime("%Y-%m-%d") not in load_holidays(SKILL_DIR)
 
 
-def build_message(lunch=False, premarket=False):
+def build_message(lunch=False, premarket=False, intraday=False):
     if premarket:
-        return build_premarket_message()
+        return build_premarket_message(intraday=False)
+    if intraday:
+        return build_premarket_message(intraday=True)
 
     now = datetime.now(timezone(timedelta(hours=8)))
     day = now.strftime("%Y-%m-%d")
@@ -1087,23 +1111,25 @@ def mark_sent(key):
 def main():
     ap = argparse.ArgumentParser(description="每日盘前/午间/收盘汇总（零 token 后端版）")
     ap.add_argument("--premarket", action="store_true", help="交易日盘前播报（默认 08:45）")
+    ap.add_argument("--intraday", action="store_true", help="交易日盘中播报（默认 10:00，基于早盘行情）")
     ap.add_argument("--lunch", action="store_true", help="午间汇总（11:35 前发言）")
     ap.add_argument("--dry-run", action="store_true", help="只打印，不发群")
     args = ap.parse_args()
 
-    if args.premarket and args.lunch:
-        ap.error("--premarket 与 --lunch 不能同时使用")
+    chosen = [x for x in (args.premarket, args.intraday, args.lunch) if x]
+    if len(chosen) > 1:
+        ap.error("--premarket / --intraday / --lunch 只能选一个")
     if not is_trading_day():
         print("[SKIP] 非交易日，跳过")
         return
 
-    period = "premarket" if args.premarket else ("lunch" if args.lunch else "close")
+    period = "premarket" if args.premarket else "intraday" if args.intraday else ("lunch" if args.lunch else "close")
     key = "%s|%s" % (datetime.now(timezone(timedelta(hours=8))).strftime("%Y-%m-%d"), period)
     if already_sent(key):
         print("[SKIP] %s 已发送过，跳过（防重复）" % key)
         return
 
-    msg = build_message(lunch=args.lunch, premarket=args.premarket)
+    msg = build_message(lunch=args.lunch, premarket=args.premarket, intraday=args.intraday)
     if msg is None:
         sys.exit(1)
     if send(msg, dry_run=args.dry_run, tag=period) and not args.dry_run:
