@@ -385,7 +385,7 @@ python <skill-dir>/scripts/sync.py compact
 - **节假日**：法定休市日自动跳过；节假日列表在 `data/holidays.txt`（每行一个日期，每年年初更新），脚本内另有硬编码兜底
 - **增量拉取**：只记住「最后一次拉取的群消息时间」（水位，存于 `sync/feishu_sync_state.json`，随 GitHub 同步，多设备共享一致水位），仅拉取该时间之后的新消息
 - **去重**：只按 `content_hash`（归一化正文 md5，图片按 image_key）+ 唯一索引精确去重；增量同步依据水位（仅拉取水位之后的新消息）；测试消息自动跳过
-- **VIP 消息实时推送**：内容含 `【仅TA的真爱粉可见】` 的消息判定为 VIP 消息，入库后立即以 Card 2.0 卡片推送到「**荔枝种植交流群**」；推送失败会记录并自动补推，同时发私信告警。VIP 标记词可在 `local_config.env` 用 `VIP_MARKERS`（逗号分隔）覆盖
+- **VIP 消息实时推送**：内容含 `【仅TA的真爱粉可见】` 的消息判定为 VIP 消息，入库后立即以 Card 2.0 卡片推送到「**荔枝种植交流群**」（紫色标题「荔枝·VIP观点」）和「**每日复盘群**」（青绿标题「复盘·VIP观点」）；两个群均只发 VIP，公开微博不再转发。推送失败会记录并自动补推，同时发私信告警。VIP 标记词可在 `local_config.env` 用 `VIP_MARKERS`（逗号分隔）覆盖
 - **仓位自动提取**：发言中含「持仓N米 / 清仓」时自动写入 `position_size/position_action`（配合 `position_monitor.py --notify` 盘中每 5 分钟监控仓位变化）
 - **图片 OCR（可选）**：加 `--download-images` 时下载图片并调用 tesseract 识别文字写入 `extracted_viewpoints`（需自行安装 tesseract 中文语言包，未装则静默跳过）
 - **入库 + 推送**：增量写入 `kol_opinions.db`；水位只按机器人消息前移（避免群里闲聊触发高频推送）；有新增时自动导出 JSON 并推送到 GitHub（推送前会先 pull 合并，避免多设备覆盖）
