@@ -122,8 +122,28 @@ def fmt_msg(stock, point, desc, action):
             f"💡 **操作**：{action}")
 
 
+def alerts_enabled():
+    """关键位提醒总开关：local_config.env 里 ALERT_KEY_LEVELS=off 时彻底关闭。"""
+    try:
+        with open(os.path.join(SKILL_DIR, "data", "local_config.env"), encoding="utf-8") as f:
+            for line in f:
+                if line.strip().startswith("ALERT_KEY_LEVELS="):
+                    return line.strip().split("=", 1)[1].strip().lower() not in ("off", "0", "false", "no")
+    except Exception:
+        pass
+    return True
+
+
 def alert(key, state, msg="", dry_run=False):
     """调用 alert_once.sh（状态变化才提醒）"""
+    if not alerts_enabled():
+        # 关键位提醒已关闭：仍维护状态，便于重新开启后不误报，但不发送任何消息。
+        cmd = [BASH, ALERT_ONCE, key, state, ""]
+        if dry_run:
+            print(f"  [DRY][DISABLED] {key} -> {state}")
+            return
+        subprocess.run(cmd, capture_output=True, cwd=SKILL_DIR)
+        return
     cmd = [BASH, ALERT_ONCE, key, state, msg]
     if dry_run:
         print(f"  [DRY] {key} -> {state}  {msg[:40] if msg else '(重置)'}")
