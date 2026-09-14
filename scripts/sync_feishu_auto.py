@@ -521,7 +521,7 @@ def push_to_group(text, ct, is_vip=False, image_path="", chat_id="", idem_prefix
         if image_path:
             return _send_image(image_path, ct, chat_id, idem_prefix, log_label)
         body = strip_vip_markers(text)
-        templates = {"litchi": "violet", "review": "turquoise"}
+        templates = {"litchi": "violet", "review": "red"}
         if is_vip:
             title = VIP_CARD_TITLE
             msg = body

@@ -177,17 +177,26 @@ def _card_body_sections(markdown):
     return [s for s in sections if s]
 
 
+CARD_PALETTES = {
+    "blue": [("blue-50", "blue-100"), ("grey-50", "grey-200"), ("violet-50", "violet-100")],
+    "violet": [("violet-50", "violet-100"), ("grey-50", "grey-200"), ("violet-50", "violet-100")],
+    "turquoise": [("turquoise-50", "turquoise-100"), ("grey-50", "grey-200"),
+                  ("turquoise-50", "turquoise-100")],
+    # 优雅红：浅红底 + 暖灰交替，避免大面积高饱和红造成压迫感。
+    "red": [("red-50", "red-100"), ("grey-50", "grey-200"), ("red-50", "red-100")],
+}
+
+
 def build_card(markdown, title, subtitle="", template="blue"):
     """构造只读 Card 2.0 分区卡片，组消息和私信共用。"""
     elements = []
+    palette = CARD_PALETTES.get(template, CARD_PALETTES["blue"])
     for idx, section in enumerate(_card_body_sections(markdown)):
         if "免责声明" in section:
             elements.append({"tag": "markdown", "content": section.replace("\\n", "<br>"),
                              "text_size": "notation"})
             continue
-        backgrounds = [("blue-50", "blue-100"), ("grey-50", "grey-200"),
-                       ("violet-50", "violet-100")]
-        background, border = backgrounds[idx % len(backgrounds)]
+        background, border = palette[idx % len(palette)]
         elements.append({
             "tag": "interactive_container", "width": "fill", "has_border": True,
             "border_color": border, "corner_radius": "8px", "background_style": background,
