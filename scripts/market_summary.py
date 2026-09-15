@@ -361,13 +361,28 @@ def ma_alignment(closes):
     if ma60 and ma60_prev:
         ma60_slope = (ma60 / ma60_prev - 1) * 100
 
-    # 价格相对 MA60 的位置（偏离百分比）：正值在上方。
+    # MA5 / MA20 斜率：超短线结构判断用（1~3 日节奏）。
+    ma5_slope = None
+    ma5_prev = ma(5, offset=5) if len(vals) >= 10 else None
+    if ma5 and ma5_prev:
+        ma5_slope = (ma5 / ma5_prev - 1) * 100
+
+    ma20_slope = None
+    ma20_prev = ma(20, offset=10) if len(vals) >= 30 else None
+    if ma20 and ma20_prev:
+        ma20_slope = (ma20 / ma20_prev - 1) * 100
+
+    # 价格相对 MA60 / MA20 的位置（偏离百分比）：正值在上方。
     ma60_dev = None
     if ma60:
         ma60_dev = (price / ma60 - 1) * 100
+    ma20_dev = None
+    if ma20:
+        ma20_dev = (price / ma20 - 1) * 100
 
     return {"ma5": ma5, "ma20": ma20, "ma60": ma60, "state": state,
             "ma60_slope": ma60_slope, "ma60_dev": ma60_dev,
+            "ma5_slope": ma5_slope, "ma20_slope": ma20_slope, "ma20_dev": ma20_dev,
             "above_ma20": (price > ma20) if ma20 else None,
             "above_ma60": (price > ma60) if ma60 else None}
 
@@ -427,6 +442,9 @@ def query_ndx_risk():
             "above_ma60": align.get("above_ma60"),
             "ma60_slope": align.get("ma60_slope"),
             "ma60_dev": align.get("ma60_dev"),
+            "ma5_slope": align.get("ma5_slope"),
+            "ma20_slope": align.get("ma20_slope"),
+            "ma20_dev": align.get("ma20_dev"),
             "ma20": align.get("ma20"),
             "ma60": align.get("ma60"),
             "data_date": str((result.get("meta") or {}).get("regularMarketTime", "")),
@@ -725,14 +743,39 @@ def short_quant_evaluation(quote, high_info, levels, etf, risk_info=None, volume
         overseas += 5
     overseas = min(overseas, 25)
 
-    trend = 0
+    # 超短线趋势35分，按 1~3 日节奏拆解：
+    #   MA5斜率10 + 价格vs MA5(12) + MA20位置8 + 近5日动量5
+    # 核心目的：区分「强势回调」（跌破MA5但站在MA20上且MA20上行）与「弱势破位」。
+    ma5_slope = (risk_info or {}).get("ma5_slope")
+    ma20_slope = (risk_info or {}).get("ma20_slope")
+    above_ma20 = (risk_info or {}).get("above_ma20")
+
+    slope_s = 0
+    if ma5_slope is not None:
+        slope_s = 10 if ma5_slope >= 0.5 else 6 if ma5_slope >= 0 else 2
+
+    price_vs_ma5 = 0
     if etf_price is not None and etf_ma is not None:
-        trend += 15 if etf_price >= etf_ma else 4
+        price_vs_ma5 = 12 if etf_price >= etf_ma else 3
+
+    ma20_s = 4
+    if above_ma20 is not None and ma20_slope is not None:
+        if above_ma20 and ma20_slope > 0:
+            ma20_s = 8     # 站上MA20且MA20上行：短线结构完好
+        elif above_ma20:
+            ma20_s = 5     # 站上但MA20走平/下行：支撑力度一般
+        elif ma20_slope > 0:
+            ma20_s = 3     # 跌破但MA20仍上行：强势回调
+        else:
+            ma20_s = 0     # 跌破且MA20下行：弱势破位
+    elif above_ma20 is not None:
+        ma20_s = 6 if above_ma20 else 2
+
+    momentum_s = 0
     if trend5 is not None:
-        trend += 10 if trend5 >= 2 else 7 if trend5 >= 0 else 4 if trend5 > -3 else 0
-    if trend20 is not None and trend20 >= 0:
-        trend += 5
-    trend = min(trend, 30)
+        momentum_s = 5 if trend5 >= 2 else 3 if trend5 >= 0 else 2 if trend5 > -3 else 0
+
+    trend = min(35, slope_s + price_vs_ma5 + ma20_s + momentum_s)
 
     execution = 0
     if premium is not None:
@@ -801,9 +844,9 @@ def short_quant_evaluation(quote, high_info, levels, etf, risk_info=None, volume
     scores = {"动量": overseas, "ETF趋势": trend, "溢价执行": execution,
               "关键位": position, "量能": volume_score,
               "技术": rsi_adj + ma_adj, "风险": risk}
-    # 各维度上限：动量25+趋势30+溢价28+关键位15+量能18+技术10+风险5 = 131，归一化到 100。
+    # 各维度上限：动量25+趋势35+溢价28+关键位15+量能18+技术10+风险5 = 136，归一化到 100。
     raw_total = sum(scores.values())
-    total = min(100, round(raw_total / 131 * 100))
+    total = min(100, round(raw_total / 136 * 100))
     if total >= 70:
         action, layers = "加仓", "1～2层（20%～40%）"
     elif total >= 55:
@@ -817,6 +860,12 @@ def short_quant_evaluation(quote, high_info, levels, etf, risk_info=None, volume
     elif risk < 4 and action == "加仓":
         action, layers = "试仓", "1层（20%）"
     short_risk_cap = 2 if risk >= 4 else 1 if risk >= 2 else 0
+    # 弱势破位（跌破MA20 且 MA20 下行）：超短线不允许加仓，最多观望。
+    short_broken = (above_ma20 is False and ma20_slope is not None and ma20_slope <= 0)
+    if short_broken:
+        short_risk_cap = 0
+        if action in ("加仓", "试仓"):
+            action, layers = "观望", "0～1层（0%～20%）"
     short_layer_count = 2 if action == "加仓" else 1 if action == "试仓" else 1 if action == "观望" else 0
     if action == "观望" and short_risk_cap == 0:
         # 观望 + 风险偏高：允许 0～1 层的观察仓，不直接压成 0～0 层。
@@ -831,6 +880,10 @@ def short_quant_evaluation(quote, high_info, levels, etf, risk_info=None, volume
         reasons.append("ETF近20日偏弱")
     if etf_price is not None and etf_ma is not None and etf_price < etf_ma:
         reasons.append("ETF低于MA5")
+    if above_ma20 is False and ma20_slope is not None and ma20_slope > 0:
+        reasons.append("跌破MA20但MA20上行（强势回调）")
+    elif short_broken:
+        reasons.append("跌破MA20且MA20下行（弱势破位）")
     if premium is not None and premium > 5:
         reasons.append("溢价偏高但超短线不作绝对否决")
     if price and support20 and price / support20 <= 1.03:
