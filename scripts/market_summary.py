@@ -91,18 +91,44 @@ def query_index(index):
 TENCENT_QUOTE_URL = "https://qt.gtimg.cn/q=usNDX"
 EASTMONEY_QUOTE_URL = "https://push2.eastmoney.com/api/qt/stock/get"
 
-# 名称白名单：只有明确是「纳斯达克100 / NDX」的返回才被接受，
-# 避免把纳斯达克综合指数（IXIC，约26000）误当成纳斯达克100（NDX，约29000）。
-NDX_NAME_HINTS = ("纳斯达克100", "nasdaq 100", "nasdaq-100", "ndx")
+# 三层标的校验：代码 > 黑名单 > 白名单。
+# 关键点：「纳斯达克」是「纳斯达克100」的子串，若只做包含匹配，
+# 纳斯达克综合指数（IXIC，约26000）会被误当成纳斯达克100（NDX，约29000），
+# 因此黑名单必须先于白名单判定。
+NDX_CODE_OK = (".ndx", "ndx", "ndx100", ".ndx100")
+NDX_CODE_BAD = (".ixic", "ixic", "comp", ".comp", "ccmp")
+NDX_NAME_BAD = (
+    "综合", "composite", "ixic", "comp",
+    "纳斯达克综合", "nasdaq composite", "道琼斯", "dow", "标普", "s&p",
+)
+NDX_NAME_OK = (
+    "纳斯达克100", "纳斯达克 100", "nasdaq 100", "nasdaq-100", "nasdaq100",
+    "ndx", "纳斯达克一百",
+)
 
 
-def _is_ndx_name(name):
-    low = (name or "").strip().lower()
-    if not low:
+def _is_ndx(code, name):
+    """三层校验：代码优先，其次黑名单否决，最后白名单放行。"""
+    low_code = (code or "").strip().lower()
+    low_name = (name or "").strip().lower()
+
+    # 第 1 层：代码字段（最可靠）
+    if low_code:
+        if any(c in low_code for c in NDX_CODE_BAD):
+            return False
+        if any(c in low_code for c in NDX_CODE_OK):
+            return True
+
+    # 第 2 层：名称黑名单（必须优先于白名单）
+    if low_name and any(b in low_name for b in NDX_NAME_BAD):
         return False
-    if "综合" in low or "composite" in low or "ixic" in low:
-        return False
-    return any(h in low for h in NDX_NAME_HINTS)
+
+    # 第 3 层：名称白名单
+    if low_name and any(g in low_name for g in NDX_NAME_OK):
+        return True
+
+    # 三层都不命中：宁可放弃该数据源，也不用错误指数
+    return False
 
 
 def _query_ndx_eastmoney():
@@ -119,9 +145,10 @@ def _query_ndx_eastmoney():
     with urllib.request.urlopen(req, timeout=12) as r:
         data = json.loads(r.read().decode("utf-8", "replace")).get("data") or {}
     name = str(data.get("f58") or "")
-    if not _is_ndx_name(name):
-        # 标的名称不是纳斯达克100，宁可放弃该源，也不能用错指数数据。
-        raise ValueError("东方财富返回标的非纳斯达克100: %r" % name[:30])
+    code = str(data.get("f57") or "")
+    if not _is_ndx(code, name):
+        # 三层校验不通过（如返回纳斯达克综合指数），宁可放弃该源，也不用错数据。
+        raise ValueError("东方财富返回标的非纳斯达克100: code=%r name=%r" % (code[:12], name[:20]))
     raw_price = float(data.get("f43")) if data.get("f43") is not None else 0
     raw_prev = float(data.get("f60")) if data.get("f60") is not None else 0
     # 东方财富指数价格有时按百分之一返回，按量级自动归一化。
@@ -161,8 +188,9 @@ def _query_ndx_tencent():
         if len(parts) < 33:
             continue
         name = parts[1] if len(parts) > 1 else ""
-        if not _is_ndx_name(name):
-            raise ValueError("腾讯返回标的非纳斯达克100: %r" % name[:30])
+        code = parts[2] if len(parts) > 2 else ""
+        if not _is_ndx(code, name):
+            raise ValueError("腾讯返回标的非纳斯达克100: code=%r name=%r" % (code[:12], name[:20]))
         price = float(parts[3])
         prev_close = float(parts[4])
         return {
