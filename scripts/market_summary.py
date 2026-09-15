@@ -91,6 +91,19 @@ def query_index(index):
 TENCENT_QUOTE_URL = "https://qt.gtimg.cn/q=usNDX"
 EASTMONEY_QUOTE_URL = "https://push2.eastmoney.com/api/qt/stock/get"
 
+# 名称白名单：只有明确是「纳斯达克100 / NDX」的返回才被接受，
+# 避免把纳斯达克综合指数（IXIC，约26000）误当成纳斯达克100（NDX，约29000）。
+NDX_NAME_HINTS = ("纳斯达克100", "nasdaq 100", "nasdaq-100", "ndx")
+
+
+def _is_ndx_name(name):
+    low = (name or "").strip().lower()
+    if not low:
+        return False
+    if "综合" in low or "composite" in low or "ixic" in low:
+        return False
+    return any(h in low for h in NDX_NAME_HINTS)
+
 
 def _query_ndx_eastmoney():
     """东方财富公开行情备份；字段不可用时返回 None，不伪造数据。"""
@@ -105,6 +118,10 @@ def _query_ndx_eastmoney():
     )
     with urllib.request.urlopen(req, timeout=12) as r:
         data = json.loads(r.read().decode("utf-8", "replace")).get("data") or {}
+    name = str(data.get("f58") or "")
+    if not _is_ndx_name(name):
+        # 标的名称不是纳斯达克100，宁可放弃该源，也不能用错指数数据。
+        raise ValueError("东方财富返回标的非纳斯达克100: %r" % name[:30])
     raw_price = float(data.get("f43")) if data.get("f43") is not None else 0
     raw_prev = float(data.get("f60")) if data.get("f60") is not None else 0
     # 东方财富指数价格有时按百分之一返回，按量级自动归一化。
@@ -143,6 +160,9 @@ def _query_ndx_tencent():
         parts = body.rstrip('"').split("~")
         if len(parts) < 33:
             continue
+        name = parts[1] if len(parts) > 1 else ""
+        if not _is_ndx_name(name):
+            raise ValueError("腾讯返回标的非纳斯达克100: %r" % name[:30])
         price = float(parts[3])
         prev_close = float(parts[4])
         return {
@@ -161,8 +181,8 @@ def _query_ndx_tencent():
 
 
 def query_ndx_quote():
-    """东方财富 → 腾讯双源读取纳斯达克100行情。"""
-    for name, fn in (("东方财富", _query_ndx_eastmoney), ("腾讯", _query_ndx_tencent)):
+    """腾讯 → 东方财富双源读取纳斯达克100行情（带标的名称校验）。"""
+    for name, fn in (("腾讯", _query_ndx_tencent), ("东方财富", _query_ndx_eastmoney)):
         try:
             quote = fn()
             if quote:
@@ -330,15 +350,34 @@ def query_ndx_etf():
             except (TypeError, ValueError):
                 pass
     closes.sort(key=lambda x: x[0])
-    # 盘前A股尚未开盘时，"最新收盘价"可能为空；回退到最近一个交易日收盘。
+    # 盘前A股尚未开盘时，"最新收盘价/涨跌幅"可能为空或为0；回退到最近一个交易日收盘。
     price_is_fallback = False
     if price is None and closes:
         price = closes[-1][1]
         price_is_fallback = True
+    if pct is None or pct == 0:
+        # 盘前接口常把涨跌幅置 0，且当天会先落一条与前一交易日相同的占位收盘价。
+        # 这里跳过重复占位，用真正的两个相邻交易日还原涨跌幅。
+        last = len(closes) - 1
+        while last > 0 and closes[last][1] == closes[last - 1][1]:
+            last -= 1
+        if last >= 1 and closes[last - 1][1]:
+            pct = (closes[last][1] / closes[last - 1][1] - 1) * 100
+            price_is_fallback = True
+            if not price:
+                price = closes[last][1]
     if price_is_fallback:
-        pct = None
-        if len(closes) >= 2 and closes[-2][1]:
-            pct = (closes[-1][1] / closes[-2][1] - 1) * 100
+        if ma is None:
+            ma_values = []
+            for key, value in item.items():
+                if key.startswith("ma["):
+                    try:
+                        ma_values.append((key, float(value)))
+                    except (TypeError, ValueError):
+                        pass
+            ma_values.sort(key=lambda x: x[0])
+            if ma_values:
+                ma = ma_values[-1][1]
         if ma is None:
             ma_values = []
             for key, value in item.items():
@@ -534,7 +573,11 @@ def short_quant_evaluation(quote, high_info, levels, etf, risk_info=None):
         action, layers = "试仓", "1层（20%）"
     short_risk_cap = 2 if risk >= 4 else 1 if risk >= 2 else 0
     short_layer_count = 2 if action == "加仓" else 1 if action == "试仓" else 1 if action == "观望" else 0
-    short_layer_count = min(short_layer_count, short_risk_cap)
+    if action == "观望" and short_risk_cap == 0:
+        # 观望 + 风险偏高：允许 0～1 层的观察仓，不直接压成 0～0 层。
+        short_layer_count = 1
+    else:
+        short_layer_count = min(short_layer_count, short_risk_cap)
 
     reasons = []
     if trend5 is not None and trend5 < 0:
@@ -762,7 +805,9 @@ def build_premarket_message(intraday=False):
     else:
         final_action = "观望"
     final_layers = min(short_quant["layer_count"], quant["layer_count"])
-    final_cap = min(short_quant["risk_cap"], quant["risk_cap"])
+    # 上限是「最多允许几层」，取两个周期中较宽松者，且至少 1 层；
+    # 短周期单日风险分波动较大，不适合把整体上限直接压成 0 层。
+    final_cap = max(1, max(short_quant["risk_cap"], quant["risk_cap"]))
     final_layers_text = "0～%d层（0%%～%d%%）" % (final_layers, final_layers * 20)
     final_cap_text = "%d层（%d%%）" % (final_cap, final_cap * 20)
     risk_cap = 5 if risk_score >= 8 else 3 if risk_score >= 6 else 2 if risk_score >= 4 else 1
@@ -777,7 +822,6 @@ def build_premarket_message(intraday=False):
 
     lines = [
         "📣 **【盘中播报】**" if intraday else "📣 **【盘前播报】**",
-        "🕐 **时间**：%s" % now.strftime("%Y-%m-%d %H:%M"),
         "",
         "🌙 **纳斯达克100（NDX）**",
         "📈 **行情**：%s（%s）" % (fmt_optional(price), fmt_optional(pct, "%")),
