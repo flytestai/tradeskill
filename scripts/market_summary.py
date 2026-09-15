@@ -501,6 +501,19 @@ def query_ndx_etf():
             except (TypeError, ValueError):
                 pass
     closes.sort(key=lambda x: x[0])
+    # 主查询通常只返回约 20 个交易日；单独取 60 日序列，用于计算中期关键位。
+    if len(closes) < 60:
+        long_item = query_item("纳指ETF易方达近60日收盘价") or {}
+        merged = dict((k, v) for k, v in closes)
+        for key, value in long_item.items():
+            if not key.startswith("收盘价["):
+                continue
+            try:
+                merged[key] = float(value)
+            except (TypeError, ValueError):
+                pass
+        if len(merged) > len(closes):
+            closes = sorted(merged.items(), key=lambda x: x[0])
     # 盘前A股尚未开盘时，"最新收盘价/涨跌幅"可能为空或为0；回退到最近一个交易日收盘。
     price_is_fallback = False
     if price is None and closes:
@@ -1075,16 +1088,21 @@ def build_premarket_message(intraday=False):
     etf_level_lines = []
     if etf_price and etf_low20:
         etf_level_lines = [
-            "🎯 **ETF关键位**（可直接挂单）",
+            "🎯 **ETF关键位**",
             "↘️ %s（短线支撑，↓%s）｜跌破：暂停加仓" % (
                 fmt_optional(etf_low20, decimals=3), fmt_level_space(etf_low20, etf_price)),
             "⬆️ %s（短线阻力，↑%s）｜站稳：小仓加仓" % (
                 fmt_optional(etf_high20, decimals=3), fmt_level_space(etf_high20, etf_price)),
         ]
         if etf_low60:
-            etf_level_lines += [
+            etf_level_lines = [
+                etf_level_lines[0],
+                "↘️ %s（短线支撑，↓%s）｜跌破：暂停加仓" % (
+                    fmt_optional(etf_low20, decimals=3), fmt_level_space(etf_low20, etf_price)),
                 "↘️ %s（中期支撑，↓%s）｜跌破：降低仓位" % (
                     fmt_optional(etf_low60, decimals=3), fmt_level_space(etf_low60, etf_price)),
+                "⬆️ %s（短线阻力，↑%s）｜站稳：小仓加仓" % (
+                    fmt_optional(etf_high20, decimals=3), fmt_level_space(etf_high20, etf_price)),
                 "⬆️ %s（中期阻力，↑%s）｜站稳：趋势转强" % (
                     fmt_optional(etf_high60, decimals=3), fmt_level_space(etf_high60, etf_price)),
             ]
@@ -1140,7 +1158,7 @@ def build_premarket_message(intraday=False):
         "",
         risk_line,
         "",
-        "🎯 **纳指关键位**（判方向）",
+        "🎯 **纳指关键位**",
         "↘️ %s（短线支撑，↓%s）｜跌破：暂停加仓" % (support20, support20_space),
         "↘️ %s（中期支撑，↓%s）｜跌破：降低仓位" % (support60, support60_space),
         "⬆️ %s（短线阻力，↑%s）｜站稳+溢价≤5%%：小仓加仓" % (resistance20, resistance20_space),
@@ -1372,11 +1390,20 @@ def build_premarket_card(msg):
             "elements": [{"tag": "markdown", "content": section.replace("\\n", "<br>")}],
         })
     now = datetime.now(timezone(timedelta(hours=8))).strftime("%Y-%m-%d %H:%M")
+    # 标题按内容自动识别，避免盘中播报显示成「盘前播报」。
+    if "【盘中播报】" in (msg or ""):
+        card_title = "盘中播报"
+    elif "【午间汇总】" in (msg or ""):
+        card_title = "午间汇总"
+    elif "【每日收盘汇总】" in (msg or ""):
+        card_title = "收盘汇总"
+    else:
+        card_title = "盘前播报"
     return {
         "schema": "2.0",
         "config": {"wide_screen_mode": True},
         "header": {
-            "title": {"tag": "plain_text", "content": "盘前播报"},
+            "title": {"tag": "plain_text", "content": card_title},
             "subtitle": {"tag": "plain_text", "content": now},
             "template": "blue",
             "icon": {"tag": "standard_icon", "token": "myai_colorful"},
@@ -1403,7 +1430,9 @@ def send(msg, dry_run=False, tag="summary"):
         # 盘前播报统一私信，不再发送到群聊；优先使用 Card 2.0 分区卡片。
         if native and user_id:
             idem = "market_summary_private_%s_%s" % (tag, day)
-            card = build_premarket_card(msg) if (tag.startswith("premarket") or tag.startswith("pm_") or tag.startswith("card_")) else None
+            # 盘前/盘中等播报统一使用 Card 2.0；只有普通汇总类走 Markdown。
+            card_tags = ("premarket", "intraday", "pm_", "card_")
+            card = build_premarket_card(msg) if tag.startswith(card_tags) else None
             if card is not None:
                 args = [native, "im", "+messages-send", "--user-id", user_id,
                         "--as", "bot", "--idempotency-key", idem,
