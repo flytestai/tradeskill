@@ -220,6 +220,79 @@ def query_ndx_quote():
     return None
 
 
+def query_etf_volume():
+    """读取 ETF 当日成交额/成交量/量比/换手率，以及区间累计量能，用于量能判断。"""
+    out = {}
+    day = query_item("纳指ETF易方达今日成交额成交量") or {}
+    for key, val in day.items():
+        if not key.startswith("成交额["):
+            continue
+        try:
+            out["amount"] = float(val)
+        except (TypeError, ValueError):
+            pass
+    for key, val in day.items():
+        if not key.startswith("成交量["):
+            continue
+        try:
+            out["volume"] = float(val)
+        except (TypeError, ValueError):
+            pass
+    ratio, _ = _find_value(day, ("量比[",))
+    turnover, _ = _find_value(day, ("换手率[",))
+    amplitude, _ = _find_value(day, ("振幅[",))
+    out["volume_ratio"] = ratio
+    out["turnover"] = turnover
+    out["amplitude"] = amplitude
+
+    period = query_item("纳指ETF易方达近20日成交额成交量") or {}
+    total_amount = None
+    for key, val in period.items():
+        if key.startswith("成交额["):
+            try:
+                total_amount = float(val)
+            except (TypeError, ValueError):
+                pass
+    if total_amount is not None:
+        out["avg_amount_20d"] = total_amount / 20.0
+    return out
+
+
+def volume_evaluation(vol, intraday=False):
+    """量能评估：量比 + 成交额相对20日均值，输出强弱标签与评分影响。"""
+    ratio = (vol or {}).get("volume_ratio")
+    amount = (vol or {}).get("amount")
+    avg20 = (vol or {}).get("avg_amount_20d")
+    turnover = (vol or {}).get("turnover")
+
+    label, score_delta, note = "量能正常", 0, "量能与近期水平相当"
+    if ratio is not None:
+        if ratio >= 2:
+            label, score_delta = "显著放量", 2
+            note = "量比%.2f，资金关注度明显提升" % ratio
+        elif ratio >= 1.2:
+            label, score_delta = "温和放量", 1
+            note = "量比%.2f，量能小幅放大" % ratio
+        elif ratio <= 0.6:
+            label, score_delta = "明显缩量", -1
+            note = "量比%.2f，市场参与意愿偏低" % ratio
+        elif ratio <= 0.8:
+            label, score_delta = "小幅缩量", 0
+            note = "量比%.2f，量能略弱" % ratio
+    elif amount is not None and avg20:
+        rel = amount / avg20
+        if rel >= 1.5:
+            label, score_delta = "显著放量", 2
+            note = "成交额为20日均值%.2f倍" % rel
+        elif rel <= 0.7:
+            label, score_delta = "明显缩量", -1
+            note = "成交额为20日均值%.2f倍" % rel
+    if intraday:
+        note += "（盘中数据，全天量能待确认）"
+    return {"label": label, "score_delta": score_delta, "note": note,
+            "ratio": ratio, "turnover": turnover}
+
+
 def query_etf_amount():
     """读取纳指ETF易方达（159696）当日成交额（元），失败返回 None。"""
     url = "https://qt.gtimg.cn/q=sz159696"
@@ -239,8 +312,52 @@ def query_etf_amount():
     return None
 
 
+def rsi14(closes):
+    """标准 Wilder RSI14；样本不足返回 None。"""
+    vals = [float(c) for c in (closes or []) if c]
+    if len(vals) < 16:
+        return None
+    gains, losses = [], []
+    for i in range(1, len(vals)):
+        diff = vals[i] - vals[i - 1]
+        gains.append(max(diff, 0.0))
+        losses.append(max(-diff, 0.0))
+    avg_gain = sum(gains[:14]) / 14.0
+    avg_loss = sum(losses[:14]) / 14.0
+    for i in range(14, len(gains)):
+        avg_gain = (avg_gain * 13 + gains[i]) / 14.0
+        avg_loss = (avg_loss * 13 + losses[i]) / 14.0
+    if avg_loss == 0:
+        return 100.0
+    rs = avg_gain / avg_loss
+    return 100.0 - 100.0 / (1.0 + rs)
+
+
+def ma_alignment(closes):
+    """均线排列：MA5/MA20/MA60 多头、空头或纠缠，并给出价格与各均线关系。"""
+    vals = [float(c) for c in (closes or []) if c]
+    if len(vals) < 20:
+        return {}
+    def ma(n):
+        return sum(vals[-n:]) / n if len(vals) >= n else None
+    ma5, ma20, ma60 = ma(5), ma(20), ma(60)
+    price = vals[-1]
+    if ma5 and ma20 and ma60:
+        if ma5 > ma20 > ma60:
+            state = "多头排列"
+        elif ma5 < ma20 < ma60:
+            state = "空头排列"
+        else:
+            state = "均线纠缠"
+    else:
+        state = "样本不足"
+    return {"ma5": ma5, "ma20": ma20, "ma60": ma60, "state": state,
+            "above_ma20": (price > ma20) if ma20 else None,
+            "above_ma60": (price > ma60) if ma60 else None}
+
+
 def query_ndx_risk():
-    """读取公开Yahoo日线，计算ATR14及短中期实现波动率。失败时返回空。"""
+    """读取公开Yahoo日线，计算ATR14、短中期实现波动率、RSI14 与均线排列。失败时返回空。"""
     url = "https://query1.finance.yahoo.com/v8/finance/chart/%5ENDX?range=180d&interval=1d"
     try:
         req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"}, method="GET")
@@ -278,6 +395,8 @@ def query_ndx_risk():
             variance = sum((x - mean) ** 2 for x in values) / (len(values) - 1)
             return math.sqrt(variance) * math.sqrt(252) * 100
         vol5, vol20, vol60 = annual_vol(rets5), annual_vol(rets20), annual_vol(rets60)
+        rsi = rsi14([c for _, _, c in rows])
+        align = ma_alignment([c for _, _, c in rows])
         return {
             "atr14": atr14,
             "atr_pct": atr14 / rows[-1][2] * 100,
@@ -286,10 +405,14 @@ def query_ndx_risk():
             "vol20": vol20,
             "vol60": vol60,
             "vol_ratio": (vol5 / vol20) if vol5 is not None and vol20 else None,
+            "rsi14": rsi,
+            "ma_state": align.get("state"),
+            "above_ma20": align.get("above_ma20"),
+            "above_ma60": align.get("above_ma60"),
             "data_date": str((result.get("meta") or {}).get("regularMarketTime", "")),
         }
     except Exception as e:
-        print("[WARN] 纳斯达克100 ATR/波动率查询失败: %s" % e)
+        print("[WARN] 纳斯达克100 ATR/波动率/RSI查询失败: %s" % e)
         return {}
 
 
@@ -432,15 +555,40 @@ def query_ndx_etf():
                 pass
     premiums.sort(key=lambda x: x[0])
     premium_avg5 = (sum(v for _, v in premiums[-5:]) / min(5, len(premiums))) if premiums else None
+    # 溢价率历史分位：单看绝对值无法判断「高溢价是否已回落」，分位更可靠。
+    premium_pct = None
+    if premium is not None and len(premiums) >= 5:
+        values = [v for _, v in premiums]
+        below = sum(1 for v in values if v <= premium)
+        premium_pct = below / len(values) * 100
+
+    # ETF 自身关键位：可直接用于挂单，避免用户按指数点位手动换算（溢价率每天变化）。
+    # 注意：接口通常只返回约 20 个交易日收盘价，样本不足以支撑 60 日区间时
+    # 不重复展示中期关键位，避免出现「短中期数值完全相同」的误导。
+    etf_levels = {}
+    if closes:
+        window20 = [v for _, v in closes[-20:]]
+        window60 = [v for _, v in closes[-60:]]
+        if window20:
+            etf_levels["20日"] = {"low": min(window20), "high": max(window20)}
+        if len(window60) > len(window20):
+            etf_levels["60日"] = {"low": min(window60), "high": max(window60)}
 
     if premium is None:
         premium_level = "溢价率缺失"
         etf_action = "暂不判断"
         reason = "溢价率数据暂缺"
     elif premium >= 5:
-        premium_level = "高溢价"
-        etf_action = "不适合直接加仓"
-        reason = "溢价率超过5%，存在溢价回落风险，建议等待溢价收敛"
+        # 结合历史分位：绝对高但已在区间低位时，说明溢价正在收敛，可适度放宽。
+        if premium_pct is not None and premium_pct <= 30:
+            premium_level = "高溢价（回落中）"
+            etf_action = "谨慎小仓"
+            reason = "溢价率虽高于5%，但处于近%s日低位（%.0f%%分位），正在收敛" % (
+                len(premiums), premium_pct)
+        else:
+            premium_level = "高溢价"
+            etf_action = "不适合直接加仓"
+            reason = "溢价率超过5%，存在溢价回落风险，建议等待溢价收敛"
     elif premium >= 2:
         premium_level = "中等溢价"
         etf_action = "谨慎分批"
@@ -466,6 +614,9 @@ def query_ndx_etf():
         "ma": ma,
         "premium": premium,
         "premium_avg5": premium_avg5,
+        "premium_pct": premium_pct,
+        "premium_days": len(premiums),
+        "levels": etf_levels,
         "premium_level": premium_level,
         "action": etf_action,
         "reason": reason,
@@ -518,7 +669,7 @@ def query_ndx_levels():
     return buckets
 
 
-def short_quant_evaluation(quote, high_info, levels, etf, risk_info=None):
+def short_quant_evaluation(quote, high_info, levels, etf, risk_info=None, volume=None):
     """超短线1~3个交易日评分：弱化PE/PB，强调动量、均线、关键位和溢价变化。"""
     price = quote.get("price") if quote else None
     daily_pct = quote.get("pct") if quote else None
@@ -584,9 +735,42 @@ def short_quant_evaluation(quote, high_info, levels, etf, risk_info=None):
         if risk_info.get("vol_ratio") is not None and risk_info["vol_ratio"] > 1.5:
             risk = min(risk, 2)
 
+    # 量能：放量代表资金参与度提升，缩量代表观望情绪，作为趋势的确认项。
+    vol_eval = volume_evaluation(volume or {}, intraday=False)
+    # RSI 与均线排列：超卖有反弹空间，超买有回落风险；均线多头/空头确认趋势结构。
+    rsi = (risk_info or {}).get("rsi14")
+    ma_state = (risk_info or {}).get("ma_state")
+    rsi_adj = 0
+    if rsi is not None:
+        if rsi <= 30:
+            rsi_adj = 6
+        elif rsi <= 40:
+            rsi_adj = 3
+        elif rsi >= 75:
+            rsi_adj = -4
+        elif rsi >= 65:
+            rsi_adj = -2
+    ma_adj = {"多头排列": 4, "空头排列": -4}.get(ma_state, 0)
+    volume_score = 0
+    if vol_eval["label"] == "显著放量":
+        volume_score = 15
+        if trend >= 20:
+            volume_score = 18  # 放量上涨：趋势有资金确认
+        elif trend <= 8:
+            volume_score = 8   # 放量下跌：抛压真实存在
+    elif vol_eval["label"] == "温和放量":
+        volume_score = 10
+    elif vol_eval["label"] == "小幅缩量":
+        volume_score = 6
+    elif vol_eval["label"] == "明显缩量":
+        volume_score = 4
+
     scores = {"动量": overseas, "ETF趋势": trend, "溢价执行": execution,
-              "关键位": position, "风险": risk}
-    total = sum(scores.values())
+              "关键位": position, "量能": volume_score,
+              "技术": rsi_adj + ma_adj, "风险": risk}
+    # 各维度上限：动量25+趋势30+溢价28+关键位15+量能18+技术10+风险5 = 131，归一化到 100。
+    raw_total = sum(scores.values())
+    total = min(100, round(raw_total / 131 * 100))
     if total >= 70:
         action, layers = "加仓", "1～2层（20%～40%）"
     elif total >= 55:
@@ -644,7 +828,7 @@ def fmt_level_space(level, current):
     return "%.2f%%" % abs((level / current - 1) * 100)
 
 
-def quant_evaluation(quote, valuation, high_info, levels, etf, risk_info=None):
+def quant_evaluation(quote, valuation, high_info, levels, etf, risk_info=None, volume=None):
     """综合估值、趋势、动量、位置、ETF执行条件和风险，输出0~100评分及仓位。"""
     price = quote.get("price") if quote else None
     daily_pct = quote.get("pct") if quote else None
@@ -717,16 +901,47 @@ def quant_evaluation(quote, valuation, high_info, levels, etf, risk_info=None):
         risk_score = min(risk_score, 4)
     risk_score = min(risk_score, 10)
 
+    # 量能（波段视角）：放量确认趋势有效，缩量代表趋势动能不足。
+    vol_eval = volume_evaluation(volume or {}, intraday=False)
+    # 技术面（波段视角）：RSI 定位超买超卖，均线排列确认中期结构。
+    rsi = (risk_info or {}).get("rsi14")
+    ma_state = (risk_info or {}).get("ma_state")
+    tech_score = 0
+    if rsi is not None:
+        if rsi <= 30:
+            tech_score += 5
+        elif rsi <= 45:
+            tech_score += 3
+        elif rsi >= 75:
+            tech_score -= 4
+        elif rsi >= 65:
+            tech_score -= 2
+    if ma_state == "多头排列":
+        tech_score += 5
+    elif ma_state == "空头排列":
+        tech_score -= 5
+    volume_score = 0
+    if vol_eval["label"] == "显著放量":
+        volume_score = 15 if trend_score >= 20 else 8
+    elif vol_eval["label"] == "温和放量":
+        volume_score = 10
+    elif vol_eval["label"] == "小幅缩量":
+        volume_score = 6
+    elif vol_eval["label"] == "明显缩量":
+        volume_score = 3
+
     scores = {
         "趋势": trend_score,
         "动量": momentum_score,
         "位置": position_score,
         "ETF执行": etf_score,
+        "量能": volume_score,
+        "技术": tech_score,
         "风险": risk_score,
     }
-    # PE/PB及百分位不参与操作建议；剩余可量化维度合计85分，归一化到100分。
+    # PE/PB及百分位不参与操作建议；其余维度合计上限 100+15+10=125，归一化到 100。
     raw_total = sum(scores.values())
-    total = round(raw_total / 85 * 100)
+    total = min(100, max(0, round(raw_total / 125 * 100)))
     if total >= 80:
         action, layers = "加仓", "4～5层（80%～100%）"
     elif total >= 65:
@@ -753,6 +968,16 @@ def quant_evaluation(quote, valuation, high_info, levels, etf, risk_info=None):
         reasons.append("ETF与纳指当日走势偏离")
     if amplitude is not None and amplitude > 3:
         reasons.append("纳指日内波动较大")
+    if vol_eval["label"] in ("显著放量", "温和放量"):
+        reasons.append("量能" + vol_eval["label"])
+    elif vol_eval["label"] in ("明显缩量", "小幅缩量"):
+        reasons.append("量能" + vol_eval["label"])
+    if rsi is not None and rsi <= 30:
+        reasons.append("RSI超卖")
+    elif rsi is not None and rsi >= 75:
+        reasons.append("RSI超买")
+    if ma_state == "空头排列":
+        reasons.append("纳指均线空头排列")
 
     hard_veto = (premium is not None and premium > 5) or (
         etf_price is not None and etf_ma is not None and etf_price < etf_ma and
@@ -796,13 +1021,15 @@ def build_premarket_message(intraday=False):
     risk_info = query_ndx_risk()
     etf = query_ndx_etf()
     etf_amount = query_etf_amount() if intraday else None
+    volume = query_etf_volume()
+    vol_eval = volume_evaluation(volume, intraday=intraday)
 
     price = quote.get("price") if quote else None
     pct = quote.get("pct") if quote else None
     high = high_info.get("high") if high_info else None
     drawdown = (price / high - 1) * 100 if price and high else None
-    quant = quant_evaluation(quote, valuation, high_info, ndx_levels, etf, risk_info)
-    short_quant = short_quant_evaluation(quote, high_info, ndx_levels, etf, risk_info)
+    quant = quant_evaluation(quote, valuation, high_info, ndx_levels, etf, risk_info, volume)
+    short_quant = short_quant_evaluation(quote, high_info, ndx_levels, etf, risk_info, volume)
     action = quant["action"]
     icon = "🟢" if action == "加仓" else "🔴" if action == "减仓" else "🟡"
 
@@ -838,6 +1065,29 @@ def build_premarket_message(intraday=False):
     final_cap = max(1, max(short_quant["risk_cap"], quant["risk_cap"]))
     final_layers_text = "0～%d层（0%%～%d%%）" % (final_layers, final_layers * 20)
     final_cap_text = "%d层（%d%%）" % (final_cap, final_cap * 20)
+    # ETF 自身关键位（可直接挂单），与纳指点位并列展示
+    etf_levels = etf.get("levels") or {}
+    etf_price = etf.get("price")
+    etf_low20 = (etf_levels.get("20日") or {}).get("low")
+    etf_high20 = (etf_levels.get("20日") or {}).get("high")
+    etf_low60 = (etf_levels.get("60日") or {}).get("low")
+    etf_high60 = (etf_levels.get("60日") or {}).get("high")
+    etf_level_lines = []
+    if etf_price and etf_low20:
+        etf_level_lines = [
+            "🎯 **ETF关键位**（可直接挂单）",
+            "↘️ %s（短线支撑，↓%s）｜跌破：暂停加仓" % (
+                fmt_optional(etf_low20, decimals=3), fmt_level_space(etf_low20, etf_price)),
+            "⬆️ %s（短线阻力，↑%s）｜站稳：小仓加仓" % (
+                fmt_optional(etf_high20, decimals=3), fmt_level_space(etf_high20, etf_price)),
+        ]
+        if etf_low60:
+            etf_level_lines += [
+                "↘️ %s（中期支撑，↓%s）｜跌破：降低仓位" % (
+                    fmt_optional(etf_low60, decimals=3), fmt_level_space(etf_low60, etf_price)),
+                "⬆️ %s（中期阻力，↑%s）｜站稳：趋势转强" % (
+                    fmt_optional(etf_high60, decimals=3), fmt_level_space(etf_high60, etf_price)),
+            ]
     risk_cap = 5 if risk_score >= 8 else 3 if risk_score >= 6 else 2 if risk_score >= 4 else 1
     if risk_info:
         risk_line = "⚠️ **波动风险**：ATR14 %s（历史倍数%s）｜5日波动率 %s｜20日波动率 %s｜仓位上限%s层" % (
@@ -865,8 +1115,16 @@ def build_premarket_message(intraday=False):
             fmt_optional(etf.get("trend5"), "%"), fmt_optional(etf.get("trend20"), "%"),
             fmt_optional(etf.get("ma")),
             "（上一交易日收盘）" if etf.get("price_is_fallback") else ""),
-        "💰 **溢价率**：%s（%s）" % (
-            fmt_optional(etf_premium, "%"), etf.get("premium_level", "数据缺失")),
+        "💰 **溢价率**：%s（%s）%s" % (
+            fmt_optional(etf_premium, "%"), etf.get("premium_level", "数据缺失"),
+            ("｜近%s日 %s分位" % (etf.get("premium_days"),
+                                fmt_optional(etf.get("premium_pct"), "%", decimals=0)))
+            if etf.get("premium_pct") is not None else ""),
+        "📊 **量能**：%s｜%s" % (
+            vol_eval["label"], vol_eval["note"]),
+        "📐 **技术面**：RSI14 %s｜均线 %s" % (
+            fmt_optional((risk_info or {}).get("rsi14"), decimals=1),
+            (risk_info or {}).get("ma_state") or "--"),
     ] + ([
         "💵 **上午成交额**：%s" % (fmt_yi(etf_amount) if etf_amount else "--"),
     ] if intraday else []) + [
@@ -882,13 +1140,14 @@ def build_premarket_message(intraday=False):
         "",
         risk_line,
         "",
-        "🎯 **纳指关键位**",
+        "🎯 **纳指关键位**（判方向）",
         "↘️ %s（短线支撑，↓%s）｜跌破：暂停加仓" % (support20, support20_space),
         "↘️ %s（中期支撑，↓%s）｜跌破：降低仓位" % (support60, support60_space),
         "⬆️ %s（短线阻力，↑%s）｜站稳+溢价≤5%%：小仓加仓" % (resistance20, resistance20_space),
         "⬆️ %s（中期阻力，↑%s）｜站稳2日：趋势转强" % (resistance60, resistance60_space),
         "⚠️ 指数突破但ETF溢价过高时，不追价加仓。",
-        "ℹ️ 支撑/阻力采用纳斯达克100近20日、60日高低点参考；指数按美股最近交易日取数。",
+    ] + etf_level_lines + [
+        "ℹ️ 纳指点位用于判方向；ETF价位可直接挂单，按各自近20/60日区间计算。",
         "---",
         "⚠️ **免责声明**：以上为程序化盘前信息整理和规则信号，仅供参考，不构成投资建议。",
     ]
