@@ -334,12 +334,15 @@ def rsi14(closes):
 
 
 def ma_alignment(closes):
-    """均线排列：MA5/MA20/MA60 多头、空头或纠缠，并给出价格与各均线关系。"""
+    """均线排列 + MA60 中期结构：多头/空头/纠缠、MA60 斜率、价格相对 MA60 位置。"""
     vals = [float(c) for c in (closes or []) if c]
     if len(vals) < 20:
         return {}
-    def ma(n):
-        return sum(vals[-n:]) / n if len(vals) >= n else None
+    def ma(n, offset=0):
+        end = len(vals) - offset
+        if end < n or end <= 0:
+            return None
+        return sum(vals[end - n:end]) / n
     ma5, ma20, ma60 = ma(5), ma(20), ma(60)
     price = vals[-1]
     if ma5 and ma20 and ma60:
@@ -351,7 +354,20 @@ def ma_alignment(closes):
             state = "均线纠缠"
     else:
         state = "样本不足"
+
+    # MA60 斜率：当前 MA60 与 10 个交易日前 MA60 比较，判断中期方向。
+    ma60_slope = None
+    ma60_prev = ma(60, offset=10) if len(vals) >= 70 else None
+    if ma60 and ma60_prev:
+        ma60_slope = (ma60 / ma60_prev - 1) * 100
+
+    # 价格相对 MA60 的位置（偏离百分比）：正值在上方。
+    ma60_dev = None
+    if ma60:
+        ma60_dev = (price / ma60 - 1) * 100
+
     return {"ma5": ma5, "ma20": ma20, "ma60": ma60, "state": state,
+            "ma60_slope": ma60_slope, "ma60_dev": ma60_dev,
             "above_ma20": (price > ma20) if ma20 else None,
             "above_ma60": (price > ma60) if ma60 else None}
 
@@ -409,6 +425,10 @@ def query_ndx_risk():
             "ma_state": align.get("state"),
             "above_ma20": align.get("above_ma20"),
             "above_ma60": align.get("above_ma60"),
+            "ma60_slope": align.get("ma60_slope"),
+            "ma60_dev": align.get("ma60_dev"),
+            "ma20": align.get("ma20"),
+            "ma60": align.get("ma60"),
             "data_date": str((result.get("meta") or {}).get("regularMarketTime", "")),
         }
     except Exception as e:
@@ -858,12 +878,44 @@ def quant_evaluation(quote, valuation, high_info, levels, etf, risk_info=None, v
     if daily_pct is not None and etf.get("pct") is not None:
         tracking_gap = etf.get("pct") - daily_pct
 
-    # 趋势25分：价格与MA5、近20日方向、日线方向；避免把同一指标重复计权。
-    trend_score = 0
+    # 趋势35分，拆成四个子项，区分「长期上升中回调」与「长期下跌中反弹」：
+    #   短期结构 8 + 中期结构 12 + 趋势强度 8 + 均线排列 7
+    ma60_slope = (risk_info or {}).get("ma60_slope")
+    ma60_dev = (risk_info or {}).get("ma60_dev")
+    ma_state = (risk_info or {}).get("ma_state")
+    above_ma60 = (risk_info or {}).get("above_ma60")
+
+    # 短期结构：价格相对 MA5（ETF 自身均线）
+    short_structure = 0
     if etf_price is not None and etf_ma is not None:
-        trend_score += 10 if etf_price >= etf_ma else 2
+        short_structure = 8 if etf_price >= etf_ma else 3
+
+    # 中期结构：MA60 斜率方向 + 价格站位（中期健康度的核心）
+    mid_structure = 6
+    if ma60_slope is not None and above_ma60 is not None:
+        if ma60_slope > 0.5 and above_ma60:
+            mid_structure = 12      # 中期向上且站上 MA60：健康
+        elif ma60_slope > 0 and above_ma60:
+            mid_structure = 10
+        elif ma60_slope > 0 and not above_ma60:
+            mid_structure = 6       # 中期向上但跌破 MA60：回调中
+        elif ma60_slope <= 0 and above_ma60:
+            mid_structure = 5       # 中期走平/向下但仍在 MA60 上方：反弹
+        else:
+            mid_structure = 2       # 中期向下且跌破 MA60：弱势
+    elif above_ma60 is not None:
+        mid_structure = 8 if above_ma60 else 3
+
+    # 趋势强度：近20日涨幅分档
+    strength = 0
     if etf_trend20 is not None:
-        trend_score += 15 if etf_trend20 >= 3 else 10 if etf_trend20 >= 0 else 5 if etf_trend20 > -5 else 0
+        strength = (8 if etf_trend20 >= 8 else 6 if etf_trend20 >= 3
+                    else 4 if etf_trend20 >= 0 else 2 if etf_trend20 > -5 else 0)
+
+    # 均线排列：多头/空头/纠缠
+    align_score = {"多头排列": 7, "均线纠缠": 4}.get(ma_state, 0 if ma_state == "空头排列" else 4)
+
+    trend_score = min(35, short_structure + mid_structure + strength + align_score)
 
     # 动量15分：近5日走势与最近一日波动。
     momentum_score = 0
@@ -952,9 +1004,9 @@ def quant_evaluation(quote, valuation, high_info, levels, etf, risk_info=None, v
         "技术": tech_score,
         "风险": risk_score,
     }
-    # PE/PB及百分位不参与操作建议；其余维度合计上限 100+15+10=125，归一化到 100。
+    # PE/PB及百分位不参与操作建议；其余维度合计上限 35+15+15+20+15+10+10=120，归一化到 100。
     raw_total = sum(scores.values())
-    total = min(100, max(0, round(raw_total / 125 * 100)))
+    total = min(100, max(0, round(raw_total / 120 * 100)))
     if total >= 80:
         action, layers = "加仓", "4～5层（80%～100%）"
     elif total >= 65:
@@ -991,6 +1043,10 @@ def quant_evaluation(quote, valuation, high_info, levels, etf, risk_info=None, v
         reasons.append("RSI超买")
     if ma_state == "空头排列":
         reasons.append("纳指均线空头排列")
+    if ma60_slope is not None and ma60_slope > 0 and above_ma60:
+        reasons.append("中期结构健康（MA60上行且站上）")
+    elif above_ma60 is False and ma60_slope is not None and ma60_slope <= 0:
+        reasons.append("中期结构偏弱（MA60下行且跌破）")
 
     hard_veto = (premium is not None and premium > 5) or (
         etf_price is not None and etf_ma is not None and etf_price < etf_ma and
@@ -1002,11 +1058,15 @@ def quant_evaluation(quote, valuation, high_info, levels, etf, risk_info=None, v
         action, layers = "观望", "0～1层（0%～20%）"
 
     risk_cap = 5 if risk_score >= 8 else 3 if risk_score >= 6 else 2 if risk_score >= 4 else 1
+    # 中期结构限制：MA60 下行且价格在其下方时，波段不重仓，避免在中期弱势中加仓。
+    mid_weak = (above_ma60 is False and ma60_slope is not None and ma60_slope <= 0)
+    if mid_weak:
+        risk_cap = min(risk_cap, 2)
     desired_layers = 5 if total >= 80 else 3 if total >= 65 else 2 if total >= 50 else 1 if total >= 35 else 0
     if desired_layers > risk_cap:
         action = "观望" if risk_cap <= 2 else "试仓"
         layers = "0～%d层（0%%～%d%%）" % (risk_cap, risk_cap * 20)
-        reasons.append("ATR/波动率触发仓位上限")
+        reasons.append("ATR/波动率或中期结构触发仓位上限")
     swing_layer_count = min(desired_layers, risk_cap)
 
     add_condition = "评分≥65、溢价率回落至5%以下、ETF站上MA5且近20日转强"
@@ -1152,6 +1212,12 @@ def build_premarket_message(intraday=False):
         "",
         "🟡 **波段（1～4周）**：%s｜建议仓位：%s" % (quant["action"], quant["layers"]),
         "🧮 **波段评分**：%d/100" % quant["total"],
+        "📐 **中期结构**：MA60 %s｜价格%sMA60｜%s" % (
+            ("上行" if (risk_info or {}).get("ma60_slope") and risk_info["ma60_slope"] > 0
+             else "下行" if (risk_info or {}).get("ma60_slope") and risk_info["ma60_slope"] <= 0 else "--"),
+            ("位于" if (risk_info or {}).get("above_ma60") else "低于")
+            if (risk_info or {}).get("above_ma60") is not None else "--",
+            (risk_info or {}).get("ma_state") or "--"),
         "",
         "📦 **ETF综合建议**：**%s**｜建议仓位：%s｜上限：%s" % (
             final_action, final_layers_text, final_cap_text),
