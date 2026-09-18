@@ -1,0 +1,49 @@
+# ============================================================================
+# 换行符策略
+#
+# 背景（实测踩坑）：本 skill 同时运行在 Windows（开发/备用）与 Linux（生产），
+# 配置文件在 Windows 上是 CRLF，直接拷到 Linux 会导致：
+#   · `. ./.env` 报 `$'\r': command not found`
+#   · 变量值尾部多出 \r（如 chat_id 长度 36 而非 35）
+#     → 飞书 API 报 `invalid receive_id`
+#
+# 策略：
+#   · 会被 shell `source` 或读取为环境变量的文件 → 一律 LF
+#   · 脚本（.sh/.py）→ LF
+#   · 纯 Windows 使用的文件（.ps1/.cmd/.bat）→ 保持 CRLF
+# ============================================================================
+
+# 默认：检出时自动转成本地换行（Windows CRLF），提交时存为 LF
+* text=auto
+
+# --- 必须 LF：shell 会 source / 读取为环境变量 ---
+*.env        text eol=lf
+*.env.*      text eol=lf
+*.sh         text eol=lf
+*.py         text eol=lf
+*.json       text eol=lf
+*.jsonl      text eol=lf
+*.md         text eol=lf
+*.txt        text eol=lf
+*.yml        text eol=lf
+*.yaml       text eol=lf
+Dockerfile   text eol=lf
+*.conf       text eol=lf
+
+# --- Windows 专用：保持 CRLF ---
+*.ps1        text eol=crlf
+*.cmd        text eol=crlf
+*.bat        text eol=crlf
+
+# --- 二进制：不做换行转换 ---
+*.png        binary
+*.jpg        binary
+*.jpeg       binary
+*.gif        binary
+*.ico        binary
+*.db         binary
+*.db-wal     binary
+*.db-shm     binary
+*.tar        binary
+*.gz         binary
+*.zip        binary
