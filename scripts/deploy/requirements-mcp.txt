@@ -1,0 +1,9 @@
+# KOL Skills Platform —— MCP 服务依赖
+#
+# MCP SDK 要求 Python >= 3.10；镜像基础为 python:3.11-slim，满足。
+#
+# 版本说明：
+#   mcp 1.x 提供 mcp.server.fastmcp.FastMCP
+#   mcp 2.x 改名为 mcp.server.mcpserver.MCPServer
+# 本项目 `api/mcp_server.py` 已做双版本兼容，两者均可运行。
+mcp>=1.0
