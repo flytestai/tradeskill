@@ -97,6 +97,7 @@ docker run -d \
     -e PLATFORM_PORT=8000 \
     -v "$SKILL_DIR/data":/app/data \
     -v "$SKILL_DIR/sync":/app/sync \
+    -v "$SKILL_DIR/vendor":/app/vendor:ro \
     --memory 320m --memory-swap 700m --cpus 0.8 \
     --log-opt max-size=10m --log-opt max-file=3 \
     "$IMAGE" >/dev/null
@@ -120,6 +121,7 @@ if [ "$WITH_MCP" = "1" ]; then
             -e PLATFORM_HOST=0.0.0.0 \
             -v "$SKILL_DIR/data":/app/data:ro \
             -v "$SKILL_DIR/sync":/app/sync \
+            -v "$SKILL_DIR/vendor":/app/vendor:ro \
             --memory 400m --memory-swap 800m --cpus 0.8 \
             --log-opt max-size=10m --log-opt max-file=3 \
             "$MCP_IMAGE" \
