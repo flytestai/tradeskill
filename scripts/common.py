@@ -288,12 +288,19 @@ def connect_db(db_path):
 
 
 def _native_lark_cli():
+    """定位 lark-cli（跨平台）。
+
+    Windows：蜜蜂运行时 npm-global 下的原生 exe（避免 POSIX 包装脚本的子进程不退出）
+    Linux  ：/usr/local/bin/lark-cli 等（服务器上由 npm 全局安装）
+    """
     appdata = os.environ.get("APPDATA", "")
-    if not appdata:
-        return ""
-    path = os.path.join(appdata, "bee_ai_test", "agent-runtime", "npm-global",
-                        "node_modules", "@larksuite", "cli", "bin", "lark-cli.exe")
-    return path if os.path.exists(path) else ""
+    if appdata:
+        path = os.path.join(appdata, "bee_ai_test", "agent-runtime", "npm-global",
+                            "node_modules", "@larksuite", "cli", "bin", "lark-cli.exe")
+        if os.path.exists(path):
+            return path
+    # Linux / 显式配置
+    return find_lark_cli()
 
 
 def _card_body_sections(markdown):
@@ -353,15 +360,42 @@ def build_card(markdown, title, subtitle="", template="blue"):
 
 
 def send_card(markdown, chat_id=None, user_id=None, title="通知", subtitle="", template="blue", idem_key=""):
-    """发送 Card 2.0，返回 (成功, 错误文本)。"""
+    """发送 Card 2.0 卡片，返回 (成功, 错误文本)。
+
+    双通道（与 notify_*.sh 一致）：
+      1. **纯 Python 直连飞书 API**（feishu_client）—— 容器内可用，
+         因容器无法创建线程 → Node 崩溃 → lark-cli 不可用。
+      2. 回退 lark-cli —— 宿主机场景（有 Node）。
+    """
+    if not (chat_id or user_id):
+        return False, "收件人缺失（chat_id / user_id 均未提供）"
+
+    card = build_card(markdown, title, subtitle, template)
+
+    # ---- 通道 1：纯 Python（容器内首选）----
+    try:
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        from feishu_client import send as _fs_send, is_configured as _fs_ok, FeishuError
+        if _fs_ok():
+            rid = chat_id or user_id
+            rtype = "chat_id" if chat_id else "open_id"
+            _fs_send(rid, json.dumps(card, ensure_ascii=False),
+                     msg_type="interactive", receive_id_type=rtype)
+            return True, ""
+    except FeishuError as exc:
+        # 飞书 API 明确报错：记录但不立即返回，继续尝试 lark-cli
+        _py_err = str(exc)[:200]
+    except Exception as exc:
+        _py_err = "%s: %s" % (type(exc).__name__, str(exc)[:160])
+
+    # ---- 通道 2：回退 lark-cli（宿主机）----
     native = _native_lark_cli()
-    if not native or not (chat_id or user_id):
-        return False, "native lark-cli 或收件人缺失"
+    if not native:
+        return False, "无可用发送通道（Python 通道: %s；且未找到 lark-cli）" % _py_err
     args = [native, "im", "+messages-send"]
     args += ["--chat-id", chat_id] if chat_id else ["--user-id", user_id]
     args += ["--as", "bot", "--msg-type", "interactive",
-             "--content", json.dumps(build_card(markdown, title, subtitle, template), ensure_ascii=False),
-             "--json"]
+             "--content", json.dumps(card, ensure_ascii=False), "--json"]
     if idem_key:
         args += ["--idempotency-key", idem_key[:50]]
     try:
@@ -371,4 +405,4 @@ def send_card(markdown, chat_id=None, user_id=None, title="通知", subtitle="",
             return True, ""
         return False, (result.stderr or result.stdout or "")[:300]
     except Exception as exc:
-        return False, str(exc)[:300]
+        return False, "%s（Python 通道亦失败: %s）" % (str(exc)[:160], _py_err)

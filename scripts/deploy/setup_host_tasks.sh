@@ -55,15 +55,19 @@ cd "$DEPLOY_DIR" || exit 1
 
 # 加载配置（.env 优先，回退 data/local_config.env）
 #
-# ⚠️ 必须剥离 CRLF 后再 source：配置文件若在 Windows 上编辑过会带 ，
-#    source 时报 `$'': command not found`，且变量值尾部多出 
+# ⚠️ 必须剥离 CRLF 后再 source：配置文件若在 Windows 上编辑过会带 
+，
+#    source 时报 `$'
+': command not found`，且变量值尾部多出 
+
 #    （实测导致 chat_id 长度 36 而非 35，飞书 API 报 invalid receive_id）。
 _load_env() {
     local f="$1"
     [ -f "$f" ] || return 0
     local tmp
     tmp="$(mktemp)"
-    tr -d '' < "$f" > "$tmp"
+    tr -d '
+' < "$f" > "$tmp"
     set -a
     # shellcheck disable=SC1090
     . "$tmp"
@@ -107,9 +111,12 @@ emit "*/5 9-15 * * 1-5" "position-monitor"   "scripts/position_monitor.py" "--no
 emit "*/10 9-15 * * 1-5" "monitor-alerts" "scripts/monitor_alerts.py"
 emit "*/5 * * * *"   "react-cleanup" "scripts/react.py" "cleanup"
 
-# ---- 群问答（队列空则秒退，成本极低）----
-emit "*/10 9-15 * * 1-5" "qa-intraday" "scripts/qa_analyzer.py"
-emit "*/30 * * * *" "qa-offhours" "scripts/qa_analyzer.py"
+# ---- 群问答（24×7）----
+# ⚠️ 已迁移至独立脚本 scripts/deploy/setup_qa_24x7.sh
+#    原因：群问答要求「24 小时监控 + 及时回复」，而本脚本的任务都带
+#    交易日/交易时段语义；且群问答需要「拉取两群 → 处理队列」串行执行，
+#    用独立运行器更清晰、也不与这里的标记体系冲突。
+#    请单独运行：sudo bash scripts/deploy/setup_qa_24x7.sh
 
 # ---- 授权保活（每 6 小时；脚本内部按「距上次刷新≥20h」决定是否真刷）----
 emit "0 */6 * * *"       "auth-keepalive"   "scripts/auth_keepalive.py"
