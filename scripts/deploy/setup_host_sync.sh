@@ -26,9 +26,11 @@ UV_BIN="${UV_BIN:-/opt/uv/uv}"   # uv 安装器把它放在 /opt/uv/uv（非 bin
 NODE_BIN="/opt/node20/bin"
 SYNC_HOURS="${SYNC_HOURS:-2}"          # 交易时段内每 N 小时同步一次
 LOG="$DEPLOY_DIR/data/_host_sync.log"
+# 与 setup_host_tasks.sh 共用标记，避免两个脚本互相误删任务
+MARK="# kol-platform-task"
 
 if [ "${1:-}" = "--uninstall" ]; then
-    crontab -l 2>/dev/null | grep -v "kol-platform-sync" | crontab - || true
+    crontab -l 2>/dev/null | grep -v "$MARK" | crontab - || true
     echo "  ✅ 已移除同步 cron"
     exit 0
 fi
@@ -83,10 +85,10 @@ echo ""
 echo "=== 4. 注册 cron（每 $SYNC_HOURS 小时；仅交易日盘中时段）==="
 # 盘中 9-15 点，每 N 小时跑一次；cron 无法直接判断交易日，
 # 由 sync_feishu_auto.py 内部的交易日守卫兜底（非交易日会自行跳过）。
-CRON_LINE="0 9-15/$SYNC_HOURS * * 1-5 $WRAP >/dev/null 2>&1  # kol-platform-sync"
-( crontab -l 2>/dev/null | grep -v "kol-platform-sync" ; echo "$CRON_LINE" ) | crontab -
+CRON_LINE="0 9-15/$SYNC_HOURS * * 1-5 $WRAP >/dev/null 2>&1  $MARK"
+( crontab -l 2>/dev/null | grep -v "$MARK" ; echo "$CRON_LINE" ) | crontab -
 echo "  ✅ cron 已注册："
-crontab -l 2>/dev/null | grep "kol-platform-sync" | sed 's/^/     /'
+crontab -l 2>/dev/null | grep "$MARK" | sed 's/^/     /'
 
 echo ""
 echo "=== 5. 首次执行（验证）==="
@@ -98,4 +100,4 @@ echo ""
 echo "=== 完成 ==="
 echo "  日志：$LOG"
 echo "  手动触发：bash $WRAP"
-echo "  卸载：crontab -l | grep -v kol-platform-sync | crontab -"
+echo "  卸载：bash $0 --uninstall（或 bash scripts/deploy/setup_host_tasks.sh --uninstall）"
