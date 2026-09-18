@@ -301,3 +301,23 @@ nginx 中若某域名不匹配任何 `server_name`，请求会落到该端口的
 # 回滚 etf 上线（恢复跳转而非拒绝）
 cat /root/kol-platform-backup-*/nginx/skill-platform | grep -A20 "旧域跳转"
 ```
+
+
+---
+
+## 十二、外部健康监控
+
+平台已部署**独立于服务器**的健康监控（避免「服务挂了、告警也发不出」的自举陷阱）。
+
+- 运行位置：Windows（你的电脑），计划任务每 5 分钟探测一次
+- 检测项：REST 存活 / 业务链路 / MCP 握手 / TLS 证书剩余天数
+- 告警：飞书 bot 私信，仅状态翻转时发送（防轰炸）
+- 任务名：`kol-platform-health-monitor`
+
+完整说明见 **[MONITOR.md](MONITOR.md)**（含部署、配置、故障排查手册）。
+
+```powershell
+# 查看状态
+Get-ScheduledTaskInfo -TaskName 'kol-platform-health-monitor' | Select LastRunTime,LastTaskResult
+Get-Content data\_health_monitor.log -Tail 20
+```
