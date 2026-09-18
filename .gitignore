@@ -53,3 +53,6 @@ scripts/deploy/_run_*.sh
 # 波浪上下文临时产物与缓存
 data/_elliott_ctx_*.md
 data/_elliott_ctx_*.txt
+
+# 关键位数据日期（部署同步会刷新 mtime，故用内容记录真实日期）
+data/level_asof.txt
