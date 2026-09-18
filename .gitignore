@@ -42,3 +42,13 @@ assets/feishu_images/
 data/monitor.env
 data/_health_monitor*.log
 data/_run_health_monitor.cmd
+
+# ---- 服务器特有（部署时生成，不入库）----
+.env
+.env.runtime
+vendor/
+data.hostbak-*/
+scripts/deploy/_run_*.sh
+
+# 波浪上下文临时产物
+data/_elliott_ctx_*.md
