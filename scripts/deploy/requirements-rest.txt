@@ -1,0 +1,9 @@
+# KOL Skills Platform —— REST 服务依赖（轻量）
+#
+# 业务逻辑全部是 Python 标准库，只有 Web 框架是外部依赖。
+# 该文件用于 Docker 镜像构建与本地开发。
+flask>=3.0,<4.0
+
+# 时区数据：zoneinfo 在无系统 tzdata 时会回退到此包。
+# 使用它可完全避开 apt（实测目标服务器的 Docker 18.09 环境 apt 不可用）。
+tzdata

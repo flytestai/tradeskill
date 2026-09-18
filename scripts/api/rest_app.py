@@ -221,11 +221,40 @@ def system_alerts(ctx):
     return ok(services.alert_status())
 
 
+def supports_threads() -> bool:
+    """探测当前环境能否创建线程。
+
+    背景：部分受限容器（老版 Docker + 特定内核/cgroup 组合）会拒绝创建线程，
+    报 `RuntimeError: can't start new thread`。此时若 Flask 用默认的
+    threaded=True，每个请求都会失败（空响应 / 502）。
+
+    策略：优先读环境变量 PLATFORM_THREADED；未设置时实测一次。
+    """
+    env = os.environ.get("PLATFORM_THREADED", "").strip().lower()
+    if env in ("0", "false", "no"):
+        return False
+    if env in ("1", "true", "yes"):
+        return True
+    try:
+        import threading
+        t = threading.Thread(target=lambda: None)
+        t.start()
+        t.join()
+        return True
+    except Exception as e:
+        print("[platform] ⚠️ 环境不支持多线程（%s），降级为单线程模式" % e)
+        return False
+
+
 def main():
+    threaded = supports_threads()
     print("[platform] 启动 REST 服务 http://%s:%s" % (config.HOST, config.PORT))
     print("[platform] 鉴权: %s" % ("已启用（%d 个 Key）" % len(config.API_KEYS)
                                    if config.API_KEYS else "未配置（仅限本机）"))
-    app.run(host=config.HOST, port=config.PORT, debug=False, threaded=True)
+    print("[platform] 并发模式: %s" % ("多线程" if threaded else "单线程（串行处理）"))
+    # threaded=False 时 Flask 使用内置单线程 WSGI，完全不创建线程。
+    # 请求串行处理 —— 对本场景（低频数据查询）足够，且能在受限容器中存活。
+    app.run(host=config.HOST, port=config.PORT, debug=False, threaded=threaded)
 
 
 if __name__ == "__main__":

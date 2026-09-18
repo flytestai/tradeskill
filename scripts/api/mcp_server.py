@@ -211,16 +211,25 @@ def main() -> int:
         return 1
 
     if args.http:
-        # FastMCP 的 streamable-http 传输
+        # streamable-http 传输。
+        # 注意：host/port 必须作为 run() 的 kwargs 传入 ——
+        #   mcp 1.x (FastMCP)    : settings 里含 host/port，亦接受 kwargs
+        #   mcp 2.x (MCPServer)  : Settings 已无 host/port 字段，
+        #                          赋值会抛 ValueError("no field 'host'")，
+        #                          必须走 run(..., host=, port=) 转发给
+        #                          run_streamable_http_async。
+        print("[mcp] streamable-http 监听 http://%s:%s/mcp" % (args.host, args.port))
         try:
-            mcp.settings.host = args.host
-            mcp.settings.port = args.port
-            print("[mcp] streamable-http 监听 http://%s:%s/mcp" % (args.host, args.port))
+            mcp.run(transport="streamable-http", host=args.host, port=args.port)
+        except TypeError as e:
+            # 极旧版本不接受 kwargs：回退到设置 settings
+            print("[mcp] run(kwargs) 不被支持(%s)，回退 settings 方式" % e)
+            try:
+                mcp.settings.host = args.host
+                mcp.settings.port = args.port
+            except Exception:
+                pass
             mcp.run(transport="streamable-http")
-        except TypeError:
-            # 兼容旧版 SDK 参数名
-            print("[mcp] streamable-http 监听 http://%s:%s" % (args.host, args.port))
-            mcp.run(transport="sse")
     else:
         print("[mcp] stdio 传输就绪", file=sys.stderr)
         mcp.run()
