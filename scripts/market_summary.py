@@ -267,6 +267,14 @@ def volume_evaluation(vol, intraday=False):
     turnover = (vol or {}).get("turnover")
 
     label, score_delta, note = "量能正常", 0, "量能与近期水平相当"
+    # 盘前尚未开盘时成交量为 0，量比会返回 0.00；这不是「缩量」，应视为无数据，
+    # 否则会误判成「明显缩量」并据此扣分。
+    if ratio is not None and ratio <= 0 and not (amount or 0):
+        ratio = None
+    if ratio is None and not (amount or 0):
+        return {"label": "盘前无成交", "score_delta": 0,
+                "note": "A股尚未开盘，量能待开盘后确认",
+                "ratio": None, "turnover": turnover}
     if ratio is not None:
         if ratio >= 2:
             label, score_delta = "显著放量", 2
@@ -670,29 +678,9 @@ def query_ndx_etf():
             price_is_fallback = True
             if not price:
                 price = closes[last][1]
-    if price_is_fallback:
-        if ma is None:
-            ma_values = []
-            for key, value in item.items():
-                if key.startswith("ma["):
-                    try:
-                        ma_values.append((key, float(value)))
-                    except (TypeError, ValueError):
-                        pass
-            ma_values.sort(key=lambda x: x[0])
-            if ma_values:
-                ma = ma_values[-1][1]
-        if ma is None:
-            ma_values = []
-            for key, value in item.items():
-                if key.startswith("ma["):
-                    try:
-                        ma_values.append((key, float(value)))
-                    except (TypeError, ValueError):
-                        pass
-            ma_values.sort(key=lambda x: x[0])
-            if ma_values:
-                ma = ma_values[-1][1]
+    # MA5 缺失时用收盘价序列自算（接口的 ma[] 字段并不总是返回）。
+    if ma is None and len(closes) >= 5:
+        ma = sum(v for _, v in closes[-5:]) / 5.0
     trend5 = None
     trend20 = None
     if len(closes) >= 2 and closes[0][1] > 0:
@@ -1732,7 +1720,8 @@ def send(msg, dry_run=False, tag="summary"):
     try:
         # 盘前播报统一私信，不再发送到群聊；优先使用 Card 2.0 分区卡片。
         if native and user_id:
-            idem = "market_summary_private_%s_%s" % (tag, day)
+            # 飞书幂等键上限 50 字符：tag 截断，保证不超限。
+            idem = "ms_%s_%s" % (tag[:16], day)
             # 盘前/盘中等播报统一使用 Card 2.0；只有普通汇总类走 Markdown。
             card_tags = ("premarket", "intraday", "pm_", "card_")
             card = build_premarket_card(msg) if tag.startswith(card_tags) else None
