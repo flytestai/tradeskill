@@ -70,9 +70,11 @@ SKILL_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DEFAULT_TIMEOUT = int(os.environ.get("SKILL_TIMEOUT", "25"))
 SLOW_TIMEOUT = int(os.environ.get("SKILL_TIMEOUT_SLOW", "40"))
 #: 整个上下文构建的总预算（秒）；超时后放弃剩余技能，用已有数据回答
-TOTAL_BUDGET = int(os.environ.get("CONTEXT_BUDGET", "75"))
+TOTAL_BUDGET = int(os.environ.get("CONTEXT_BUDGET", "600"))
 #: 上下文最大字符数（防止 prompt 过长）
-MAX_CTX = int(os.environ.get("CONTEXT_MAX_CHARS", "6000"))
+#  ⚠️ 与 skill_agent 保持**同一上限**：此前这里是 6000、skill_agent 是 24000，
+#     导致「规则回退路径」比「AI 规划路径」少 4 倍上下文，同一问题答案质量漂移。
+MAX_CTX = int(os.environ.get("CONTEXT_MAX_CHARS", "24000"))
 
 COMPREHENSIVE_URL = "https://bee-ai.integrity.com.cn/skills/v1/comprehensive/search"
 
@@ -277,54 +279,46 @@ def _extract_topic(q: str) -> str:
 # 执行技能 → 拼装上下文
 # --------------------------------------------------------------------------
 
+#: 统一格式化层（与 skill_agent 共用，消除两套口径）
+try:
+    from context_format import format_datas as _fmt_datas, FIELDS_PER_ROW as _FIELDS
+except Exception:                                       # 退化：内置最小实现
+    _FIELDS = 14
+
+    def _fmt_datas(datas, skill_id="", rows=None, fields=None):
+        if not datas:
+            return ""
+        d = datas[0]
+        items = ["%s=%s" % (k, str(v)[:60]) for k, v in list(d.items())[:(fields or 14)]
+                 if v not in (None, "", "-")]
+        return "，".join(items)
+
+
+def _one(datas, skill_id, fields=None):
+    """单条记录的格式化（去掉多行列表用的 '- ' 前缀，避免行内出现多余符号）。"""
+    txt = _fmt_datas(datas, skill_id, rows=1, fields=fields or _FIELDS)
+    return txt[2:] if txt.startswith("- ") else txt
+
+
 def _fmt_index(datas, label):
-    if not datas:
-        return ""
-    d = datas[0]
-    name = d.get("指数简称") or d.get("名称") or label
-    price = d.get("最新价") or d.get("收盘价") or ""
-    if not price:
-        for k, v in d.items():
-            if str(k).startswith("收盘价"):
-                price = v; break
-    chg = (d.get("最新涨跌幅:前复权") or d.get("最新涨跌幅")
-           or d.get("涨跌幅") or "")
-    hi = d.get("最高") or d.get("最高价") or "-"
-    lo = d.get("最低") or d.get("最低价") or "-"
-    return "%s：最新 %s，涨跌幅 %s%%，最高 %s，最低 %s" % (name, price, chg, hi, lo)
+    """指数行情 —— 走统一格式化，**只呈现响应里真实存在的字段**。
+
+    ⚠️ 旧实现固定输出「最高 -，最低 -」占位符，而 hithink-zhishu-query 的
+       原生响应里并没有这两个字段（实测为：指数代码 / 指数简称 /
+       最新涨跌幅:前复权 / 收盘价[日期]），属于凭空编造 —— 已移除。
+       现在字段名连同日期后缀原样保留，口径可追溯。
+    """
+    return _one(datas, "hithink-zhishu-query")
 
 
 def _fmt_stock(datas, label):
-    if not datas:
-        return ""
-    d = datas[0]
-    name = d.get("股票简称") or d.get("名称") or label
-    price = d.get("最新价") or d.get("最新收盘价") or ""
-    if not price:
-        for k, v in d.items():
-            if str(k).startswith("收盘价"):
-                price = v; break
-    chg = d.get("最新涨跌幅:前复权") or d.get("最新涨跌幅") or d.get("涨跌幅") or ""
-    pe = d.get("市盈率") or d.get("市盈率(动态)") or ""
-    parts = ["%s：最新 %s" % (name, price)]
-    if chg != "":
-        parts.append("涨跌幅 %s%%" % chg)
-    if pe != "":
-        parts.append("PE %s" % pe)
-    return "，".join(parts)
+    """个股行情 —— 同样只呈现真实字段。"""
+    return _one(datas, "hithink-market-query")
 
 
-def _fmt_generic(datas, label, fields=6):
-    """通用格式化：取首条记录的前几个有意义字段。"""
-    if not datas:
-        return ""
-    d = datas[0]
-    items = []
-    for k, v in list(d.items())[:fields]:
-        if v in (None, "", "-"):
-            continue
-        items.append("%s=%s" % (k, str(v)[:40]))
-    return "%s：%s" % (label, "，".join(items)) if items else ""
+def _fmt_generic(datas, label, fields=None):
+    """通用格式化：取记录的真实字段（字段数与 skill_agent 保持一致）。"""
+    return _one(datas, "", fields)
 
 
 def _execute(step, deadline):

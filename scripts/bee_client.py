@@ -58,6 +58,12 @@ except Exception:  # 允许独立运行
     def service_env(k, d=None):
         return os.environ.get(k, d)
 
+try:                                     # 统一格式化层（提供逐技能版本号）
+    from context_format import skill_version
+except Exception:
+    def skill_version(_sid):
+        return "1.0.0"
+
 DEFAULT_GATEWAY = "https://bee-ai.integrity.com.cn/skills/v1/query2data"
 
 #: 已知技能 ID（供调用方引用，避免拼写错误）
@@ -109,28 +115,57 @@ def timeout_s() -> int:
 # --------------------------------------------------------------------------
 
 def _headers(skill_id: str) -> dict:
-    """蜜蜂技能网关请求头（header 鉴权，无 token）。"""
+    """蜜蜂技能网关请求头（header 鉴权，无 token）。
+
+    ⚠️ 版本号逐技能取（context_format.skill_version），不再统一硬编码 1.0.0。
+    """
     return {
         "Content-Type": "application/json",
         "X-Claw-Call-Type": "normal",
         "X-Claw-Skill-Id": skill_id,
-        "X-Claw-Skill-Version": "1.0.0",
+        "X-Claw-Skill-Version": skill_version(skill_id),
         "X-Claw-Plugin-Id": "none",
         "X-Claw-Plugin-Version": "none",
         "X-Claw-Trace-Id": secrets.token_hex(32),
     }
 
 
+#: 走 comprehensive/search 端点的搜索类技能（body 形态与 query2data 不同）
+SEARCH_SKILL_IDS = {
+    "news-search": ["news"],
+    "announcement-search": ["announcement"],
+    "report-search": ["report"],
+}
+
+
 def _query_http(query: str, skill_id: str, limit: int = 10, retries: int = 2):
-    """直接 POST 蜜蜂技能网关。保持与改造前完全相同的请求形态。"""
-    body = json.dumps({
-        "query": query, "page": "1", "limit": str(limit),
-        "is_cache": "1", "expand_index": "true",
-    }).encode("utf-8")
+    """POST 蜜蜂技能网关，**按技能选择端点与请求体**。
+
+    ⚠️ 此前本函数对所有技能一律发 query2data 形态的 body，导致 search 类
+       （news/announcement/report）与 query2data 的技能契约不符。
+       现已按技能正确分流：
+
+         query2data            : {query, page, limit, is_cache, expand_index}
+         comprehensive/search  : {channels, app_id, query}
+    """
+    if skill_id in SEARCH_SKILL_IDS:
+        url = gateway_url().replace("/skills/v1/query2data",
+                                    "/skills/v1/comprehensive/search")
+        body = json.dumps({
+            "channels": SEARCH_SKILL_IDS[skill_id],
+            "app_id": "AIME_SKILL",
+            "query": query,
+        }, ensure_ascii=False).encode("utf-8")
+    else:
+        url = gateway_url()
+        body = json.dumps({
+            "query": query, "page": "1", "limit": str(limit),
+            "is_cache": "1", "expand_index": "true",
+        }, ensure_ascii=False).encode("utf-8")
 
     last_err = None
     for attempt in range(retries + 1):
-        req = urllib.request.Request(gateway_url(), data=body,
+        req = urllib.request.Request(url, data=body,
                                      headers=_headers(skill_id), method="POST")
         try:
             with urllib.request.urlopen(req, timeout=timeout_s()) as r:

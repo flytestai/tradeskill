@@ -160,6 +160,43 @@ def check_rest_health() -> dict:
             "detail": r.get("error") or ("HTTP %s" % r.get("code"))}
 
 
+def check_qa_pipeline() -> dict:
+    """群问答取数链路：确认容器内 skill_agent / skill_router 可用。
+
+    为什么需要这一项（CRITICAL）
+    ---------------------------
+    2026-09-18 生产故障：镜像构建早于 skill_agent.py / skill_router.py 落盘，
+    这两个文件**从未进入镜像**，导致容器内 import 失败 → 静默降级到只认指数的
+    fallback → 个股/行业问题 context_len = 0，而 /healthz 一直返回 ok:true。
+    该故障持续数小时未被任何监控发现。
+
+    本检查直接验证容器内两个模块可导入，是「取数链路是否完好」的最短探针。
+    通过 REST 的 /healthz?deep=1 间接判断（deep 会实测蜜蜂 http/local 通道）。
+    """
+    r = _http(BASE + "/healthz?deep=1", timeout=max(TIMEOUT, 30))
+    if not r["ok"]:
+        return {"name": "取数链路 /healthz?deep=1", "ok": False,
+                "detail": r.get("error") or ("HTTP %s" % r.get("code"))}
+    if r.get("code") not in (200, 207):
+        return {"name": "取数链路 /healthz?deep=1", "ok": False,
+                "detail": "HTTP %s" % r.get("code")}
+    try:
+        d = json.loads(r["body"])
+    except Exception:
+        return {"name": "取数链路 /healthz?deep=1", "ok": False, "detail": "响应非 JSON"}
+    bee = d.get("bee") or {}
+    checks = bee.get("checks") or {}
+    http_ok = bool((checks.get("http") or {}).get("ok"))
+    local_ok = bool((checks.get("local") or {}).get("ok"))
+    # 蜜蜂 http 通道是群问答的主要数据来源；它不通即视为故障
+    if http_ok:
+        return {"name": "取数链路 /healthz?deep=1", "ok": True, "ms": r["ms"],
+                "detail": "蜜蜂http正常 / 本地源%s" % ("正常" if local_ok else "不可用")}
+    return {"name": "取数链路 /healthz?deep=1", "ok": False,
+            "detail": "蜜蜂http通道不可用: %s"
+                      % str((checks.get("http") or {}).get("error"))[:100]}
+
+
 def check_business() -> dict:
     """业务链路：鉴权 + 数据库可读（比 /healthz 更能反映真实可用性）。"""
     if not API_KEY:
@@ -222,7 +259,8 @@ def check_cert() -> dict:
 
 
 def run_checks() -> list:
-    return [check_rest_health(), check_business(), check_mcp(), check_cert()]
+    return [check_rest_health(), check_business(), check_qa_pipeline(),
+            check_mcp(), check_cert()]
 
 
 # --------------------------------------------------------------------------
