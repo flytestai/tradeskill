@@ -23,6 +23,10 @@
     GET  /api/v1/market/summary      行情汇总
     GET  /api/v1/market/quote        行情查询
     GET  /api/v1/system/alerts       提醒状态
+    GET  /api/v1/llm/status          LLM(Kimi) 配置状态
+    POST /api/v1/llm/ask             调用 Kimi 回答问题
+    POST /api/v1/llm/summarize       对内容做归纳解读
+    GET  /api/v1/system/qa-queue     群问答队列状态
 
 鉴权：X-API-Key 或 Authorization: Bearer <key>（见 platform/auth.py）
 """
@@ -244,6 +248,42 @@ def market_quote(ctx):
 # --------------------------------------------------------------------------
 # 系统
 # --------------------------------------------------------------------------
+
+# --------------------------------------------------------------------------
+# LLM（Kimi）
+# --------------------------------------------------------------------------
+
+@app.get("/api/v1/llm/status")
+@require_auth("system:read")
+def llm_status(ctx):
+    return ok(services.llm_status())
+
+
+@app.post("/api/v1/llm/ask")
+@require_auth("llm:use")
+def llm_ask(ctx):
+    b = request.get_json(silent=True) or {}
+    q = b.get("question") or request.args.get("question", "")
+    if not q:
+        return fail("缺少 question")
+    return ok(services.llm_ask(q, b.get("context", "")))
+
+
+@app.post("/api/v1/llm/summarize")
+@require_auth("llm:use")
+def llm_summarize(ctx):
+    b = request.get_json(silent=True) or {}
+    c = b.get("content") or ""
+    if not c:
+        return fail("缺少 content")
+    return ok(services.llm_summarize(c, b.get("instruction", "")))
+
+
+@app.get("/api/v1/system/qa-queue")
+@require_auth("kol:read")
+def qa_queue(ctx):
+    return ok(services.qa_queue_status())
+
 
 @app.get("/api/v1/system/alerts")
 @require_auth("kol:read")

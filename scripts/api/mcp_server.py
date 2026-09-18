@@ -185,6 +185,41 @@ def build_server():
         """当前告警触发状态与已配置的价格提醒。"""
         return services.alert_status()
 
+    # ---------------- LLM（Kimi）能力 ----------------
+
+    @mcp.tool()
+    def llm_ask(question: str, context: str = "") -> dict:
+        """调用 Kimi 大模型回答问题。
+
+        适用于需要自然语言推理的场景（如「这个位置还能建仓吗」）。
+        context 可放入平台数据（行情/言论/关键位），让回答更贴合实际。
+
+        Args:
+            question: 用户问题
+            context:  可选的数据上下文（平台查询结果）
+        """
+        return services.llm_ask(question, context)
+
+    @mcp.tool()
+    def llm_summarize(content: str, instruction: str = "") -> dict:
+        """对给定内容做归纳解读（如把分析报告浓缩成要点）。
+
+        Args:
+            content:     待归纳的文本
+            instruction: 自定义指令（留空用默认：3-5 条要点 + 风险提示）
+        """
+        return services.llm_summarize(content, instruction)
+
+    @mcp.tool()
+    def llm_status() -> dict:
+        """查看 LLM（Kimi）配置状态（provider/model/是否已配置）。"""
+        return services.llm_status()
+
+    @mcp.tool()
+    def qa_queue_status() -> dict:
+        """查看群问答待处理队列（有多少条 @机器人 的问题排队）。"""
+        return services.qa_queue_status()
+
     @mcp.tool()
     def capabilities() -> list:
         """列出本平台对外提供的全部能力。"""

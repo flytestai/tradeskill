@@ -157,22 +157,34 @@ def silence_subprocess():
 
     后端脚本调用 lark-cli / bash / python 时，cmd 黑窗会反复闪烁打扰用户；
     这里给 subprocess.run / Popen 打补丁，默认加上 CREATE_NO_WINDOW。
+
+    ⚠️ 为什么 Popen 用**子类**而不是装饰函数替换：
+       某些第三方库（实测 starlette / MCP SDK）会写
+           class Popen(subprocess.Popen): ...
+       即把 subprocess.Popen 当作**基类**去继承。若把它替换成普通函数，
+       继承时会抛 `TypeError: function() argument 'code' must be code, not str`。
+       用子类替换则保持「可继承」语义，同时达到加默认 creationflags 的目的。
+
+    ⚠️ Linux 上 NO_WINDOW=0，本函数直接返回 —— 容器的 MCP 服务不受影响。
     """
     if not NO_WINDOW:
         return
+
     _run = subprocess.run
-    _popen = subprocess.Popen
+    _Popen = subprocess.Popen
 
     def _run_w(*a, **kw):
         kw.setdefault("creationflags", NO_WINDOW)
         return _run(*a, **kw)
 
-    def _popen_w(*a, **kw):
-        kw.setdefault("creationflags", NO_WINDOW)
-        return _popen(*a, **kw)
+    class _PopenW(_Popen):  # type: ignore[misc,valid-type]
+        """继承原生 Popen，仅为未显式指定时补上 CREATE_NO_WINDOW。"""
+        def __init__(self, *a, **kw):
+            kw.setdefault("creationflags", NO_WINDOW)
+            super().__init__(*a, **kw)
 
     subprocess.run = _run_w
-    subprocess.Popen = _popen_w
+    subprocess.Popen = _PopenW
 
 
 silence_subprocess()
