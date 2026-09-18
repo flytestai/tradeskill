@@ -62,10 +62,15 @@ EXPOSE 8000
 
 # 健康检查：用 Python 标准库而非 curl，省掉一个系统依赖，
 # 也避免老版 Docker 对 HEALTHCHECK 转义的处理差异。
+#
+# ⚠️ 仅对默认的 REST 镜像有意义。
+#    MCP 模式下只暴露 /mcp（POST + SSE），探 /healthz 必然 404，
+#    会导致容器被误标为 unhealthy —— 因此启动 MCP 时必须用
+#    `--no-healthcheck` 覆盖（见 start.sh / 部署文档）。
 HEALTHCHECK --interval=60s --timeout=15s --start-period=20s --retries=3 \
   CMD python -c "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/healthz',timeout=10).status==200 else 1)"
 
-# 默认启动 REST；MCP 由 compose 覆盖 command
+# 默认启动 REST；MCP 由 compose/start.sh 覆盖 command
 # 用脚本路径而非 -m 模块方式：
 # api 包位于 scripts/ 下，不在仓库根，`-m api.rest_app` 会 ModuleNotFoundError。
 # 直接执行脚本时，脚本内的 sys.path.insert 会正确完成自举。
