@@ -117,9 +117,23 @@ def is_configured() -> bool:
 # 核心调用
 # --------------------------------------------------------------------------
 
+#: 用途 → 模型分工（性能实测：规划用 k2.6 仅 5s，k3 需 21s；汇总仍用 k3 保质量）
+MODEL_BY_PURPOSE = {
+    "plan": os.environ.get("LLM_MODEL_PLAN", "kimi-k2.6"),
+    "summarize": os.environ.get("LLM_MODEL_SUMMARIZE", ""),   # 空=用默认 LLM_MODEL
+    "chat": "",
+}
+
+
+def model_for(purpose: str = "") -> str:
+    """按用途返回模型名（未配置则回退默认模型）。"""
+    m = MODEL_BY_PURPOSE.get(purpose or "", "")
+    return m or model()
+
+
 def chat(prompt: str, system: str = "", history: list = None,
          temperature: float = None, max_tokens_: int = None,
-         retries: int = 2, timeout: int = None) -> str:
+         retries: int = 2, timeout: int = None, purpose: str = "") -> str:
     """发起一次对话，返回助手回复文本。
 
     :param prompt:      用户输入
@@ -138,14 +152,17 @@ def chat(prompt: str, system: str = "", history: list = None,
         msgs.extend(history)
     msgs.append({"role": "user", "content": prompt})
 
+    used_model = model_for(purpose)
     payload = {
-        "model": model(),
+        "model": used_model,
         "messages": msgs,
         "max_tokens": max_tokens_ or max_tokens(),
     }
-    # kimi-k3 仅接受 temperature=1；不显式传更安全
-    if temperature is not None:
-        payload["temperature"] = temperature
+    # ⚠️ kimi-k3 与 kimi-k2.6 **都只接受 temperature=1**，传其他值会
+    #   报 "invalid temperature: only 1 is allowed"（已实测）。
+    #   故仅当显式传入 1 时才带上该字段，其余情况交给服务端默认。
+    if temperature == 1:
+        payload["temperature"] = 1
 
     # ⚠️ 必须编码为 UTF-8 字节流（见模块 docstring 的说明）
     body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
@@ -159,7 +176,6 @@ def chat(prompt: str, system: str = "", history: list = None,
     last_err = None
     for attempt in range(retries + 1):
         req = urllib.request.Request(url, data=body, headers=headers, method="POST")
-        t0 = time.time()
         try:
             with urllib.request.urlopen(req, timeout=timeout or timeout_s()) as r:
                 data = json.loads(r.read().decode("utf-8"))
@@ -167,7 +183,15 @@ def chat(prompt: str, system: str = "", history: list = None,
         except urllib.error.HTTPError as e:
             detail = e.read().decode("utf-8", "replace")[:300]
             last_err = "HTTP %s: %s" % (e.code, detail)
-            # 4xx 多为参数/鉴权问题，重试无意义
+            # ⚠️ 429 必须重试：Moonshot 组织级限流在生产中很常见
+            #   （群问答每 2 分钟一轮，每轮「规划+汇总」两次调用，
+            #    并发或密集调用会触发 "Organization Rate limit exceeded"）。
+            #   退避时间取 3s / 8s / 16s，给足配额恢复时间。
+            if e.code == 429:
+                if attempt < retries:
+                    time.sleep(3.0 * (2 ** attempt))
+                continue
+            # 其余 4xx 多为参数/鉴权问题，重试无意义
             if 400 <= e.code < 500:
                 raise LLMError(last_err)
         except Exception as e:
@@ -196,7 +220,7 @@ def chat_full(prompt: str, system: str = "", **kw) -> dict:
     """返回结构化结果（含用量），便于记录与计费观察。"""
     t0 = time.time()
     text = chat(prompt, system=system, **kw)
-    return {"text": text, "model": model(), "provider": provider(),
+    return {"text": text, "model": model_for(kw.get("purpose", "")), "provider": provider(),
             "elapsed_ms": int((time.time() - t0) * 1000)}
 
 
@@ -206,19 +230,27 @@ def chat_full(prompt: str, system: str = "", **kw) -> dict:
 
 #: 金融场景的系统提示词（统一口径，避免各调用点风格不一）
 SYSTEM_FINANCE = (
-    "你是一名严谨的 A 股市场分析助手。要求：\n"
-    "1. 回答简洁直接，先给结论再给依据，避免空话套话；\n"
-    "2. 涉及点位/数据时明确标注来源时间与口径，不确定的不要编造；\n"
-    "3. 必须提示风险，不给出确定性收益承诺；\n"
-    "4. 回答末尾附一行：本内容由 AI 生成，仅供参考，不构成投资建议。"
+    "你是一名严谨的 A 股市场分析助手，服务于群聊里的提问者。要求：\n"
+    "1. **有数据就必须用**：下面会给你平台检索到的数据（行情/财务/行业/研报/宏观/资讯），"
+    "回答必须建立在这些数据上，并**引用具体数字**，不要泛泛而谈；\n"
+    "2. **先给结论**，再给 2-4 条依据，结构清晰、篇幅适中（群聊场景，控制在 400 字内）；\n"
+    "3. **数据缺失就明说**：如果给你的数据不足以回答某个点，直接讲"
+    "「这块数据没取到」，禁止编造数字或凭印象作答；\n"
+    "4. **标注口径**：数据带日期/来源的要说清楚（如「截至 9/18」）；"
+    "指数与个股别混淆（上证 ≠ 创业板）；\n"
+    "5. **必须提示风险**，不给出确定性收益承诺，不做买卖指令，只给分析框架与条件化建议；\n"
+    "6. 回答末尾附一行：本内容由 AI 生成，仅供参考，不构成投资建议。"
 )
 
 
 def analyze_question(question: str, context: str = "") -> str:
-    """群问答场景：结合平台数据上下文回答问题。"""
-    prompt = question
+    """群问答场景：结合平台多源数据回答问题。"""
     if context:
-        prompt = "【平台数据】\n%s\n\n【用户问题】\n%s" % (context, question)
+        prompt = ("【平台检索数据】\n%s\n\n【用户问题】\n%s\n\n"
+                  "请基于上面的数据回答；数据不足的部分请直接说明。" % (context, question))
+    else:
+        prompt = ("【用户问题】\n%s\n\n注意：本次未取到平台数据，"
+                  "请明确告知用户这一限制，不要凭记忆编造行情数字。" % question)
     return chat(prompt, system=SYSTEM_FINANCE)
 
 

@@ -113,73 +113,58 @@ _INDEX_WORDS = ("上证指数", "深证成指", "创业板指", "创业板", "�
 
 
 def build_context(question: str) -> str:
-    """按问题内容取平台数据，拼成给 Kimi 的上下文。
+    """按问题意图调用蜜蜂多技能，聚合出结构化上下文。
 
-    失败不影响主流程 —— 拿不到数据就只问 Kimi 本身（但会提示无数据）。
+    实现已统一收敛到 `skill_router`（技能整合层）：
+      · 意图识别 → 编排多个蜜蜂技能（行情/财务/行业/研报/宏观/ETF/资讯…）
+      · 叠加本地能力（KOL 言论库、关键位）
+      · 顺序执行 + 独立超时 + 总预算控制，任一失败不影响其余
+
+    之所以抽出去：原先此处只覆盖「指数/个股/关键位/大V」四类，
+    大量问句拿不到数据，AI 只能泛泛而谈；且同一逻辑散在两处易漂移。
     """
+    # 优先用 AI 自主规划（skill_agent）：让它根据问题自行决定调哪些 skill / MCP
+    try:
+        sys.path.insert(0, SCRIPTS)
+        from skill_agent import build_context as _build_ai
+        ctx = _build_ai(question) or ""
+        if ctx:
+            return ctx
+        log("    ⚠️ AI 规划未取到数据，回退规则路由")
+    except Exception as e:
+        log("    ⚠️ skill_agent 不可用，回退规则路由: %s" % str(e)[:80])
+
+    # 回退 1：规则路由（关键词）
+    try:
+        from skill_router import build_context as _build_rule
+        ctx = _build_rule(question) or ""
+        if ctx:
+            return ctx
+    except Exception:
+        pass
+
+    # 回退 2：仅取指数行情（保证至少有数据）
+    return _build_context_fallback(question)
+
+
+def _build_context_fallback(question: str) -> str:
+    """兜底：skill_router 不可用时，仅取指数行情（保证至少有数据）。"""
     parts = []
     q = question or ""
-
-    # 1) 指数行情（问句提到指数或大盘）
     if any(w in q for w in _INDEX_WORDS):
-        for idx in ("上证指数", "创业板指", "科创综指"):
-            if idx in q or (idx == "上证指数" and "大盘" in q):
-                try:
-                    out = run_script(["scripts/bee_client.py", "--query", idx,
-                                      "--skill-id", "hithink-zhishu-query",
-                                      "--channel", "local", "--json"], timeout=45)
-                    d = json.loads(out)
-                    item = (d.get("datas") or [{}])[0]
-                    if item:
-                        parts.append("%s：最新 %s，涨跌幅 %s%%，最高 %s，最低 %s"
-                                     % (item.get("名称", idx), item.get("最新价", "?"),
-                                        item.get("涨跌幅", "?"), item.get("最高", "-"),
-                                        item.get("最低", "-")))
-                except Exception as e:
-                    parts.append("%s：取数失败(%s)" % (idx, str(e)[:40]))
-
-    # 2) 个股代码（问句含 6 位代码）
-    codes = _CODE_RE.findall(q)
-    for c in codes[:3]:
-        try:
-            out = run_script(["scripts/bee_client.py", "--query", c,
-                              "--skill-id", "hithink-market-query", "--json"], timeout=45)
-            d = json.loads(out)
-            item = (d.get("datas") or [{}])[0]
-            if item:
-                name = item.get("股票简称") or item.get("指数简称") or c
-                price = item.get("最新价") or item.get("最新收盘价") or "?"
-                chg = item.get("最新涨跌幅") or item.get("涨跌幅") or "?"
-                parts.append("%s(%s)：最新 %s，涨跌幅 %s%%" % (name, c, price, chg))
-        except Exception as e:
-            parts.append("代码 %s：取数失败(%s)" % (c, str(e)[:40]))
-
-    # 3) 关键点位（问句涉及点位/支撑压力）
-    if any(w in q for w in ("点位", "支撑", "压力", "关键位", "止损")):
-        for idx in ("创业板指", "上证指数"):
-            if idx in q or ("创业板" in q and idx == "创业板指"):
-                try:
-                    out = run_script(["scripts/level_monitor.py", "--list"], timeout=45)
-                    if idx in out:
-                        parts.append("关键位参考：\n" + out[:600])
-                        break
-                except Exception:
-                    pass
-
-    # 4) 大V最新观点（问句涉及大V）
-    for kol in ("wu2198",):
-        if kol.lower() in q.lower() or "大V" in q or "老吴" in q:
+        for idx in ("上证指数", "创业板指"):
             try:
-                out = run_script(["scripts/db_query.py", "--kol-name", kol,
-                                  "--days", "3", "--latest", "5", "--json"], timeout=45)
-                recs = json.loads(out)
-                if isinstance(recs, list) and recs:
-                    lines = ["%s %s" % (str(r.get("record_date"))[:16],
-                                        (r.get("content") or "")[:70]) for r in recs[:5]]
-                    parts.append("%s 近3日观点：\n%s" % (kol, "\n".join(lines)))
+                out = run_script(["scripts/bee_client.py", "--query", idx,
+                                  "--skill-id", "hithink-zhishu-query",
+                                  "--channel", "local", "--json"], timeout=45)
+                d = json.loads(out)
+                item = (d.get("datas") or [{}])[0]
+                if item:
+                    parts.append("%s：最新 %s，涨跌幅 %s%%"
+                                 % (item.get("名称", idx), item.get("最新价", "?"),
+                                    item.get("涨跌幅", "?")))
             except Exception:
                 pass
-
     return "\n".join(parts)
 
 
