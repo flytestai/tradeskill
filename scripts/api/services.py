@@ -271,18 +271,43 @@ def llm_status() -> dict:
             "base_url": base_url(), "model": model(), "max_tokens": max_tokens()}
 
 
-def llm_ask(question: str, context: str = "") -> dict:
-    """调用 Kimi 回答问题（可附平台数据上下文）。"""
+def llm_ask(question: str, context: str = "", auto_context: bool = True) -> dict:
+    """调用 Kimi 回答问题。
+
+    :param auto_context: 为 True（默认）且未显式提供 context 时，
+        自动按问题内容取平台数据（行情/关键位/大V言论）注入，
+        避免模型因缺少实时数据而拒答或用过时知识回答。
+    """
     if not question or not question.strip():
         raise ServiceError("缺少 question")
+
+    ctx = context or ""
+    if not ctx and auto_context:
+        try:
+            ctx = _auto_context(question)
+        except Exception:
+            ctx = ""          # 取数失败不影响主流程
+
     try:
         from llm_client import analyze_question, LLMError
     except Exception as e:
         raise ServiceError("llm_client 不可用: %s" % e)
     try:
-        return {"text": analyze_question(question.strip(), context)}
+        return {"text": analyze_question(question.strip(), ctx),
+                "context_used": bool(ctx),
+                "context_len": len(ctx)}
     except LLMError as e:
         raise ServiceError(str(e))
+
+
+def _auto_context(question: str) -> str:
+    """按问题关键词自动取平台数据（复用 qa_analyzer 的逻辑，单一实现）。"""
+    try:
+        sys.path.insert(0, SCRIPTS)
+        import qa_analyzer
+        return qa_analyzer.build_context(question)
+    except Exception as e:
+        return ""
 
 
 def llm_summarize(content: str, instruction: str = "") -> dict:
