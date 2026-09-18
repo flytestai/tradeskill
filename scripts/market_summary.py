@@ -20,6 +20,7 @@ import re
 import secrets
 import subprocess
 import sys
+import time
 import urllib.parse
 import urllib.request
 from datetime import datetime, timezone, timedelta
@@ -387,21 +388,114 @@ def ma_alignment(closes):
             "above_ma60": (price > ma60) if ma60 else None}
 
 
-def query_ndx_risk():
-    """读取公开Yahoo日线，计算ATR14、短中期实现波动率、RSI14 与均线排列。失败时返回空。"""
-    url = "https://query1.finance.yahoo.com/v8/finance/chart/%5ENDX?range=180d&interval=1d"
+_DAILY_CACHE = {"date": "", "rows": []}
+
+
+def _fetch_ndx_daily():
+    """获取纳斯达克100日线 (high, low, close)，多源回退 + 当日缓存。
+
+    Yahoo 接口已对本站返回 403，因此以腾讯为主源（us.nDX 可取 260 根日线）。
+    日线在一天内不会变化，按日缓存可避免盘前/盘中多次调用重复请求，
+    也能抵挡瞬时网络抖动造成的技术面指标为空。
+    """
+    today = datetime.now(timezone(timedelta(hours=8))).strftime("%Y-%m-%d")
+    if _DAILY_CACHE["date"] == today and _DAILY_CACHE["rows"]:
+        return _DAILY_CACHE["rows"]
+
+    # 主源：站内行情接口的指数历史（近 120 个交易日，含高开低收）。
+    # 说明：腾讯日线接口已对本站返回 501 反爬，Yahoo 返回 403，故以此为主源。
     try:
-        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"}, method="GET")
-        with urllib.request.urlopen(req, timeout=20) as r:
+        item = query_item("纳斯达克100指数近120日最高价最低价收盘价") or {}
+        buckets = {}
+        for key, val in item.items():
+            m = re.search(r"\[(\d{8})\]", key)
+            if not m:
+                continue
+            day = m.group(1)
+            try:
+                num = float(val)
+            except (TypeError, ValueError):
+                continue
+            if key.startswith("最高价"):
+                buckets.setdefault(day, {})["high"] = num
+            elif key.startswith("最低价"):
+                buckets.setdefault(day, {})["low"] = num
+            elif key.startswith("收盘价"):
+                buckets.setdefault(day, {})["close"] = num
+        rows = [(b["high"], b["low"], b["close"]) for _, b in sorted(buckets.items())
+                if b.get("high") and b.get("low") and b.get("close")]
+        if len(rows) >= 60:
+            _DAILY_CACHE["date"] = today
+            _DAILY_CACHE["rows"] = rows
+            return rows
+    except Exception as e:
+        print("[WARN] 指数历史日线查询失败: %s" % str(e)[:120])
+
+    # 备源：Yahoo（部分网络环境仍可用）
+    try:
+        url = "https://query1.finance.yahoo.com/v8/finance/chart/%5ENDX?range=180d&interval=1d"
+        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+        with urllib.request.urlopen(req, timeout=15) as r:
             result = (json.loads(r.read().decode("utf-8", "replace")).get("chart", {}).get("result") or [None])[0]
-        if not result:
-            return {}
-        q = result.get("indicators", {}).get("quote", [{}])[0]
-        closes = q.get("close") or []
-        highs = q.get("high") or []
-        lows = q.get("low") or []
-        rows = [(float(h), float(l), float(c)) for h, l, c in zip(highs, lows, closes)
+        q = (result or {}).get("indicators", {}).get("quote", [{}])[0]
+        rows = [(float(h), float(l), float(c)) for h, l, c in
+                zip(q.get("high") or [], q.get("low") or [], q.get("close") or [])
                 if h is not None and l is not None and c is not None and c > 0]
+        if len(rows) >= 60:
+            return rows
+    except Exception:
+        pass
+    return []
+
+
+def macd(closes, fast=12, slow=26, signal=9):
+    """MACD(12,26,9)：返回 (dif, dea, hist)。样本不足返回 (None, None, None)。"""
+    vals = [float(c) for c in (closes or []) if c]
+    if len(vals) < slow + signal + 5:
+        return None, None, None
+    def ema(seq, n):
+        k = 2.0 / (n + 1)
+        out = [seq[0]]
+        for x in seq[1:]:
+            out.append(out[-1] + k * (x - out[-1]))
+        return out
+    ef, es = ema(vals, fast), ema(vals, slow)
+    dif = [a - b for a, b in zip(ef, es)]
+    dea = ema(dif[slow - 1:], signal)
+    return dif[-1], dea[-1], (dif[-1] - dea[-1]) * 2
+
+
+def bollinger(closes, n=20, k=2.0):
+    """布林带：返回 (mid, upper, lower, 价格所处百分比位置)。"""
+    vals = [float(c) for c in (closes or []) if c]
+    if len(vals) < n:
+        return None, None, None, None
+    window = vals[-n:]
+    mid = sum(window) / n
+    var = sum((x - mid) ** 2 for x in window) / n
+    sd = math.sqrt(var)
+    upper, lower = mid + k * sd, mid - k * sd
+    pos = None
+    if upper > lower:
+        pos = (vals[-1] - lower) / (upper - lower) * 100
+    return mid, upper, lower, pos
+
+
+def support_resistance(closes, lookback=60):
+    """近期高点/低点作为支撑阻力，并给出价格在区间中的位置百分比。"""
+    vals = [float(c) for c in (closes or []) if c]
+    if len(vals) < 20:
+        return {}
+    window = vals[-lookback:]
+    hi, lo = max(window), min(window)
+    pos = (vals[-1] - lo) / (hi - lo) * 100 if hi > lo else None
+    return {"high": hi, "low": lo, "pos": pos}
+
+
+def query_ndx_risk():
+    """计算纳斯达克100技术面：ATR、波动率、RSI、均线、MACD、布林带、支撑阻力。"""
+    try:
+        rows = _fetch_ndx_daily()
         if len(rows) < 30:
             return {}
         trs = []
@@ -426,8 +520,12 @@ def query_ndx_risk():
             variance = sum((x - mean) ** 2 for x in values) / (len(values) - 1)
             return math.sqrt(variance) * math.sqrt(252) * 100
         vol5, vol20, vol60 = annual_vol(rets5), annual_vol(rets20), annual_vol(rets60)
-        rsi = rsi14([c for _, _, c in rows])
-        align = ma_alignment([c for _, _, c in rows])
+        clist = [c for _, _, c in rows]
+        rsi = rsi14(clist)
+        align = ma_alignment(clist)
+        dif, dea, hist = macd(clist)
+        boll_mid, boll_up, boll_low, boll_pos = bollinger(clist)
+        sr = support_resistance(clist)
         return {
             "atr14": atr14,
             "atr_pct": atr14 / rows[-1][2] * 100,
@@ -437,6 +535,10 @@ def query_ndx_risk():
             "vol60": vol60,
             "vol_ratio": (vol5 / vol20) if vol5 is not None and vol20 else None,
             "rsi14": rsi,
+            "macd_dif": dif, "macd_dea": dea, "macd_hist": hist,
+            "boll_mid": boll_mid, "boll_up": boll_up, "boll_low": boll_low,
+            "boll_pos": boll_pos,
+            "sr_high": sr.get("high"), "sr_low": sr.get("low"), "sr_pos": sr.get("pos"),
             "ma_state": align.get("state"),
             "above_ma20": align.get("above_ma20"),
             "above_ma60": align.get("above_ma60"),
@@ -447,10 +549,10 @@ def query_ndx_risk():
             "ma20_dev": align.get("ma20_dev"),
             "ma20": align.get("ma20"),
             "ma60": align.get("ma60"),
-            "data_date": str((result.get("meta") or {}).get("regularMarketTime", "")),
+            "bars": len(rows),
         }
     except Exception as e:
-        print("[WARN] 纳斯达克100 ATR/波动率/RSI查询失败: %s" % e)
+        print("[WARN] 纳斯达克100技术指标计算失败: %s" % e)
         return {}
 
 
@@ -827,6 +929,26 @@ def short_quant_evaluation(quote, high_info, levels, etf, risk_info=None, volume
         elif rsi >= 65:
             rsi_adj = -2
     ma_adj = {"多头排列": 4, "空头排列": -4}.get(ma_state, 0)
+    # MACD 金叉/死叉 + 布林带位置：短线择时的确认项
+    macd_dif = (risk_info or {}).get("macd_dif")
+    macd_dea = (risk_info or {}).get("macd_dea")
+    boll_pos = (risk_info or {}).get("boll_pos")
+    macd_adj = 0
+    if macd_dif is not None and macd_dea is not None:
+        if macd_dif >= macd_dea and macd_dif >= 0:
+            macd_adj = 3      # 零轴上金叉：动能最强
+        elif macd_dif >= macd_dea:
+            macd_adj = 1      # 零轴下金叉：弱反弹
+        elif macd_dif < macd_dea and macd_dif < 0:
+            macd_adj = -3     # 零轴下死叉：弱势
+        else:
+            macd_adj = -1
+    boll_adj = 0
+    if boll_pos is not None:
+        if boll_pos <= 10:
+            boll_adj = 3      # 贴近下轨：超跌反弹概率上升
+        elif boll_pos >= 90:
+            boll_adj = -2     # 贴近上轨：短线过热
     volume_score = 0
     if vol_eval["label"] == "显著放量":
         volume_score = 15
@@ -843,10 +965,10 @@ def short_quant_evaluation(quote, high_info, levels, etf, risk_info=None, volume
 
     scores = {"动量": overseas, "ETF趋势": trend, "溢价执行": execution,
               "关键位": position, "量能": volume_score,
-              "技术": rsi_adj + ma_adj, "风险": risk}
-    # 各维度上限：动量25+趋势35+溢价28+关键位15+量能18+技术10+风险5 = 136，归一化到 100。
+              "技术": rsi_adj + ma_adj + macd_adj + boll_adj, "风险": risk}
+    # 各维度上限：动量25+趋势35+溢价28+关键位15+量能18+技术16+风险5 = 142，归一化到 100。
     raw_total = sum(scores.values())
-    total = min(100, round(raw_total / 136 * 100))
+    total = min(100, max(0, round(raw_total / 142 * 100)))
     if total >= 70:
         action, layers = "加仓", "1～2层（20%～40%）"
     elif total >= 55:
@@ -901,10 +1023,40 @@ def short_quant_evaluation(quote, high_info, levels, etf, risk_info=None, volume
 
 
 def fmt_optional(value, suffix="", decimals=2):
+    """格式化数值并去掉多余小数位。
+
+    注意：只有当存在小数点时才去掉末尾的 0，否则 70 会被 rstrip 成 7、29100 会变成 291。
+    """
     if value is None:
         return "--"
     text = ("%%.%df" % decimals) % value
-    return text.rstrip("0").rstrip(".") + suffix
+    if "." in text:
+        text = text.rstrip("0").rstrip(".")
+    return text + suffix
+
+
+def rsi_zone(rsi):
+    """RSI 区间解读。"""
+    if rsi is None:
+        return "区间 --"
+    if rsi >= 75:
+        return "超买"
+    if rsi >= 65:
+        return "偏强"
+    if rsi > 45:
+        return "中性"
+    if rsi > 30:
+        return "偏弱"
+    return "超卖"
+
+
+def macd_zone(dif, dea):
+    """MACD 金叉/死叉与零轴位置解读。"""
+    if dif is None or dea is None:
+        return "数据 --"
+    cross = "金叉" if dif >= dea else "死叉"
+    side = "零轴上" if dif >= 0 else "零轴下"
+    return "%s·%s" % (cross, side)
 
 
 def fmt_level_space(level, current):
@@ -1038,6 +1190,24 @@ def quant_evaluation(quote, valuation, high_info, levels, etf, risk_info=None, v
         tech_score += 5
     elif ma_state == "空头排列":
         tech_score -= 5
+    # MACD 中期动能 + 布林带位置（波段视角）
+    macd_dif = (risk_info or {}).get("macd_dif")
+    macd_dea = (risk_info or {}).get("macd_dea")
+    boll_pos = (risk_info or {}).get("boll_pos")
+    if macd_dif is not None and macd_dea is not None:
+        if macd_dif >= macd_dea and macd_dif >= 0:
+            tech_score += 4
+        elif macd_dif >= macd_dea:
+            tech_score += 2
+        elif macd_dif < 0:
+            tech_score -= 4
+        else:
+            tech_score -= 2
+    if boll_pos is not None:
+        if boll_pos <= 10:
+            tech_score += 3
+        elif boll_pos >= 90:
+            tech_score -= 2
     volume_score = 0
     if vol_eval["label"] == "显著放量":
         volume_score = 15 if trend_score >= 20 else 8
@@ -1057,9 +1227,9 @@ def quant_evaluation(quote, valuation, high_info, levels, etf, risk_info=None, v
         "技术": tech_score,
         "风险": risk_score,
     }
-    # PE/PB及百分位不参与操作建议；其余维度合计上限 35+15+15+20+15+10+10=120，归一化到 100。
+    # PE/PB及百分位不参与操作建议；其余维度合计上限 35+15+15+20+15+16+10=126，归一化到 100。
     raw_total = sum(scores.values())
-    total = min(100, max(0, round(raw_total / 120 * 100)))
+    total = min(100, max(0, round(raw_total / 126 * 100)))
     if total >= 80:
         action, layers = "加仓", "4～5层（80%～100%）"
     elif total >= 65:
@@ -1253,9 +1423,23 @@ def build_premarket_message(intraday=False):
             if etf.get("premium_pct") is not None else ""),
         "📊 **量能**：%s｜%s" % (
             vol_eval["label"], vol_eval["note"]),
-        "📐 **技术面**：RSI14 %s｜均线 %s" % (
+        "📐 **技术面**：RSI14 %s｜均线 %s｜%s" % (
             fmt_optional((risk_info or {}).get("rsi14"), decimals=1),
-            (risk_info or {}).get("ma_state") or "--"),
+            (risk_info or {}).get("ma_state") or "--",
+            rsi_zone((risk_info or {}).get("rsi14"))),
+        "📊 **MACD**：%s｜DIF %s｜DEA %s" % (
+            macd_zone((risk_info or {}).get("macd_dif"), (risk_info or {}).get("macd_dea")),
+            fmt_optional((risk_info or {}).get("macd_dif"), decimals=1),
+            fmt_optional((risk_info or {}).get("macd_dea"), decimals=1)),
+        "📉 **布林带**：上轨 %s｜中轨 %s｜下轨 %s｜位置 %s" % (
+            fmt_optional((risk_info or {}).get("boll_up"), decimals=0),
+            fmt_optional((risk_info or {}).get("boll_mid"), decimals=0),
+            fmt_optional((risk_info or {}).get("boll_low"), decimals=0),
+            fmt_optional((risk_info or {}).get("boll_pos"), "%", decimals=0)),
+        "📏 **60日区间**：高 %s｜低 %s｜位置 %s" % (
+            fmt_optional((risk_info or {}).get("sr_high"), decimals=0),
+            fmt_optional((risk_info or {}).get("sr_low"), decimals=0),
+            fmt_optional((risk_info or {}).get("sr_pos"), "%", decimals=0)),
     ] + ([
         "💵 **上午成交额**：%s" % (fmt_yi(etf_amount) if etf_amount else "--"),
     ] if intraday else []) + [
