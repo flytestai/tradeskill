@@ -68,6 +68,18 @@ export PATH="/opt/node20/bin:/usr/local/bin:/usr/bin:/bin"
 export TZ=Asia/Shanghai
 cd "$DEPLOY_DIR" || exit 1
 
+# ---- 单实例锁（CRITICAL）----------------------------------------------------
+# 为什么需要：cron 每 2 分钟触发一次，而开启多轮追加取数后，单次问答最长可达
+#   数分钟（实测「厦门钨业能买吗」端到端 167s）。若上一轮尚未结束就再起一轮：
+#     1) 两个进程同时消费同一队列 → 可能重复回复
+#     2) 并发调用 Kimi → 账号是组织级 3 RPM，会直接触发 429
+#   故用 flock 保证同一时刻只有一个实例；抢不到锁直接退出（下一轮再来）。
+LOCKFILE="$DEPLOY_DIR/data/_qa_run.lock"
+exec 9>"$LOCKFILE"
+if ! flock -n 9; then
+    exit 0
+fi
+
 # 加载配置（剥离 CRLF —— Windows 编辑过的配置会带 \r，
 #   会导致 source 报 `$'\r': command not found` 且变量尾部多出 \r）
 _load_env() {
