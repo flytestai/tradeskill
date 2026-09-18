@@ -26,6 +26,25 @@ from datetime import datetime, timezone, timedelta
 
 from common import find_bash, is_trading_time as _c_is_trading_time, load_holidays
 
+try:
+    from safe_json import read_json, write_json
+except Exception:
+    def read_json(path, default=None, **kw):
+        try:
+            with open(path, encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            return default if default is not None else {}
+
+    def write_json(path, data, indent=2):
+        try:
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(data, f, ensure_ascii=False, indent=indent)
+            return True
+        except Exception:
+            return False
+
 SKILL_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 ALERTS_FILE = os.path.join(SKILL_DIR, "data", "price_alerts.json")
 LOOP_LOCK_FILE = os.path.join(SKILL_DIR, "data", "_price_alerts_loop.lock")
@@ -56,19 +75,15 @@ NUM_RE = re.compile(r"(\d+(?:\.\d+)?)")
 
 
 def _load():
-    if os.path.exists(ALERTS_FILE):
-        try:
-            with open(ALERTS_FILE, "r", encoding="utf-8") as f:
-                return json.load(f)
-        except Exception:
-            return []
-    return []
+    # 损坏时留证并告警（不再静默返回空，否则会「提醒全部消失且无痕」）
+    d = read_json(ALERTS_FILE, default=[], on_error=lambda e, _p, b: print(
+        "[ERROR] 提醒列表损坏: %s（已备份 %s）: %s" % (_p, b or "无", e)))
+    return d if isinstance(d, list) else []
 
 
 def _save(alerts):
-    os.makedirs(os.path.dirname(ALERTS_FILE), exist_ok=True)
-    with open(ALERTS_FILE, "w", encoding="utf-8") as f:
-        json.dump(alerts, f, ensure_ascii=False, indent=2)
+    # 原子写：提醒列表被写坏会**丢掉用户设置的全部提醒**（详见 safe_json）
+    write_json(ALERTS_FILE, alerts)
 
 
 def query_price(target):

@@ -16,6 +16,25 @@
 """
 import json, os, argparse
 
+try:
+    from safe_json import read_json, write_json
+except Exception:
+    def read_json(path, default=None, **kw):
+        try:
+            with open(path, encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            return default if default is not None else {}
+
+    def write_json(path, data, indent=2):
+        try:
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(data, f, ensure_ascii=False, indent=indent)
+            return True
+        except Exception:
+            return False
+
 SKILL_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CONFIG_PATH = os.path.join(SKILL_DIR, "data", "level_targets.json")
 
@@ -40,9 +59,11 @@ DEFAULT_LEVELS = {
 }
 
 def load_levels():
-    if os.path.exists(CONFIG_PATH):
-        with open(CONFIG_PATH, "r", encoding="utf-8") as f:
-            return json.load(f)
+    # 文件损坏时留证并回退内置默认值（不能直接抛：会让依赖它的周报/问答崩掉）
+    d = read_json(CONFIG_PATH, default=None, on_error=lambda e, _p, b: print(
+        "[ERROR] 关键位文件损坏: %s（已备份 %s）: %s" % (_p, b or "无", e)))
+    if isinstance(d, dict) and d:
+        return d
     return dict(DEFAULT_LEVELS)
 
 
@@ -111,9 +132,8 @@ def levels_staleness_note():
     return "关键位数据日期 %s（%.0f 天前）" % (ds, age)
 
 def save_levels(data):
-    os.makedirs(os.path.dirname(CONFIG_PATH), exist_ok=True)
-    with open(CONFIG_PATH, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
+    # 原子写：关键位表被写坏会让所有点位丢失
+    write_json(CONFIG_PATH, data)
 
 def monitor(args):
     levels = load_levels()

@@ -20,6 +20,25 @@ import time
 
 from common import find_bash
 
+try:
+    from safe_json import read_json, write_json
+except Exception:
+    def read_json(path, default=None, **kw):
+        try:
+            with open(path, encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            return default if default is not None else {}
+
+    def write_json(path, data, indent=2):
+        try:
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(data, f, ensure_ascii=False, indent=indent)
+            return True
+        except Exception:
+            return False
+
 SKILL_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 BASH = find_bash()
 EMOJI = "Typing"  # 飞书「敲键盘/正在输入」表情
@@ -41,24 +60,13 @@ def _run_lark(cmd_parts, timeout=30):
 
 
 def _load_state():
-    if os.path.exists(STATE_FILE):
-        try:
-            with open(STATE_FILE, "r", encoding="utf-8") as f:
-                d = json.load(f)
-            if isinstance(d, dict):
-                return d
-        except Exception:
-            pass
-    return {}
+    d = read_json(STATE_FILE, default={})
+    return d if isinstance(d, dict) else {}
 
 
 def _save_state(state):
-    try:
-        os.makedirs(os.path.dirname(STATE_FILE), exist_ok=True)
-        with open(STATE_FILE, "w", encoding="utf-8") as f:
-            json.dump(state, f, ensure_ascii=False)
-    except Exception:
-        pass
+    # 原子写：表情状态被写坏只影响「敲键盘」清理，不影响问答主流程
+    write_json(STATE_FILE, state)
 
 
 def _clear_state(message_id):

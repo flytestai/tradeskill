@@ -12,30 +12,58 @@
 import argparse
 import json
 import os
+import sys
 
 SKILL_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 QUEUE_FILE = os.path.join(SKILL_DIR, "data", "group_qa_queue.json")
 
 
-def load():
-    if os.path.exists(QUEUE_FILE):
+# ⚠️ 原子写 + 损坏可见（详见 safe_json 模块说明）
+#    此前用裸 json.dump 写入：进程被杀/磁盘满会留下截断的 JSON，
+#    而 load() 的 `except: pass` 会把它当成空列表 —— **整条待处理队列静默丢失**。
+#    实测：截断的队列文件 → load() 返回 []。
+try:
+    from safe_json import read_json, write_json
+except Exception:                       # 兜底：退化为原实现
+    def read_json(path, default=None, **kw):
         try:
-            with open(QUEUE_FILE, "r", encoding="utf-8") as f:
-                d = json.load(f)
-            if isinstance(d, list):
-                return d
+            with open(path, encoding="utf-8") as f:
+                return json.load(f)
         except Exception:
-            pass
-    return []
+            return default if default is not None else {}
+
+    def write_json(path, data, indent=2):
+        try:
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(data, f, ensure_ascii=False, indent=indent)
+            return True
+        except Exception:
+            return False
+
+
+def _on_corrupt(exc, path, backup):
+    """队列文件损坏时必须留痕：这是「问题被丢掉」级别的故障。"""
+    try:
+        sys.stderr.write("[ERROR] 问答队列文件损坏: %s（已备份至 %s）: %s\n"
+                         % (path, backup or "无", exc))
+    except Exception:
+        pass
+
+
+def load():
+    d = read_json(QUEUE_FILE, default=[], on_error=_on_corrupt)
+    return d if isinstance(d, list) else []
 
 
 def save(items):
-    try:
-        os.makedirs(os.path.dirname(QUEUE_FILE), exist_ok=True)
-        with open(QUEUE_FILE, "w", encoding="utf-8") as f:
-            json.dump(items, f, ensure_ascii=False, indent=2)
-    except Exception:
-        pass
+    if not write_json(QUEUE_FILE, items):
+        try:
+            sys.stderr.write("[ERROR] 问答队列写入失败: %s\n" % QUEUE_FILE)
+        except Exception:
+            pass
+        return False
+    return True
 
 
 def append_item(item):

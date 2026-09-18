@@ -14,6 +14,7 @@ import hashlib
 import json
 import os
 import re
+import sys
 
 SKILL_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 ANSWERED_FILE = os.path.join(SKILL_DIR, "data", "group_qa_answered.json")
@@ -28,16 +29,39 @@ def question_key(sender_id, text):
     return hashlib.md5(raw.encode("utf-8")).hexdigest()
 
 
-def load():
-    if os.path.exists(ANSWERED_FILE):
+# ⚠️ 原子写 + 损坏可见（详见 safe_json）
+#    去重记录一旦因文件损坏被静默当成空，**所有历史问题都会被重复回答**。
+try:
+    from safe_json import read_json, write_json
+except Exception:
+    def read_json(path, default=None, **kw):
         try:
-            with open(ANSWERED_FILE, "r", encoding="utf-8") as f:
-                d = json.load(f)
-            if isinstance(d, dict):
-                return d
+            with open(path, encoding="utf-8") as f:
+                return json.load(f)
         except Exception:
-            pass
-    return {}
+            return default if default is not None else {}
+
+    def write_json(path, data, indent=2):
+        try:
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(data, f, ensure_ascii=False, indent=indent)
+            return True
+        except Exception:
+            return False
+
+
+def _on_corrupt(exc, path, backup):
+    try:
+        sys.stderr.write("[ERROR] 去重记录损坏: %s（已备份至 %s）: %s\n"
+                         % (path, backup or "无", exc))
+    except Exception:
+        pass
+
+
+def load():
+    d = read_json(ANSWERED_FILE, default={}, on_error=_on_corrupt)
+    return d if isinstance(d, dict) else {}
 
 
 def is_answered(sender_id, text, answered=None):
@@ -55,12 +79,12 @@ def mark_answered(sender_id, text, sender="", answered_at=""):
         "question": (text or "")[:500],
         "answered_at": answered_at or "",
     }
-    try:
-        os.makedirs(os.path.dirname(ANSWERED_FILE), exist_ok=True)
-        with open(ANSWERED_FILE, "w", encoding="utf-8") as f:
-            json.dump(d, f, ensure_ascii=False, indent=2)
-    except Exception:
-        pass
+    if not write_json(ANSWERED_FILE, d):
+        # 写失败必须留痕：否则下轮会重复回答同一问题
+        try:
+            sys.stderr.write("[ERROR] 去重记录写入失败: %s\n" % ANSWERED_FILE)
+        except Exception:
+            pass
     return key
 
 

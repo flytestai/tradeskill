@@ -30,6 +30,25 @@ import qa_dedup
 import qa_queue
 import react
 
+try:
+    from safe_json import read_json, write_json
+except Exception:
+    def read_json(path, default=None, **kw):
+        try:
+            with open(path, encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            return default if default is not None else {}
+
+    def write_json(path, data, indent=2):
+        try:
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(data, f, ensure_ascii=False, indent=indent)
+            return True
+        except Exception:
+            return False
+
 SKILL_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 BASH = find_bash()
 
@@ -88,25 +107,24 @@ def find_lark_cli():
 
 def load_watermark():
     """读取水位；若新水位文件不存在，从旧的 fetch_mentions 水位迁移，避免重放历史。"""
+    # ⚠️ 水位读写必须安全（详见 safe_json）
+    #    水位文件若因写一半而损坏、又被静默当成空，机器人会**重新拉取全部
+    #    历史消息并重复回复**。故：原子写 + 损坏留证并告警，绝不静默降级。
     for path in (WATERMARK_FILE, LEGACY_WATERMARK_FILE):
         if os.path.exists(path):
-            try:
-                with open(path, "r", encoding="utf-8") as f:
-                    return json.load(f).get("last_message_time", "")
-            except Exception:
-                pass
+            d = read_json(path, default=None,
+                          on_error=lambda e, _p, b: print(
+                              "[ERROR] 水位文件损坏: %s（已备份 %s）: %s" % (_p, b or "无", e)))
+            if isinstance(d, dict):
+                return d.get("last_message_time", "")
     return ""
 
 
 def save_watermark(t):
     if not t:
         return
-    try:
-        os.makedirs(os.path.dirname(WATERMARK_FILE), exist_ok=True)
-        with open(WATERMARK_FILE, "w", encoding="utf-8") as f:
-            json.dump({"last_message_time": t}, f, ensure_ascii=False)
-    except Exception as e:
-        print("[WARN] 保存水位失败: %s" % e)
+    if not write_json(WATERMARK_FILE, {"last_message_time": t}):
+        print("[WARN] 保存水位失败: %s" % WATERMARK_FILE)
 
 
 def to_iso(ts):
