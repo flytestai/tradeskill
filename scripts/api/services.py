@@ -258,6 +258,62 @@ def alert_status() -> dict:
 
 
 # --------------------------------------------------------------------------
+# LLM（Kimi）能力
+# --------------------------------------------------------------------------
+
+def llm_status() -> dict:
+    """LLM 配置状态（不发起调用）。"""
+    try:
+        from llm_client import provider, base_url, model, is_configured, max_tokens
+    except Exception as e:
+        return {"configured": False, "error": "llm_client 不可用: %s" % e}
+    return {"configured": is_configured(), "provider": provider(),
+            "base_url": base_url(), "model": model(), "max_tokens": max_tokens()}
+
+
+def llm_ask(question: str, context: str = "") -> dict:
+    """调用 Kimi 回答问题（可附平台数据上下文）。"""
+    if not question or not question.strip():
+        raise ServiceError("缺少 question")
+    try:
+        from llm_client import analyze_question, LLMError
+    except Exception as e:
+        raise ServiceError("llm_client 不可用: %s" % e)
+    try:
+        return {"text": analyze_question(question.strip(), context)}
+    except LLMError as e:
+        raise ServiceError(str(e))
+
+
+def llm_summarize(content: str, instruction: str = "") -> dict:
+    """对给定内容做归纳解读。"""
+    if not content or not content.strip():
+        raise ServiceError("缺少 content")
+    try:
+        from llm_client import summarize, LLMError
+    except Exception as e:
+        raise ServiceError("llm_client 不可用: %s" % e)
+    try:
+        return {"text": summarize(content, instruction)}
+    except LLMError as e:
+        raise ServiceError(str(e))
+
+
+def qa_queue_status() -> dict:
+    """群问答队列状态（有多少待处理）。"""
+    p = os.path.join(SKILL_DIR, "data", "group_qa_queue.json")
+    try:
+        with open(p, encoding="utf-8") as f:
+            items = json.load(f)
+        return {"pending": len(items) if isinstance(items, list) else 0,
+                "items": (items or [])[:5] if isinstance(items, list) else []}
+    except FileNotFoundError:
+        return {"pending": 0, "items": []}
+    except Exception as e:
+        return {"pending": 0, "error": str(e)[:120]}
+
+
+# --------------------------------------------------------------------------
 # 能力清单（供 MCP/文档自动生成）
 # --------------------------------------------------------------------------
 
@@ -276,4 +332,8 @@ def capabilities() -> list:
         {"name": "quote", "desc": "行情查询（可指定 http/local 通道）", "scopes": ["market:read"]},
         {"name": "bee_health", "desc": "蜜蜂通道健康检查", "scopes": ["system:read"]},
         {"name": "alert_status", "desc": "提醒与告警状态", "scopes": ["kol:read"]},
+        {"name": "llm_ask", "desc": "调用 Kimi 回答问题（可附平台数据上下文）", "scopes": ["llm:use"]},
+        {"name": "llm_summarize", "desc": "对内容做归纳解读", "scopes": ["llm:use"]},
+        {"name": "llm_status", "desc": "LLM 配置状态", "scopes": ["system:read"]},
+        {"name": "qa_queue_status", "desc": "群问答队列状态", "scopes": ["kol:read"]},
     ]
