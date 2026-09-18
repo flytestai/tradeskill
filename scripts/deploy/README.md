@@ -249,3 +249,39 @@ git revert <commit>                 # 或 git checkout <旧版本> -- scripts/
 
 平台层与现有系统**可长期并行**：各自独立 SQLite、各自飞书授权，
 通过 GitHub `sync/records.jsonl` 共享言论库。
+
+
+---
+
+## 十一、线上部署信息（2026-09-18）
+
+| 项目 | 值 |
+|---|---|
+| **REST** | `https://skill.flytest.com.cn` |
+| **MCP** | `https://skill.flytest.com.cn/mcp` |
+| 旧域跳转 | `etf.flytest.com.cn` → 301 → `skill.flytest.com.cn` |
+| 服务器 | 203.0.113.20（Debian 10 / Docker 18.09） |
+| 部署目录 | `/opt/kol-skills-platform` |
+| 容器 | `kolplatform-rest`（8020）/ `kolplatform-mcp`（8021），仅绑 127.0.0.1 |
+| nginx | `/etc/nginx/sites-available/skill-platform`（独立文件） |
+| 证书 | Let's Encrypt `skill.flytest.com.cn`，certbot.timer 自动续期 |
+| 上游模式 | REST **单线程**（该宿主容器无法创建线程，已自适应） |
+
+### 该环境的特殊适配（详见 Dockerfile 注释）
+
+1. 宿主 Python 3.7 过低 → 全容器化（3.11）
+2. Docker 18.09 下 apt 不可用 → 移除 apt，时区用 pip `tzdata`
+3. pip 进度条创建线程失败 → `PIP_PROGRESS_BAR=off`
+4. 容器无法创建线程 → REST 自动降级 `threaded=False`
+5. `api` 包在 scripts/ 下 → 直接执行脚本路径，不用 `-m`
+
+### 运维命令
+
+```bash
+ssh root@203.0.113.20 && cd /opt/kol-skills-platform
+docker ps --filter name=kolplatform
+docker logs -f kolplatform-rest
+bash scripts/deploy/start.sh --restart
+certbot certificates && certbot renew --dry-run
+tail -f /var/log/nginx/skill-platform.error.log
+```

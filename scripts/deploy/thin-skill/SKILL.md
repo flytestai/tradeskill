@@ -20,7 +20,7 @@ description: >
 ## 连接配置
 
 ```bash
-export KOL_PLATFORM_URL="http://127.0.0.1:8000"   # 或远端 https://your-host
+export KOL_PLATFORM_URL="https://skill.flytest.com.cn"   # 线上地址
 export KOL_PLATFORM_KEY="<API Key>"
 ```
 
@@ -79,7 +79,7 @@ python scripts/query.py "盘前播报"
 若 Agent 支持 MCP，直接连接平台 MCP 端点，无需本 skill：
 
 ```
-MCP 端点: http://<host>:8001/mcp      传输: streamable-http
+MCP 端点: https://skill.flytest.com.cn/mcp      传输: streamable-http
 ```
 
 暴露 14 个 tools：`kol_list` / `kol_records` / `kol_summary` / `kol_accuracy` /
@@ -89,13 +89,13 @@ MCP 端点: http://<host>:8001/mcp      传输: streamable-http
 蜜蜂：
 ```
 mcp_manage(action="upsert", name="kol-platform",
-           transport="streamable-http", url="http://<host>:8001/mcp")
+           transport="streamable-http", url="https://skill.flytest.com.cn/mcp")
 ```
 
 WorkBuddy：在 `~/.workbuddy/connectors/*/mcp.json` 的 `mcpServers` 增加
 ```json
 {"kol-platform": {"type": "streamableHttp",
-                  "url": "http://<host>:8001/mcp", "timeout": 30000}}
+                  "url": "https://skill.flytest.com.cn/mcp", "timeout": 30000}}
 ```
 
 ## 回复规范
