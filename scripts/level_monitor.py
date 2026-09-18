@@ -46,44 +46,69 @@ def load_levels():
     return dict(DEFAULT_LEVELS)
 
 
-def levels_age_days():
-    """关键位配置距今天数；无法判断时返回 -1。
+#: 关键位数据日期文件（内容里显式记录该批点位是哪天分析的）
+ASOF_FILE = os.path.join(SKILL_DIR, "data", "level_asof.txt")
 
-    ⚠️ 为什么必须标注陈旧度（CRITICAL）
-    ---------------------------------
-    关键位是**人工维护的点位快照**（data/level_targets.json），不会自动更新。
-    实测该文件最后修改于 8/31，而 9/18 上证已到 3911 —— 配置里却仍有
-    3741 / 3767 这类「风控线」。这些内容会随上下文直接进入大模型，
-    而旧输出**不带任何日期**，模型会把过时点位当成本轮有效支撑压力，
-    据此给出操作建议 —— 与「最高 -，最低 -」属同一类「陈旧/虚构数据」风险。
 
-    故输出时必须附带数据日期与陈旧天数，让模型自行判断时效性。
+def levels_asof():
+    """返回该批关键位的「数据日期」datetime；无法判断返回 None。
+
+    ⚠️ 为什么不能只看文件 mtime（CRITICAL）
+    -------------------------------------
+    实测踩坑：宿主机上 level_targets.json 的 mtime 是 8/31（18 天前），
+    但容器里同一份文件显示「0 天前」—— 因为部署时的同步/拷贝会刷新 mtime。
+    若用 mtime 判断，**换台机器看就变成「最新」**，陈旧度告警形同虚设。
+
+    故改为优先读**内容里显式记录的日期**（data/level_asof.txt），
+    其次取各点位自带的 asof 字段，最后才退回 mtime。
     """
     import datetime
+    # 1) 显式日期文件
     try:
-        mt = os.path.getmtime(CONFIG_PATH)
-        return (datetime.datetime.now()
-                - datetime.datetime.fromtimestamp(mt)).total_seconds() / 86400.0
+        with open(ASOF_FILE, encoding="utf-8") as f:
+            raw = f.read().strip()
+        if raw:
+            return datetime.datetime.strptime(raw[:10], "%Y-%m-%d")
     except Exception:
+        pass
+    # 2) 数据里最晚的 asof 字段
+    try:
+        levels = load_levels()
+        dates = [it.get("asof") for items in levels.values() for it in items
+                 if isinstance(it, dict) and it.get("asof")]
+        if dates:
+            return datetime.datetime.strptime(max(dates)[:10], "%Y-%m-%d")
+    except Exception:
+        pass
+    # 3) 退回文件 mtime（不可靠，仅兜底）
+    try:
+        return datetime.datetime.fromtimestamp(os.path.getmtime(CONFIG_PATH))
+    except Exception:
+        return None
+
+
+def levels_age_days():
+    """关键位数据距今天数；无法判断返回 -1。"""
+    import datetime
+    d = levels_asof()
+    if d is None:
         return -1.0
+    return (datetime.datetime.now() - d).total_seconds() / 86400.0
 
 
 def levels_staleness_note():
-    """生成陈旧度提示文本（不新鲜时不输出任何内容）。"""
-    import datetime
+    """生成陈旧度提示文本（无法判断时返回空）。"""
+    d = levels_asof()
+    if d is None:
+        return ""
     age = levels_age_days()
-    if age < 0:
-        return ""
-    try:
-        d = datetime.datetime.fromtimestamp(os.path.getmtime(CONFIG_PATH)).strftime("%Y-%m-%d")
-    except Exception:
-        return ""
+    ds = d.strftime("%Y-%m-%d")
     if age > 14:
         return ("⚠️ 关键位数据日期 %s（已过期 %.0f 天）—— 以下点位为历史快照，"
-                "请先与当前价核对后再使用" % (d, age))
+                "请先与当前价核对后再使用" % (ds, age))
     if age > 7:
-        return "⏳ 关键位数据日期 %s（%.0f 天前）—— 点位可能已偏离当前价，请留意" % (d, age)
-    return "关键位数据日期 %s（%.0f 天前）" % (d, age)
+        return "⏳ 关键位数据日期 %s（%.0f 天前）—— 点位可能已偏离当前价，请留意" % (ds, age)
+    return "关键位数据日期 %s（%.0f 天前）" % (ds, age)
 
 def save_levels(data):
     os.makedirs(os.path.dirname(CONFIG_PATH), exist_ok=True)
@@ -154,6 +179,12 @@ def set_level(args):
     levels[args.index].append({"level": args.level, "type": args.type or "关键位",
                                "note": args.note or "", "asof": updated})
     save_levels(levels)
+    # 同步记录「该批点位的数据日期」，供陈旧度判断（不依赖文件 mtime）
+    try:
+        with open(ASOF_FILE, "w", encoding="utf-8") as f:
+            f.write(updated)
+    except Exception:
+        pass
     print(f"[OK] 已设置 {args.index} 关键位 {args.level} ({args.type or '关键位'})")
 
 def del_level(args):
