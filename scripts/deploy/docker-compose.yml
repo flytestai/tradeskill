@@ -50,9 +50,11 @@ services:
       USER_OPEN_ID: "${USER_OPEN_ID:-}"
 
     volumes:
-      # 数据与配置持久化：独立卷，与宿主机其他服务无关
-      - kolplatform_data:/app/data
-      - kolplatform_sync:/app/sync
+      # ⚠️ 用 bind mount 挂宿主 data 目录（而非 Docker 卷）：
+      #    宿主机脚本（同步/播报）与容器必须共享同一份数据。
+      #    用卷会产生两份互不可见的数据（已实测踩坑）。
+      - ../../data:/app/data
+      - ../../sync:/app/sync
 
     # 资源限制（宿主仅 2 核 / 980MB，需克制）
     mem_limit: 320m
@@ -104,8 +106,8 @@ services:
       PLATFORM_API_KEYS: "${PLATFORM_API_KEYS:-}"
 
     volumes:
-      - kolplatform_data:/app/data:ro
-      - kolplatform_sync:/app/sync
+      - ../../data:/app/data:ro
+      - ../../sync:/app/sync
 
     mem_limit: 400m
     cpus: 0.8
@@ -117,8 +119,5 @@ services:
         max-size: "10m"
         max-file: "3"
 
-volumes:
-  kolplatform_data:
-    name: kolplatform_data
-  kolplatform_sync:
-    name: kolplatform_sync
+# 注：不再使用 Docker 卷 —— 数据以 bind mount 方式挂宿主 data/ 目录，
+#     以便宿主机脚本（同步/播报）与容器 API 共享同一份数据。
