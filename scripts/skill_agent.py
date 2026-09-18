@@ -78,6 +78,7 @@ except Exception:
 try:
     from context_format import (
         format_response, format_datas, skill_version, simplify_query,
+        cfg as _cfg, cfg_int as _cfg_int,
         FIELDS_PER_ROW, ROWS_PER_SKILL, SUMMARY_MAX,
     )
 except Exception:                                   # 极端情况下退化为内置实现
@@ -85,25 +86,29 @@ except Exception:                                   # 极端情况下退化为�
     def format_response(resp, skill_id="", rows=None, fields=None): return ""
     def format_datas(datas, skill_id="", rows=None, fields=None): return ""
     def simplify_query(q, max_len=16): return ""
+    def _cfg(_k, d=""): return service_env(_k, d)
+    def _cfg_int(_k, d):
+        try: return int(_cfg(_k, str(d)) or d)
+        except Exception: return d
     FIELDS_PER_ROW, ROWS_PER_SKILL, SUMMARY_MAX = 14, 6, 400
 
 SKILL_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
-GATEWAY = os.environ.get("BEE_GATEWAY_URL", "https://bee-ai.integrity.com.cn").rstrip("/")
+GATEWAY = _cfg("BEE_GATEWAY_URL", "https://bee-ai.integrity.com.cn").rstrip("/")
 EP_Q2D = GATEWAY + "/skills/v1/query2data"
 EP_SEARCH = GATEWAY + "/skills/v1/comprehensive/search"
 
 #: 单技能超时（秒）。不再区分快慢 —— 之前把 industry/event 判为"慢"是误判，
 #: 实际是端点用错导致的失败重试；统一给 45s 足够。
-SKILL_TIMEOUT = int(os.environ.get("SKILL_TIMEOUT", "45"))
+SKILL_TIMEOUT = _cfg_int("SKILL_TIMEOUT", 45)
 #: 整轮总预算（秒）。**不再限制技能数量**，只保留这个安全阀，
 #: 防止极端问题拖太久影响下一轮 2 分钟轮询。
-TOTAL_BUDGET = int(os.environ.get("CONTEXT_BUDGET", "600"))
+TOTAL_BUDGET = _cfg_int("CONTEXT_BUDGET", 600)
 #: 交给 LLM 的上下文上限（字符）。响应本身完整保留，此处仅是 prompt 长度控制。
-MAX_CTX = int(os.environ.get("CONTEXT_MAX_CHARS", "24000"))
+MAX_CTX = _cfg_int("CONTEXT_MAX_CHARS", 24000)
 #: 每条数据呈现给 LLM 的字段数上限（原始响应不受影响）
-FIELDS_PER_ROW = int(os.environ.get("CTX_FIELDS_PER_ROW", "14"))
-ROWS_PER_SKILL = int(os.environ.get("CTX_ROWS_PER_SKILL", "6"))
+FIELDS_PER_ROW = _cfg_int("CTX_FIELDS_PER_ROW", 14)
+ROWS_PER_SKILL = _cfg_int("CTX_ROWS_PER_SKILL", 6)
 
 # ---------------------------------------------------------------------------
 # 技能目录：**全部蜜蜂 skill**，交给 AI 自行选择。
@@ -156,6 +161,11 @@ LOCAL_CATALOG = [
 ]
 
 #: 已纳入编排的指数（elliott 与关键位能力用）
+#: 全部可用能力的 ID 并集（技能 + MCP + 本地）—— 规划器可自由选择
+ALL_CAPABILITIES = ({c[0] for c in CATALOG}
+                    | {m[0] for m in MCP_CATALOG}
+                    | {l[0] for l in LOCAL_CATALOG})
+
 ELLIOTT_INDEXES = ("上证指数", "深证成指", "创业板指", "科创50", "科创综指",
                    "沪深300", "中证500", "北证50", "恒生指数", "纳斯达克")
 
@@ -313,7 +323,7 @@ def _catalog_text() -> str:
 #     与「和原生提问保持一致」的目标冲突。
 #     若确需抗限流，可显式设 PLAN_CACHE_TTL=600 打开（会有回答漂移的副作用）。
 _PLAN_CACHE = {}
-PLAN_TTL = int(os.environ.get("PLAN_CACHE_TTL", "0"))
+PLAN_TTL = _cfg_int("PLAN_CACHE_TTL", 0)
 
 
 def _cache_get(q):
@@ -362,7 +372,12 @@ def plan(question: str) -> dict:
     except Exception:
         return {"skills": [], "need_fetch": [], "reason": "规划 JSON 解析失败"}
 
-    valid = {c[0] for c in CATALOG}
+    # ⚠️ valid 必须包含**全部三类能力**（技能 / MCP / 本地）。
+    #    此前只含 CATALOG（22 个蜜蜂技能），导致模型提议的 local:* / mcp:* 被
+    #    静默丢弃 —— 实测「创业板指处于第几浪」的规划 reason 明确写
+    #    「以本地艾略特波浪分析能力为核心」，但返回的技能里没有任何 local:*，
+    #    模型想用却用不了。现修正为三类并集。
+    valid = ALL_CAPABILITIES
     skills = []
     for s in (d.get("skills") or []):          # ← 不再切片限制数量
         if not isinstance(s, dict):
@@ -384,16 +399,19 @@ def plan(question: str) -> dict:
 # 阶段②：执行
 # ---------------------------------------------------------------------------
 
-def _fmt_rows(resp: dict, skill_id: str) -> str:
+def _fmt_rows(resp: dict, skill_id: str, budget: int = None) -> str:
     """把响应压成适合 LLM 阅读的文本 —— **统一走 context_format**。
 
     ⚠️ 这里只影响「呈现给模型的文本」，**原始响应结构不被修改** ——
        遵循网关规范条件六（透明传递）。完整响应可通过 call_skill() 获取。
 
-    与 skill_router 共用同一实现（FIELDS_PER_ROW / ROWS_PER_SKILL 一致），
+    与 skill_router 共用同一实现（FIELDS_PER_ROW 一致），
     因此「AI 规划路径」与「规则回退路径」喂给模型的数据口径完全相同。
+
+    :param budget: 该技能可用的字符预算 → 条目多的技能会多显示，
+                   不再一律砍到 ROWS_PER_SKILL 条（那会静默丢弃最多 40% 数据）。
     """
-    txt = format_response(resp, skill_id, ROWS_PER_SKILL, FIELDS_PER_ROW)
+    txt = format_response(resp, skill_id, None, FIELDS_PER_ROW, budget)
     if txt:
         return txt
     err = (resp or {}).get("_error")
@@ -454,7 +472,6 @@ def _do_local(kind: str, arg: str) -> str:
                                 "--channel", "local", "--json"], 30)[:800]
     if kind == "local:platform_api":
         # 本平台已有分析能力（REST 本地）
-        key = service_env("PLATFORM_API_KEYS", "").split(",")[0].strip()
         try:
             out = _subprocess_out(["scripts/db_query.py", "--kol-name", "wu2198",
                                    "--summary"], 30)[:1500]
@@ -479,7 +496,7 @@ def _elliott_skill_dir() -> str:
         <...>/skills/kol-opinion-analyzer  →  <...>/skills/elliott-index-wave
     """
     import glob
-    env = service_env("ELLIOTT_SKILL_DIR", "") or os.environ.get("ELLIOTT_SKILL_DIR", "")
+    env = _cfg("ELLIOTT_SKILL_DIR", "")
     if env and os.path.isdir(env):
         return env
     # 与 kol-opinion-analyzer 同级
@@ -532,8 +549,17 @@ def _extract_wave_section(md: str, limit: int = 2600) -> str:
     return out[:limit] if out else md[:limit]
 
 
+#: elliott 报告缓存有效期（秒）。默认 6 小时 —— 波浪结构按日线/周线判定，
+#: 日内反复重算既无必要也浪费（单次约 2 分钟）。0 = 禁用缓存。
+ELLIOTT_CACHE_TTL = _cfg_int("ELLIOTT_CACHE_TTL", 21600)
+
+
 def _elliott_context(question: str) -> str:
-    """调用 elliott-index-wave 生成波浪上下文（失败静默返回空，不影响主流程）。"""
+    """调用 elliott-index-wave 生成波浪上下文（失败静默返回空，不影响主流程）。
+
+    带磁盘缓存：同一指数的报告在 TTL 内直接复用（波浪按日/周线判定，
+    日内重算无意义，且单次耗时约 2 分钟）。
+    """
     sd = _elliott_skill_dir()
     if not sd:
         return ""
@@ -543,12 +569,25 @@ def _elliott_context(question: str) -> str:
 
     idx = _pick_index(question) or "上证指数"
     out_md = os.path.join(SKILL_DIR, "data", "_elliott_ctx_%s.md" % idx)
+    cache_txt = os.path.join(SKILL_DIR, "data", "_elliott_ctx_%s.txt" % idx)
+
+    # 命中缓存则直接返回（避免 2 分钟重算）
+    if ELLIOTT_CACHE_TTL > 0 and os.path.isfile(cache_txt):
+        try:
+            if time.time() - os.path.getmtime(cache_txt) < ELLIOTT_CACHE_TTL:
+                with open(cache_txt, encoding="utf-8") as f:
+                    cached = f.read().strip()
+                if cached:
+                    return cached
+        except Exception:
+            pass
+
     try:
         # generate_report.py 跑完整链路（取数 → 预筛 → markdown 报告），耗时较长
         txt = _subprocess_out(
-            [gen, "--index", idx, "--out", out_md], timeout=180)
+            [gen, "--index", idx, "--out", out_md], timeout=240)
     except Exception:
-        return ""
+        txt = ""
 
     md = ""
     if os.path.isfile(out_md):
@@ -559,7 +598,17 @@ def _elliott_context(question: str) -> str:
             md = ""
     if not md:
         md = txt or ""
-    return _extract_wave_section(md)
+    result = _extract_wave_section(md)
+
+    # 落缓存（只缓存非空结果，避免把一次失败固化 6 小时）
+    if result:
+        try:
+            os.makedirs(os.path.dirname(cache_txt), exist_ok=True)
+            with open(cache_txt, "w", encoding="utf-8") as f:
+                f.write(result)
+        except Exception:
+            pass
+    return result
 
 
 def execute(p: dict, question: str, deadline: float, verbose: bool = False,
@@ -569,7 +618,14 @@ def execute(p: dict, question: str, deadline: float, verbose: bool = False,
     :param suppress_auto: 多轮补取时置 True，避免每轮重复触发本地自动补充项。
     """
     parts, detail = [], []
-    skills = p.get("skills") or []
+    planned = p.get("skills") or []
+
+    # ⚠️ 必须按归属分流：规划器现在能返回 local:* / mcp:* 能力（见 ALL_CAPABILITIES），
+    #    但只有 CATALOG 里的才是**真的蜜蜂技能**。此前不区分，导致
+    #    local:elliott_wave 被当成技能 POST 到网关（白跑一次请求、返回空），
+    #    而真正的本地能力又在下面的 LOCAL_CATALOG 循环里跑第二遍 —— 重复且低效。
+    REMOTE_IDS = {c[0] for c in CATALOG}
+    skills = [x for x in planned if x.get("id") in REMOTE_IDS]
 
     for i, s in enumerate(skills):
         if time.time() > deadline:
@@ -595,10 +651,13 @@ def execute(p: dict, question: str, deadline: float, verbose: bool = False,
             detail.append(("mcp:fetch", "成功"))
 
     # 本地能力：模型选了就执行；另外按问题特征自动补充（成本极低且常有用）
-    chosen = {s["id"] for s in skills}
+    #   ⚠️ chosen 必须取**全部规划项**（含 local:/mcp:），不能用过滤后的 skills，
+    #      否则模型选中的本地能力会被漏掉。
+    chosen = {x["id"] for x in planned}
     q = question or ""
     for lid, _ in LOCAL_CATALOG:
         if lid in chosen:
+            # 传问题原文：local:elliott_wave 需要它识别指数名
             txt = _do_local(lid, q)
             if txt:
                 parts.append("【%s】\n%s" % (lid, txt))
@@ -640,9 +699,11 @@ def execute(p: dict, question: str, deadline: float, verbose: bool = False,
 # ---------------------------------------------------------------------------
 
 #: 多轮补取：最多轮数（与原生「可反复追问数据」对齐，但保留安全阀）
-CONTEXT_MAX_ROUNDS = int(os.environ.get("CONTEXT_MAX_ROUNDS", "3"))
+CONTEXT_MAX_ROUNDS = _cfg_int("CONTEXT_MAX_ROUNDS", 3)
 #: 多轮补取：每轮最多追加技能数
-CONTEXT_EXTRA_PER_ROUND = int(os.environ.get("CONTEXT_EXTRA_PER_ROUND", "4"))
+CONTEXT_EXTRA_PER_ROUND = _cfg_int("CONTEXT_EXTRA_PER_ROUND", 4)
+#: 多轮补取时交给模型的「已取数据」节选长度（字符）
+COLLECTED_BRIEF = _cfg_int("CONTEXT_COLLECTED_BRIEF", 6000)
 
 
 def _ask_next_queries(question: str, collected: str, used_ids: set) -> list:
@@ -660,6 +721,10 @@ def _ask_next_queries(question: str, collected: str, used_ids: set) -> list:
         return []
 
     used = "、".join(sorted(used_ids)) or "（无）"
+    # ⚠️ 必须在这里就截断：此前把截断放在 prompt 内部（[:6000]），
+    #    而调用方传入的是完整上下文（实测可达 3 万+字），
+    #    白白构造了一个巨大的字符串再由格式化操作符丢掉，浪费内存与时间。
+    _brief = (collected or "")[:COLLECTED_BRIEF]
     prompt = (
         "%s\n\n"
         "【本轮用户问题】\n%s\n\n"
@@ -671,8 +736,7 @@ def _ask_next_queries(question: str, collected: str, used_ids: set) -> list:
         "{\"id\":\"技能ID\",\"query\":\"可直接检索的自然语言问句\",\"why\":\"缺什么\"}]}\n"
         "要求：最多 %d 个；只能从上面的目录里选 ID；不要重复已调用过的数据源；"
         "只输出 JSON。"
-        % (_catalog_text(), question, (collected or "")[:6000], used,
-           CONTEXT_EXTRA_PER_ROUND)
+        % (_catalog_text(), question, _brief, used, CONTEXT_EXTRA_PER_ROUND)
     )
     try:
         out = chat(prompt, system=PLANNER_SYSTEM, purpose="plan", timeout=90, retries=1)
@@ -689,7 +753,7 @@ def _ask_next_queries(question: str, collected: str, used_ids: set) -> list:
     if d.get("done"):
         return []
 
-    valid = {c[0] for c in CATALOG}
+    valid = ALL_CAPABILITIES
     out_skills = []
     for s in (d.get("skills") or [])[:CONTEXT_EXTRA_PER_ROUND]:
         if not isinstance(s, dict):

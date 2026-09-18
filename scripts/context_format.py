@@ -27,6 +27,44 @@
 """
 from __future__ import annotations
 
+import os
+
+# ---------------------------------------------------------------------------
+# 配置读取：环境变量优先，回退 data/local_config.env
+# ---------------------------------------------------------------------------
+# ⚠️ 为什么统一走 service_env 而不是 os.environ.get
+#    平台有两种部署形态：
+#      · systemd / docker --env-file  → 配置在**环境变量**里
+#      · 直接跑脚本（宿主机 cron）    → 配置在 **data/local_config.env** 文件里
+#    此前 skill_agent / skill_router 用 os.environ.get 直读，
+#    在「只用配置文件」的场景下**读不到任何值**，全部回退默认值 ——
+#    实测：把 PLAN_CACHE_TTL=999 写进 local_config.env，skill_agent 仍读到 0。
+#    而 llm_client / bee_client 走 service_env 能正确读到。
+#    本模块统一为 cfg()/cfg_int()，消除这一个模块级别的行为不一致。
+
+try:
+    from common import service_env as _service_env
+except Exception:                              # 允许独立运行
+    def _service_env(k, d=None):
+        return os.environ.get(k, d)
+
+
+def cfg(key: str, default: str = "") -> str:
+    """读配置：环境变量优先，回退 data/local_config.env（去空白）。"""
+    v = _service_env(key, None)
+    if v is None or str(v).strip() == "":
+        v = os.environ.get(key, default)
+    return str(v).strip() if v is not None else default
+
+
+def cfg_int(key: str, default: int) -> int:
+    """读整数配置（非法值回退 default）。"""
+    try:
+        return int(str(cfg(key, str(default))).strip() or default)
+    except (TypeError, ValueError):
+        return default
+
+
 #: 搜索类技能（走 /comprehensive/search，响应结构与表格类不同）
 SEARCH_SKILLS = ("news-search", "announcement-search", "report-search")
 
@@ -88,12 +126,22 @@ def simplify_query(query: str, max_len: int = 16) -> str:
 
 #: 每条记录呈现的最大字段数（原 skill_agent 为 14，skill_router 为 6，现统一）
 FIELDS_PER_ROW = 14
-#: 每个技能呈现的最大记录数
+#: 每个技能呈现的记录数上限（默认值，实际会按剩余预算自适应放大）
 ROWS_PER_SKILL = 6
+#: 单个技能呈现记录数的**硬上限**（自适应放大的天花板，防单个技能吃光预算）
+ROWS_HARD_MAX = 20
 #: 单个字段值的最大字符数（超出截断，不改写）
 VALUE_MAX = 60
 #: 搜索类「摘要」字段的最大字符数
 SUMMARY_MAX = 400
+
+# ⚠️ 关于「截断」的透明性
+#    原生响应常返回 10 条，而此前固定只呈现 6 条 → **静默丢弃 40%**，模型完全
+#    不知道还有更多内容。这与「与原生一致」的目标冲突，且会让模型基于不完整
+#    信息下结论。现在改为：
+#      1) 默认行数按「剩余上下文预算」自适应放大（ROWS_HARD_MAX 封顶）
+#      2) 一旦发生截断，**显式标注**「共 N 条，已展示 M 条」，让模型知其边界
+#    原始响应结构始终不变，此处只影响呈现文本。
 
 
 def is_search_skill(skill_id: str) -> bool:
@@ -141,21 +189,44 @@ def format_record(d: dict, skill_id: str = "", fields: int = None) -> str:
 
 
 def format_datas(datas, skill_id: str = "", rows: int = None,
-                 fields: int = None) -> str:
-    """把 datas 列表格式化为多行文本。空数据返回空串（**不输出占位文字**）。"""
+                 fields: int = None, budget: int = None) -> str:
+    """把 datas 列表格式化为多行文本。空数据返回空串（**不输出占位文字**）。
+
+    :param rows:   最多呈现几条。None → 按 budget 自适应（上限 ROWS_HARD_MAX）
+    :param budget: 该技能可用的字符预算。给定则据此决定行数，
+                   让条目多的技能多显示一些、而不是一律砍到 6 条。
+    :return: 发生截断时，末尾会附「（共 N 条，已展示 M 条）」标注。
+    """
     if not datas:
         return ""
-    rows = rows or ROWS_PER_SKILL
+    total = len(datas)
+
+    if rows is None:
+        if budget and budget > 0:
+            # 先按默认行数量一遍，估算单行成本，再反推能放几行
+            probe = [format_record(d, skill_id, fields) for d in datas[:ROWS_PER_SKILL]]
+            probe = [p for p in probe if p]
+            per_row = (sum(len(p) for p in probe) / len(probe)) if probe else 200
+            rows = int(budget / max(per_row + 3, 1))
+            rows = max(ROWS_PER_SKILL, min(rows, ROWS_HARD_MAX))
+        else:
+            rows = ROWS_PER_SKILL
+
     out = []
     for d in datas[:rows]:
         line = format_record(d, skill_id, fields)
         if line:
             out.append("- " + line)
-    return "\n".join(out)
+    txt = "\n".join(out)
+
+    # 透明标注截断，避免模型误以为这就是全部
+    if total > len(out):
+        txt += "\n  …（该数据源共 %d 条，此处展示前 %d 条）" % (total, len(out))
+    return txt
 
 
 def format_response(resp, skill_id: str = "", rows: int = None,
-                    fields: int = None) -> str:
+                    fields: int = None, budget: int = None) -> str:
     """从**完整响应**中取 datas 并格式化（不修改原响应）。"""
     if not isinstance(resp, dict):
         return ""
@@ -166,4 +237,4 @@ def format_response(resp, skill_id: str = "", rows: int = None,
         v = v.get("list") or v.get("items") or []
     if not isinstance(v, list):
         return ""
-    return format_datas(v, skill_id, rows, fields)
+    return format_datas(v, skill_id, rows, fields, budget)

@@ -14,7 +14,7 @@
   当前价上穿关键位     → 突破信号
   当前价下穿关键位     → 跌破信号
 """
-import json, os, sys, argparse
+import json, os, argparse
 
 SKILL_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CONFIG_PATH = os.path.join(SKILL_DIR, "data", "level_targets.json")
@@ -44,6 +44,46 @@ def load_levels():
         with open(CONFIG_PATH, "r", encoding="utf-8") as f:
             return json.load(f)
     return dict(DEFAULT_LEVELS)
+
+
+def levels_age_days():
+    """关键位配置距今天数；无法判断时返回 -1。
+
+    ⚠️ 为什么必须标注陈旧度（CRITICAL）
+    ---------------------------------
+    关键位是**人工维护的点位快照**（data/level_targets.json），不会自动更新。
+    实测该文件最后修改于 8/31，而 9/18 上证已到 3911 —— 配置里却仍有
+    3741 / 3767 这类「风控线」。这些内容会随上下文直接进入大模型，
+    而旧输出**不带任何日期**，模型会把过时点位当成本轮有效支撑压力，
+    据此给出操作建议 —— 与「最高 -，最低 -」属同一类「陈旧/虚构数据」风险。
+
+    故输出时必须附带数据日期与陈旧天数，让模型自行判断时效性。
+    """
+    import datetime
+    try:
+        mt = os.path.getmtime(CONFIG_PATH)
+        return (datetime.datetime.now()
+                - datetime.datetime.fromtimestamp(mt)).total_seconds() / 86400.0
+    except Exception:
+        return -1.0
+
+
+def levels_staleness_note():
+    """生成陈旧度提示文本（不新鲜时不输出任何内容）。"""
+    import datetime
+    age = levels_age_days()
+    if age < 0:
+        return ""
+    try:
+        d = datetime.datetime.fromtimestamp(os.path.getmtime(CONFIG_PATH)).strftime("%Y-%m-%d")
+    except Exception:
+        return ""
+    if age > 14:
+        return ("⚠️ 关键位数据日期 %s（已过期 %.0f 天）—— 以下点位为历史快照，"
+                "请先与当前价核对后再使用" % (d, age))
+    if age > 7:
+        return "⏳ 关键位数据日期 %s（%.0f 天前）—— 点位可能已偏离当前价，请留意" % (d, age)
+    return "关键位数据日期 %s（%.0f 天前）" % (d, age)
 
 def save_levels(data):
     os.makedirs(os.path.dirname(CONFIG_PATH), exist_ok=True)
@@ -80,17 +120,27 @@ def monitor(args):
         else:
             status = "🔴 在下方"
 
-        arrow = "↑" if diff >= 0 else "↓"
-        print(f"  {level:>8} {item['type']:>8} {abs(diff):>8.1f}({abs(diff_pct):.1f}%) {status:>10}  {item['note']}")
+        print(f"  {level:>8} {item['type']:>8} {abs(diff):>8.1f}"
+              f"({abs(diff_pct):.1f}%) {status:>10}  {item['note']}")
 
     print(f"\n  ⚠️ 提示: 距离 < 1% 的关键位需要重点关注")
 
 def list_levels(args):
     levels = load_levels()
+
+    # ⚠️ 陈旧度必须显式标注：这些点位是人工快照，会随上下文进入大模型；
+    #    旧输出不带日期，模型会把过期点位当成本轮有效支撑压力
+    #    （实测 data/level_targets.json 已过期 20 天，点位与现价严重偏离）。
+    note = levels_staleness_note()
+    if note:
+        print(f"  {note}")
+
     for idx, items in levels.items():
-        print(f"\n  {idx}:")
+        print("\n  %s:" % idx)
         for item in sorted(items, key=lambda x: x["level"]):
-            print(f"    {item['level']:>6} | {item['type']} | {item['note']}")
+            asof = item.get("asof") or ""
+            suffix = f"  [更新 {asof}]" if asof else ""
+            print(f"    {item['level']:>6} | {item['type']} | {item['note']}{suffix}")
 
 def set_level(args):
     levels = load_levels()
@@ -98,7 +148,11 @@ def set_level(args):
         levels[args.index] = []
     # 移除同点位的旧记录
     levels[args.index] = [x for x in levels[args.index] if x["level"] != args.level]
-    levels[args.index].append({"level": args.level, "type": args.type or "关键位", "note": args.note or ""})
+    # 每条点位带日期，便于在上下文里直接看出该位是哪次分析给出的
+    import datetime
+    updated = datetime.date.today().isoformat()
+    levels[args.index].append({"level": args.level, "type": args.type or "关键位",
+                               "note": args.note or "", "asof": updated})
     save_levels(levels)
     print(f"[OK] 已设置 {args.index} 关键位 {args.level} ({args.type or '关键位'})")
 
