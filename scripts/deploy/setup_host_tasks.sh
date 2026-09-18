@@ -54,8 +54,24 @@ export TZ=Asia/Shanghai
 cd "$DEPLOY_DIR" || exit 1
 
 # 加载配置（.env 优先，回退 data/local_config.env）
-if [ -f .env ]; then set -a; . ./.env; set +a; fi
-if [ -f data/local_config.env ]; then set -a; . ./data/local_config.env; set +a; fi
+#
+# ⚠️ 必须剥离 CRLF 后再 source：配置文件若在 Windows 上编辑过会带 ，
+#    source 时报 `$'': command not found`，且变量值尾部多出 
+#    （实测导致 chat_id 长度 36 而非 35，飞书 API 报 invalid receive_id）。
+_load_env() {
+    local f="$1"
+    [ -f "$f" ] || return 0
+    local tmp
+    tmp="$(mktemp)"
+    tr -d '' < "$f" > "$tmp"
+    set -a
+    # shellcheck disable=SC1090
+    . "$tmp"
+    set +a
+    rm -f "$tmp"
+}
+_load_env ./.env
+_load_env ./data/local_config.env
 
 NAME="$1"; shift
 LOG="$DEPLOY_DIR/data/_host_task.log"
