@@ -41,6 +41,25 @@ from records_hash import content_hash
 from ocr_image import ocr
 from common import find_bash, send_card, is_trading_day as _c_is_trading_day, is_trading_time as _c_is_trading_time, is_group_sync_time as _c_is_group_sync_time, load_holidays, pythonw_path
 
+try:
+    from safe_json import read_json, write_json
+except Exception:
+    def read_json(path, default=None, **kw):
+        try:
+            with open(path, encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            return default if default is not None else {}
+
+    def write_json(path, data, indent=2):
+        try:
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(data, f, ensure_ascii=False, indent=indent)
+            return True
+        except Exception:
+            return False
+
 SKILL_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DB_PATH = os.path.join(SKILL_DIR, "data", "kol_opinions.db")
 SYNC_SCRIPT = os.path.join(SKILL_DIR, "scripts", "sync.py")
@@ -317,12 +336,9 @@ def save_watermark(t):
     """保存增量水位（最后拉取的群消息时间）"""
     if not t:
         return
-    try:
-        os.makedirs(os.path.dirname(STATE_PATH), exist_ok=True)
-        with open(STATE_PATH, "w", encoding="utf-8") as f:
-            json.dump({"last_message_time": t}, f, ensure_ascii=False)
-    except Exception as e:
-        print("[WARN] 保存水位失败: %s" % e)
+    # 原子写：水位写坏虽可由 DB 兜底（见 load_watermark），但仍应避免中间态
+    if not write_json(STATE_PATH, {"last_message_time": t}):
+        print("[WARN] 保存水位失败: %s" % STATE_PATH)
 
 
 def log_error(msg):
