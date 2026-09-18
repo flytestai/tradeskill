@@ -50,9 +50,26 @@ resolve_lark() {
     fi
     command -v lark-cli 2>/dev/null
 }
+# ---------------------------------------------------------------------------
+# 通道选择：优先「纯 Python 直连飞书 API」，回退 lark-cli
+#   容器无法创建线程 → Node 崩溃 → lark-cli 在容器内不可用；
+#   feishu_client.py 用 urllib（无线程依赖），容器内可正常工作。
+# ---------------------------------------------------------------------------
+SKILL_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+PY_BIN="${SKILL_PYTHON:-python3}"
+command -v "$PY_BIN" >/dev/null 2>&1 || PY_BIN=python
+
+if [ -n "${FEISHU_APP_ID:-}" ] && [ -n "${FEISHU_APP_SECRET:-}" ]; then
+    echo "$MSG" | "$PY_BIN" "$SKILL_DIR/scripts/feishu_client.py" \
+        --to "$GROUP_ID" --type chat_id --text-stdin >/dev/null 2>&1
+    rc=$?
+    if [ $rc -eq 0 ]; then exit 0; fi
+    echo "[WARN] Python 飞书通道失败(rc=$rc)，尝试 lark-cli 回退" >&2
+fi
+
 LARK="$(resolve_lark)"
 if [ -z "$LARK" ]; then
-    echo "[CONFIG] 未找到 lark-cli（请安装并加入 PATH，或设置 LARK_CLI）" >&2
+    echo "[CONFIG] 无可用发送通道：未配置 FEISHU_APP_ID/SECRET，且未找到 lark-cli" >&2
     exit 1
 fi
 
@@ -62,5 +79,5 @@ timeout -k 3 20 "$LARK" im +messages-send \
     --markdown "$MSG" >/dev/null 2>&1
 rc=$?
 
-# 把 lark-cli 的真实退出码返回给调用方，便于盘前播报记录发送失败并重试。
+# 把真实退出码返回给调用方，便于盘前播报记录发送失败并重试。
 exit $rc

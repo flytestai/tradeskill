@@ -42,9 +42,29 @@ resolve_lark() {
     fi
     command -v lark-cli 2>/dev/null
 }
+# ---------------------------------------------------------------------------
+# 通道选择：优先「纯 Python 直连飞书 API」，回退 lark-cli
+#
+# 为什么优先 Python 通道：
+#   目标服务器容器**无法创建线程** → Node 启动即崩 → lark-cli 在容器内不可用。
+#   feishu_client.py 用 urllib 直连 OpenAPI（纯同步、无线程），容器内可正常工作。
+#   若未配置 FEISHU_APP_ID/SECRET，再回退 lark-cli（宿主机场景）。
+# ---------------------------------------------------------------------------
+SKILL_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+PY_BIN="${SKILL_PYTHON:-python3}"
+command -v "$PY_BIN" >/dev/null 2>&1 || PY_BIN=python
+
+if [ -n "${FEISHU_APP_ID:-}" ] && [ -n "${FEISHU_APP_SECRET:-}" ]; then
+    echo "$MSG" | "$PY_BIN" "$SKILL_DIR/scripts/feishu_client.py" \
+        --to "$USER_OPEN_ID" --type open_id --text-stdin >/dev/null 2>&1
+    rc=$?
+    if [ $rc -eq 0 ]; then exit 0; fi
+    echo "[WARN] Python 飞书通道失败(rc=$rc)，尝试 lark-cli 回退" >&2
+fi
+
 LARK="$(resolve_lark)"
 if [ -z "$LARK" ]; then
-    echo "[CONFIG] 未找到 lark-cli（请安装并加入 PATH，或设置 LARK_CLI）" >&2
+    echo "[CONFIG] 无可用发送通道：未配置 FEISHU_APP_ID/SECRET，且未找到 lark-cli" >&2
     exit 1
 fi
 
