@@ -79,20 +79,50 @@ def _any_err(e):
 # 基础设施
 # --------------------------------------------------------------------------
 
-@app.get("/healthz")
-def healthz():
-    """健康检查：本服务 + 蜜蜂通道。"""
+def _cached_bee_health(ttl: int = 120):
+    """带缓存的蜜蜂通道健康检查。
+
+    为什么要缓存：bee_health() 会实测 http/local 两个外部通道，耗时约 2 秒。
+    在单线程模式（受限容器）下，若每次 /healthz 都实测，会阻塞后续请求
+    —— 实测出现「连续两次调用其中一次超时 25 秒」的排队现象。
+    缓存 TTL 默认 120 秒，与 Docker healthcheck 的 60s 间隔相配。
+    """
+    import time
+    now = time.time()
+    hit = _HEALTH_CACHE.get("bee")
+    if hit and now - hit[0] < ttl:
+        return hit[1], True
     try:
         bee = services.bee_health()
     except Exception as e:
         bee = {"ok": False, "error": str(e)[:200]}
+    _HEALTH_CACHE["bee"] = (now, bee)
+    return bee, False
+
+
+_HEALTH_CACHE = {}
+
+
+@app.get("/healthz")
+def healthz():
+    """健康检查（供 Docker healthcheck 与监控调用，无需鉴权）。
+
+    轻量版：只报告本服务与配置，**不实测外部通道**，响应在毫秒级。
+    需要实测外部通道时用 /healthz?deep=1（结果缓存 120 秒）。
+    """
+    deep = request.args.get("deep", "").lower() in ("1", "true", "yes")
     body = {
         "ok": True,
         "service": "skills-platform",
         "config": config.summary(),
-        "bee": bee,
     }
-    return jsonify(body), 200 if bee.get("ok") else 207
+    if deep:
+        bee, cached = _cached_bee_health()
+        body["bee"] = bee
+        body["bee_cached"] = cached
+        body["ok"] = bool(bee.get("ok"))
+        return jsonify(body), 200 if body["ok"] else 207
+    return jsonify(body), 200
 
 
 @app.get("/api/v1/capabilities")

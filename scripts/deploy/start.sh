@@ -100,10 +100,14 @@ docker run -d \
 if [ "$WITH_MCP" = "1" ]; then
     if docker image inspect "$MCP_IMAGE" >/dev/null 2>&1; then
         docker rm -f "$MCP_NAME" >/dev/null 2>&1 || true
+        # --no-healthcheck：MCP 镜像继承了 Dockerfile 的 HEALTHCHECK（探 /healthz），
+        # 但 MCP 只暴露 /mcp（POST + SSE），探 /healthz 恒为 404，
+        # 会把容器误标为 unhealthy。故此处显式关闭健康检查。
         echo "  → 启动 $MCP_NAME (127.0.0.1:$MCP_PORT -> 8000)"
         docker run -d \
             --name "$MCP_NAME" \
             --restart unless-stopped \
+            --no-healthcheck \
             -p "127.0.0.1:${MCP_PORT}:8000" \
             --env-file "$ENV_RUNTIME" \
             -e PLATFORM_HOST=0.0.0.0 \
