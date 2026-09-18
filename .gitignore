@@ -50,5 +50,6 @@ vendor/
 data.hostbak-*/
 scripts/deploy/_run_*.sh
 
-# 波浪上下文临时产物
+# 波浪上下文临时产物与缓存
 data/_elliott_ctx_*.md
+data/_elliott_ctx_*.txt

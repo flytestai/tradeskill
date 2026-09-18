@@ -64,19 +64,51 @@ except Exception:
     def service_env(k, d=None):
         return os.environ.get(k, d)
 
+#: 统一格式化层（与 skill_agent 共用，消除两套口径）
+try:
+    from context_format import (
+        format_datas as _fmt_datas, FIELDS_PER_ROW as _FIELDS,
+        cfg as _cfg, cfg_int as _cfg_int, skill_version as _skill_version,
+        SUMMARY_MAX,
+    )
+except Exception:                                       # 退化：内置最小实现
+    _FIELDS = 14
+
+    def _skill_version(_sid):
+        return "1.0.0"
+
+    def _cfg(_k, d=""):
+        return service_env(_k, d)
+
+    def _cfg_int(_k, d):
+        try:
+            return int(_cfg(_k, str(d)) or d)
+        except Exception:
+            return d
+
+    def _fmt_datas(datas, skill_id="", rows=None, fields=None):
+        if not datas:
+            return ""
+        d = datas[0]
+        items = ["%s=%s" % (k, str(v)[:60]) for k, v in list(d.items())[:(fields or 14)]
+                 if v not in (None, "", "-")]
+        return "，".join(items)
+
 SKILL_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 #: 单个技能的调用超时（秒）；慢技能（如 industry/event）给多一点
-DEFAULT_TIMEOUT = int(os.environ.get("SKILL_TIMEOUT", "25"))
-SLOW_TIMEOUT = int(os.environ.get("SKILL_TIMEOUT_SLOW", "40"))
+DEFAULT_TIMEOUT = _cfg_int("SKILL_TIMEOUT", 25)
+SLOW_TIMEOUT = _cfg_int("SKILL_TIMEOUT_SLOW", 40)
 #: 整个上下文构建的总预算（秒）；超时后放弃剩余技能，用已有数据回答
-TOTAL_BUDGET = int(os.environ.get("CONTEXT_BUDGET", "600"))
+TOTAL_BUDGET = _cfg_int("CONTEXT_BUDGET", 600)
 #: 上下文最大字符数（防止 prompt 过长）
 #  ⚠️ 与 skill_agent 保持**同一上限**：此前这里是 6000、skill_agent 是 24000，
 #     导致「规则回退路径」比「AI 规划路径」少 4 倍上下文，同一问题答案质量漂移。
-MAX_CTX = int(os.environ.get("CONTEXT_MAX_CHARS", "24000"))
+MAX_CTX = _cfg_int("CONTEXT_MAX_CHARS", 24000)
 
-COMPREHENSIVE_URL = "https://bee-ai.integrity.com.cn/skills/v1/comprehensive/search"
+#: 搜索类端点（可配置，与 skill_agent 的网关保持一致）
+COMPREHENSIVE_URL = (_cfg("BEE_GATEWAY_URL", "https://bee-ai.integrity.com.cn")
+                     .rstrip("/") + "/skills/v1/comprehensive/search")
 
 #: 已知标的（用于在无 6 位代码时也识别出个股）
 KNOWN_STOCKS = {
@@ -121,7 +153,8 @@ def _search_news(query: str, limit: int = 5):
     body = json.dumps({"channels": ["news"], "app_id": "AIME_SKILL",
                        "query": query}, ensure_ascii=False).encode("utf-8")
     h = {"Content-Type": "application/json", "X-Claw-Call-Type": "normal",
-         "X-Claw-Skill-Id": "news-search", "X-Claw-Skill-Version": "1.0.0",
+         "X-Claw-Skill-Id": "news-search",
+         "X-Claw-Skill-Version": _skill_version("news-search"),
          "X-Claw-Plugin-Id": "none", "X-Claw-Plugin-Version": "none",
          "X-Claw-Trace-Id": secrets.token_hex(32)}
     try:
@@ -135,7 +168,7 @@ def _search_news(query: str, limit: int = 5):
         for it in items[:limit]:
             if isinstance(it, dict):
                 out.append({"title": it.get("title") or it.get("标题") or "",
-                            "content": (it.get("content") or it.get("摘要") or "")[:300],
+                            "content": (it.get("content") or it.get("摘要") or "")[:SUMMARY_MAX],
                             "time": it.get("publish_time") or it.get("time") or ""})
         return out
     except Exception:
@@ -242,7 +275,8 @@ def route(question: str) -> list:
     for p in plan:
         if p[0] not in seen:
             seen.add(p[0]); uniq.append(p)
-    return uniq[:8]          # 上限 8 个，控制耗时
+    # 上限可配置（取消硬编码 8）；这些是**规则路由**的候选，不是模型自主决策
+    return uniq[:max(1, _cfg_int("ROUTER_MAX_STEPS", 8))]
 
 
 def _extract_topic(q: str) -> str:
@@ -278,20 +312,6 @@ def _extract_topic(q: str) -> str:
 # --------------------------------------------------------------------------
 # 执行技能 → 拼装上下文
 # --------------------------------------------------------------------------
-
-#: 统一格式化层（与 skill_agent 共用，消除两套口径）
-try:
-    from context_format import format_datas as _fmt_datas, FIELDS_PER_ROW as _FIELDS
-except Exception:                                       # 退化：内置最小实现
-    _FIELDS = 14
-
-    def _fmt_datas(datas, skill_id="", rows=None, fields=None):
-        if not datas:
-            return ""
-        d = datas[0]
-        items = ["%s=%s" % (k, str(v)[:60]) for k, v in list(d.items())[:(fields or 14)]
-                 if v not in (None, "", "-")]
-        return "，".join(items)
 
 
 def _one(datas, skill_id, fields=None):
@@ -396,8 +416,8 @@ def _execute(step, deadline):
                 return None, ""
             lines = []
             for it in items:
-                t = (it.get("title") or "")[:60]
-                c = (it.get("content") or "")[:110]
+                t = (it.get("title") or "")[:80]
+                c = (it.get("content") or "")[:SUMMARY_MAX]
                 lines.append("- %s%s" % (t, ("：" + c) if c else ""))
             return label, "相关资讯：\n" + "\n".join(lines)
 
