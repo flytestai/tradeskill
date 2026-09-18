@@ -719,8 +719,13 @@ def query_ndx_etf():
         if premium_pct is not None and premium_pct <= 30:
             premium_level = "高溢价（回落中）"
             etf_action = "谨慎小仓"
-            reason = "溢价率虽高于5%，但处于近%s日低位（%.0f%%分位），正在收敛" % (
-                len(premiums), premium_pct)
+            # ⚠️ 字面量里的 '%' 必须写成 '%%'，否则被当成格式符 →
+            #    ValueError: unsupported format character '?' (0xff0c)
+            #    触发条件：溢价率 ≥5% 且处于近 30 日低位。
+            #    而 query_ndx_etf() 在盘前播报中是无异常保护调用的，
+            #    一旦触发会直接崩掉整份播报。
+            reason = ("溢价率虽高于5%%，但处于近%s日低位（%.0f%%分位），正在收敛"
+                      % (len(premiums), premium_pct))
         else:
             premium_level = "高溢价"
             etf_action = "不适合直接加仓"
@@ -1298,10 +1303,33 @@ def build_premarket_message(intraday=False):
     high_info = query_ndx_high()
     ndx_levels = query_ndx_levels()
     risk_info = query_ndx_risk()
-    etf = query_ndx_etf()
-    etf_amount = query_etf_amount() if intraday else None
-    volume = query_etf_volume()
-    vol_eval = volume_evaluation(volume, intraday=intraday)
+    # ⚠️ 这三个是「可选增强块」，任何一个出错都不应拖垮整份播报。
+    #    实测教训：query_ndx_etf() 内一处格式化字符串写错（'5%' 应为 '5%%'），
+    #    触发时抛 ValueError，而 build_premarket_message 被 main() 直接调用、
+    #    上层无 try —— 整份盘前播报会崩掉，且被 cron 静默吞掉。
+    #    故隔离可选块：拿不到就降级为 None，其余部分照常发出。
+    try:
+        etf = query_ndx_etf()
+    except Exception as e:
+        print("[WARN] ETF 数据获取失败，已降级: %s: %s" % (type(e).__name__, str(e)[:120]))
+        etf = None
+    try:
+        etf_amount = query_etf_amount() if intraday else None
+    except Exception as e:
+        print("[WARN] ETF 成交额获取失败，已降级: %s" % str(e)[:120])
+        etf_amount = None
+    try:
+        volume = query_etf_volume()
+        vol_eval = volume_evaluation(volume, intraday=intraday)
+    except Exception as e:
+        print("[WARN] 成交量数据获取失败，已降级: %s" % str(e)[:120])
+        volume, vol_eval = None, None
+    # 空值兜底：下游有 15 处直接 etf.get(...) / vol_eval[...] 访问，
+    # 用空容器替代 None，避免降级后再触发 AttributeError。
+    if etf is None:
+        etf = {}
+    if vol_eval is None:
+        vol_eval = {"label": "数据缺失", "note": "成交量数据未取到"}
 
     price = quote.get("price") if quote else None
     pct = quote.get("pct") if quote else None
@@ -1799,7 +1827,17 @@ def main():
         print("[SKIP] %s 已发送过，跳过（防重复）" % key)
         return
 
-    msg = build_message(lunch=args.lunch, premarket=args.premarket, intraday=args.intraday)
+    # ⚠️ 顶层保护：播报构建失败必须**显式报错**，不能静默退出。
+    #    cron 把 stdout/stderr 都丢了（>/dev/null 2>&1），
+    #    若这里不把异常打出来，故障会完全没有痕迹。
+    try:
+        msg = build_message(lunch=args.lunch, premarket=args.premarket,
+                            intraday=args.intraday)
+    except Exception as e:
+        import traceback
+        print("[ERROR] 播报构建失败（%s）：%s" % (type(e).__name__, e))
+        traceback.print_exc()
+        sys.exit(2)
     if msg is None:
         sys.exit(1)
     if send(msg, dry_run=args.dry_run, tag=period) and not args.dry_run:

@@ -51,7 +51,7 @@ def _bad(name, detail=""):
 # ---------------------------------------------------------------------------
 
 CORE_MODULES = [
-    "context_format", "skill_agent", "skill_router", "bee_client", "llm_client",
+    "context_format", "safe_json", "skill_agent", "skill_router", "bee_client", "llm_client",
     "qa_analyzer", "group_reply", "qa_queue", "qa_dedup", "react", "common",
     "feishu_client", "db_query", "db_save", "db_sync", "db_init",
     "price_alerts", "market_summary", "monitor_alerts", "level_monitor",
@@ -61,7 +61,7 @@ CORE_MODULES = [
 
 
 def check_imports():
-    print("\n[1/5] 模块导入")
+    print("\n[1/6] 模块导入")
     bad = []
     for m in CORE_MODULES:
         if not os.path.isfile(os.path.join(SCRIPTS, m + ".py")):
@@ -82,7 +82,7 @@ def check_imports():
 # ---------------------------------------------------------------------------
 
 def check_contract():
-    print("\n[2/5] 接口契约")
+    print("\n[2/6] 接口契约")
     try:
         cf = importlib.import_module("context_format")
         sa = importlib.import_module("skill_agent")
@@ -146,7 +146,7 @@ def check_contract():
 # ---------------------------------------------------------------------------
 
 def check_format_consistency():
-    print("\n[3/5] 格式化口径一致性")
+    print("\n[3/6] 格式化口径一致性")
     try:
         sa = importlib.import_module("skill_agent")
         sr = importlib.import_module("skill_router")
@@ -189,7 +189,7 @@ def check_format_consistency():
 # ---------------------------------------------------------------------------
 
 def check_config():
-    print("\n[4/5] 配置读取")
+    print("\n[4/6] 配置读取")
     try:
         cf = importlib.import_module("context_format")
     except Exception as e:
@@ -218,7 +218,7 @@ def check_config():
 # ---------------------------------------------------------------------------
 
 def check_live():
-    print("\n[5/5] 真实取数（联网）")
+    print("\n[5/6] 真实取数（联网）")
     try:
         sa = importlib.import_module("skill_agent")
         sr = importlib.import_module("skill_router")
@@ -258,6 +258,65 @@ def check_live():
         _bad("LLM 检查失败", str(e)[:100])
 
 
+def check_state_files():
+    """状态文件必须用原子写 + 损坏可见，否则会静默丢数据。
+
+    实测可复现的两个数据丢失路径：
+      · 队列文件被截断 → load() 返回 [] → **整条待处理问题被丢弃**
+      · 水位文件被截断 → 返回空 → 机器人**重新拉取全部历史并重复回复**
+      · 去重文件被截断 → 返回 {} → **重复回复所有历史问题**
+    """
+    print("\n[6/6] 状态文件安全性")
+    try:
+        sj = importlib.import_module("safe_json")
+    except Exception as e:
+        _bad("safe_json 不可用", str(e)[:100])
+        return
+
+    if hasattr(sj, "read_json") and hasattr(sj, "write_json"):
+        _ok("safe_json 提供原子读写")
+    else:
+        _bad("safe_json 缺少 read_json/write_json")
+        return
+
+    # 原子写必须真的是 os.replace
+    import inspect
+    src = inspect.getsource(sj.write_json)
+    if "os.replace" in src:
+        _ok("写入使用 os.replace（原子替换）")
+    else:
+        _bad("写入未使用 os.replace，存在写一半的中间态")
+
+    # 损坏必须留证
+    if "corrupt" in inspect.getsource(sj.read_json) or "_backup_corrupt" in inspect.getsource(sj):
+        _ok("解析失败会留证（.corrupt-*）")
+    else:
+        _bad("解析失败未留证，故障会无痕")
+
+    # 关键模块必须已切到 safe_json
+    import os as _os
+    must = {
+        "qa_queue.py": ["read_json", "write_json"],
+        "qa_dedup.py": ["read_json", "write_json"],
+        "sync_litchi_auto.py": ["read_json", "write_json"],
+        "price_alerts.py": ["read_json", "write_json"],
+    }
+    for f, needs in must.items():
+        path = _os.path.join(SCRIPTS, f)
+        if not _os.path.isfile(path):
+            continue
+        try:
+            txt = io.open(path, encoding="utf-8").read() if False else open(
+                path, encoding="utf-8").read()
+        except Exception:
+            continue
+        missing = [n for n in needs if n not in txt]
+        if missing:
+            _bad("%s 未使用 safe_json" % f, "缺: %s" % ", ".join(missing))
+        else:
+            _ok("%s 已用原子读写" % f)
+
+
 def main():
     ap = argparse.ArgumentParser(description="部署前自检")
     ap.add_argument("--quick", action="store_true", help="跳过联网取数")
@@ -271,8 +330,9 @@ def main():
     check_contract()
     check_format_consistency()
     check_config()
+    check_state_files()
     if args.quick:
-        print("\n[5/5] 真实取数 —— 已跳过（--quick）")
+        print("\n[5/6] 真实取数 —— 已跳过（--quick）")
     else:
         check_live()
 
