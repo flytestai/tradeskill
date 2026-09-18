@@ -39,30 +39,25 @@ INDICES = ["上证指数", "深证成指", "科创50", "创业板指"]
 DISPLAY = {"上证指数": "上证", "深证成指": "深证", "科创50": "科创50", "创业板指": "创业板"}
 
 
-def _headers():
-    return {
-        "Content-Type": "application/json",
-        "X-Claw-Call-Type": "normal",
-        "X-Claw-Skill-Id": "hithink-market-query",
-        "X-Claw-Skill-Version": "1.0.0",
-        "X-Claw-Plugin-Id": "none",
-        "X-Claw-Plugin-Version": "none",
-        "X-Claw-Trace-Id": secrets.token_hex(32),
-    }
-
-
 def query_item(query):
-    """查询单条数据，返回首个 datas 项 dict 或 None。"""
-    body = json.dumps({"query": query, "page": "1", "limit": "10",
-                       "is_cache": "1", "expand_index": "true"}).encode("utf-8")
-    req = urllib.request.Request(API_URL, data=body, headers=_headers(), method="POST")
+    """查询单条数据，返回首个 datas 项 dict 或 None。
+
+    改走 `bee_client` 统一适配器（默认 http 通道，请求形态与改造前一致）；
+    设置 BEE_FALLBACK_LOCAL=1 可在蜜蜂网关不可达时自动降级为公开行情源。
+    """
     try:
-        with urllib.request.urlopen(req, timeout=30) as r:
-            data = json.loads(r.read().decode("utf-8"))
+        from bee_client import query as _bee_query, SKILL_IDS
+    except Exception as e:
+        print("[WARN] bee_client 导入失败: %s" % e)
+        return None
+    skill_id = SKILL_IDS["index"] if any(
+        k in query for k in ("指数", "创业板", "上证", "深证", "科创")) else SKILL_IDS["market"]
+    try:
+        data = _bee_query(query, skill_id=skill_id, limit=10)
     except Exception as e:
         print("[WARN] %s 查询失败: %s" % (query, e))
         return None
-    datas = data.get("datas", [])
+    datas = (data or {}).get("datas") or []
     if not datas:
         print("[WARN] %s 无数据" % query)
         return None

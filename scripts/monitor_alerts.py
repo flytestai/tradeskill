@@ -87,22 +87,30 @@ def load_levels():
 
 
 def query_index(query):
-    """查询指数最新价，返回 float 或 None"""
-    headers = dict(BASE_HEADERS)
-    headers["X-Claw-Trace-Id"] = secrets.token_hex(32)
-    body = json.dumps({"query": query, "page": "1", "limit": "10",
-                       "is_cache": "1", "expand_index": "true"}).encode("utf-8")
-    req = urllib.request.Request(API_URL, data=body, headers=headers, method="POST")
+    """查询指数最新价，返回 float 或 None。
+
+    改走 `bee_client` 统一适配器（默认 http 通道，请求形态与改造前一致）；
+    设置 BEE_FALLBACK_LOCAL=1 可在蜜蜂网关不可达时自动降级为公开行情源。
+    """
     try:
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
+        from bee_client import query as _bee_query, SKILL_IDS
     except Exception:
         return None
-    datas = data.get("datas", [])
+    try:
+        data = _bee_query(query, skill_id=SKILL_IDS["index"], limit=10)
+    except Exception:
+        return None
+    datas = (data or {}).get("datas") or []
     if not datas:
         return None
     d = datas[0]
     price = d.get("最新价") or d.get("收盘价") or ""
+    # local 通道返回的是字符串；http 通道可能带日期后缀字段
+    if not price:
+        for k, v in d.items():
+            if k.startswith("收盘价"):
+                price = v
+                break
     try:
         return float(str(price).replace(",", ""))
     except Exception:

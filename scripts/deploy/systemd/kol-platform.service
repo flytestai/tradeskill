@@ -1,0 +1,53 @@
+# KOL Skills Platform —— REST 接口服务
+#
+# 安装：
+#   sudo cp kol-platform.service /etc/systemd/system/
+#   sudo systemctl daemon-reload && sudo systemctl enable --now kol-platform
+#
+# 启动后接口在 127.0.0.1:8000（仅本机）；
+# 如需跨机访问，请用 Nginx/Caddy 反代并启用 TLS + API Key，不要直接暴露 8000。
+
+[Unit]
+Description=KOL Skills Platform (REST API)
+Documentation=https://github.com/flytestai/tradeskill
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=kol
+Group=kol
+WorkingDirectory=/opt/kol-opinion-analyzer
+
+# 时区必须固定为北京时间：交易时段/节假日判断全部依赖它
+Environment=TZ=Asia/Shanghai
+
+# 敏感配置（API Key、chat_id 等）放这里，权限 600
+EnvironmentFile=-/etc/kol-platform/env
+
+# 数据源通道：http=蜜蜂网关 / local=公开行情源（不依赖蜜蜂）
+Environment=BEE_CHANNEL=http
+# 蜜蜂网关不可达时自动降级到公开行情源（Linux 剥离蜜蜂后可置 1）
+Environment=BEE_FALLBACK_LOCAL=0
+
+ExecStart=/usr/bin/python3 -m api.rest_app
+
+Restart=always
+RestartSec=10
+# 崩溃循环保护：5 分钟内最多重启 5 次
+StartLimitBurst=5
+StartLimitIntervalSec=300
+
+StandardOutput=append:/var/log/kol-platform/rest.log
+StandardError=append:/var/log/kol-platform/rest.err
+
+# ---- 安全加固 ----
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=read-only
+# 仅允许写数据目录与同步目录
+ReadWritePaths=/opt/kol-opinion-analyzer/data /opt/kol-opinion-analyzer/sync
+
+[Install]
+WantedBy=multi-user.target

@@ -72,39 +72,46 @@ def _save(alerts):
 
 
 def query_price(target):
-    """查询标的现价，返回 (price, name, chg, code) 或 None。"""
-    headers = {
-        "Content-Type": "application/json",
-        "X-Claw-Call-Type": "normal",
-        "X-Claw-Skill-Id": "hithink-market-query",
-        "X-Claw-Skill-Version": "1.0.0",
-        "X-Claw-Plugin-Id": "none",
-        "X-Claw-Plugin-Version": "none",
-        "X-Claw-Trace-Id": secrets.token_hex(32),
-    }
+    """查询标的现价，返回 (price, name, chg, code) 或 None。
+
+    改走 `bee_client` 统一适配器（默认 http 通道，请求形态与改造前一致）；
+    设置 BEE_FALLBACK_LOCAL=1 可在蜜蜂网关不可达时自动降级为公开行情源。
+    """
+    try:
+        from bee_client import query as _bee_query, SKILL_IDS
+    except Exception:
+        return None
+    # 指数类问句走指数技能，其余走行情技能
+    skill_id = SKILL_IDS["index"] if any(
+        k in target for k in ("指数", "创业板", "上证", "深证", "科创", "沪深300")) else SKILL_IDS["market"]
     for q in (target, target + "最新价"):
-        body = json.dumps({"query": q, "page": "1", "limit": "10",
-                           "is_cache": "1", "expand_index": "true"}).encode("utf-8")
-        req = urllib.request.Request(API_URL, data=body, headers=headers, method="POST")
         try:
-            with urllib.request.urlopen(req, timeout=30) as r:
-                data = json.loads(r.read().decode("utf-8"))
+            data = _bee_query(q, skill_id=skill_id, limit=10)
         except Exception:
             continue
-        datas = data.get("datas", [])
+        datas = (data or {}).get("datas") or []
         if not datas:
             continue
         it = datas[0]
-        raw = it.get("最新价") or it.get("最新收盘价") or it.get("收盘价[20260901]")
+        raw = it.get("最新价") or it.get("最新收盘价")
+        if raw is None:
+            # 兼容蜜蜂的「收盘价[YYYYMMDD]」动态列名，以及 local 通道的「最新价」
+            for k, v in it.items():
+                if k.startswith("收盘价"):
+                    raw = v
+                    break
         if raw is None:
             continue
         try:
             price = float(str(raw).replace(",", ""))
         except Exception:
             continue
-        name = it.get("股票简称") or it.get("指数简称") or it.get("基金简称") or target
-        chg = it.get("最新涨跌幅") or it.get("最新涨跌幅:前复权") or ""
-        code = it.get("股票代码") or it.get("指数代码") or it.get("基金代码") or ""
+        name = (it.get("股票简称") or it.get("指数简称") or it.get("基金简称")
+                or it.get("名称") or target)
+        chg = (it.get("最新涨跌幅") or it.get("最新涨跌幅:前复权")
+               or it.get("涨跌幅") or "")
+        code = (it.get("股票代码") or it.get("指数代码") or it.get("基金代码")
+                or it.get("代码") or "")
         return price, name, chg, code
     return None
 
