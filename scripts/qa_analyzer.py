@@ -229,6 +229,11 @@ def process(item: dict, dry_run: bool = False) -> tuple:
         return True, "dry-run"
 
     # 3) 发送（@提问人 + 免责声明 + 去重，全部由 group_reply 负责）
+    #
+    # ⚠️ 必须传 --chat-id：group_reply 默认发到 VIP_PUSH_CHAT_ID（荔枝群）。
+    #    现同时监控「荔枝种植交流群」与「每日复盘群」，若不传此参数，
+    #    复盘群的提问会被**回复到荔枝群**（已实测踩坑）。
+    chat_id = (item.get("chat_id") or "").strip()
     try:
         args = ["scripts/group_reply.py",
                 "--sender", sender, "--question", question,
@@ -237,6 +242,10 @@ def process(item: dict, dry_run: bool = False) -> tuple:
             args += ["--sender-id", sender_id]
         if mid:
             args += ["--message-id", mid]
+        if not chat_id:
+            # 无来源群信息 → 拒绝发送，避免回错群（宁可留队列下轮重试）
+            return False, "队列项缺少 chat_id，拒绝发送以免回错群"
+        args += ["--chat-id", chat_id]
         out = run_script(args, timeout=180)
         if "[ERROR]" in out or "失败" in out[:200]:
             return False, "发送失败: %s" % out[:150]
