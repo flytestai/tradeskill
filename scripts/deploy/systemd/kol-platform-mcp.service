@@ -1,0 +1,52 @@
+# KOL Skills Platform —— MCP 接口服务
+#
+# 供任意支持 MCP 的 Agent 调用（蜜蜂 / WorkBuddy / Claude Code / Cursor ...）
+# 传输：streamable-http（WorkBuddy connectors 原生支持；蜜蜂 mcp_manage 也支持）
+#
+# 安装：
+#   sudo cp kol-platform-mcp.service /etc/systemd/system/
+#   sudo systemctl daemon-reload && sudo systemctl enable --now kol-platform-mcp
+#
+# 接入方式：
+#   蜜蜂      mcp_manage(action="upsert", name="kol-platform",
+#                       transport="streamable-http", url="http://<host>:8001/mcp")
+#   WorkBuddy ~/.workbuddy/connectors/*/mcp.json 增加：
+#             {"kol-platform": {"type":"streamableHttp",
+#                               "url":"http://<host>:8001/mcp","timeout":30000}}
+
+[Unit]
+Description=KOL Skills Platform (MCP server)
+Documentation=https://github.com/flytestai/tradeskill
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=kol
+Group=kol
+WorkingDirectory=/opt/kol-opinion-analyzer
+
+Environment=TZ=Asia/Shanghai
+EnvironmentFile=-/etc/kol-platform/env
+Environment=BEE_CHANNEL=http
+Environment=BEE_FALLBACK_LOCAL=0
+Environment=PLATFORM_MCP_PORT=8001
+
+ExecStart=/usr/bin/python3 -m api.mcp_server --http --host 127.0.0.1 --port 8001
+
+Restart=always
+RestartSec=10
+StartLimitBurst=5
+StartLimitIntervalSec=300
+
+StandardOutput=append:/var/log/kol-platform/mcp.log
+StandardError=append:/var/log/kol-platform/mcp.err
+
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=read-only
+ReadWritePaths=/opt/kol-opinion-analyzer/data /opt/kol-opinion-analyzer/sync
+
+[Install]
+WantedBy=multi-user.target

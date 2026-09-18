@@ -38,20 +38,28 @@ fi
 # 把 \n 转成真实换行（从命令行传参时）
 MSG=$(printf '%b' "$MSG")
 
-# 优先调用 lark-cli 原生 exe，避免 POSIX 启动脚本拉起的 node 子进程不退出。
-APPDATA_POSIX="$(cygpath -u "${APPDATA:-}" 2>/dev/null || printf '%s' "${APPDATA:-}")"
-LARK_EXE="$APPDATA_POSIX/bee_ai_test/agent-runtime/npm-global/node_modules/@larksuite/cli/bin/lark-cli.exe"
-if [ -f "$LARK_EXE" ]; then
-    timeout -k 3 20 "$LARK_EXE" im +messages-send \
-        --chat-id "$GROUP_ID" \
-        --as bot \
-        --markdown "$MSG" >/dev/null 2>&1
-else
-    timeout -k 3 20 lark-cli im +messages-send \
-        --chat-id "$GROUP_ID" \
-        --as bot \
-        --markdown "$MSG" >/dev/null 2>&1
+# 跨平台定位 lark-cli（同 notify_feishu.sh）：
+#   1) 环境变量 LARK_CLI  2) Windows 原生 exe  3) PATH 中的 lark-cli
+resolve_lark() {
+    if [ -n "${LARK_CLI:-}" ] && [ -x "${LARK_CLI}" ]; then
+        printf '%s' "$LARK_CLI"; return 0
+    fi
+    if command -v cygpath >/dev/null 2>&1 && [ -n "${APPDATA:-}" ]; then
+        _p="$(cygpath -u "$APPDATA" 2>/dev/null)/bee_ai_test/agent-runtime/npm-global/node_modules/@larksuite/cli/bin/lark-cli.exe"
+        [ -f "$_p" ] && { printf '%s' "$_p"; return 0; }
+    fi
+    command -v lark-cli 2>/dev/null
+}
+LARK="$(resolve_lark)"
+if [ -z "$LARK" ]; then
+    echo "[CONFIG] 未找到 lark-cli（请安装并加入 PATH，或设置 LARK_CLI）" >&2
+    exit 1
 fi
+
+timeout -k 3 20 "$LARK" im +messages-send \
+    --chat-id "$GROUP_ID" \
+    --as bot \
+    --markdown "$MSG" >/dev/null 2>&1
 rc=$?
 
 # 把 lark-cli 的真实退出码返回给调用方，便于盘前播报记录发送失败并重试。

@@ -3,13 +3,139 @@
 """公共工具：bash 路径、节假日、文本归一化、DB 连接（消除各脚本重复）。"""
 import json
 import os
+import platform
 import re
+import shlex
+import shutil
 import sqlite3
 import subprocess
 import sys
 
-# Windows 下子进程静默运行，不弹黑窗
+# ============================================================================
+# 平台抽象层（P0）
+# ----------------------------------------------------------------------------
+# 目的：让同一份代码在 Windows / Linux 都能跑，业务脚本不再直接写平台相关代码。
+# 注意：Windows 行为与改造前**完全一致**（NO_WINDOW 等取值不变），
+#       Linux 上自动降级为 no-op，不影响任何现有逻辑。
+# ============================================================================
+
+IS_WINDOWS = platform.system() == "Windows"
+IS_LINUX = platform.system() == "Linux"
+
+# Windows 下子进程静默运行，不弹黑窗（Linux 上为 0）
 NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+
+
+def detach_flags():
+    """子进程「完全脱离父进程」标志：Windows 专有；Linux 返回 0。
+
+    用于 supervisor 之类需要后台常驻的场景。
+    """
+    if not IS_WINDOWS:
+        return 0
+    return (getattr(subprocess, "DETACHED_PROCESS", 0)
+            | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+            | getattr(subprocess, "CREATE_NO_WINDOW", 0))
+
+
+def no_window_flag():
+    """子进程静默标志：Windows 返回 CREATE_NO_WINDOW；Linux 返回 0。"""
+    if not IS_WINDOWS:
+        return 0
+    return getattr(subprocess, "CREATE_NO_WINDOW", 0)
+
+
+def timeout_wrap(seconds, cmd_parts):
+    """跨平台 timeout 包装。
+
+    返回可直接传给 shell 的字符串（Windows 走 Git Bash 的 timeout）
+    或参数列表（Linux 走 coreutils timeout）。
+
+    >>> timeout_wrap(20, ["lark-cli", "auth", "status"])
+    """
+    if IS_WINDOWS:
+        return "timeout -k 3 %d %s" % (seconds, " ".join(shlex.quote(str(c)) for c in cmd_parts))
+    return ["timeout", "-k", "3", str(seconds)] + [str(c) for c in cmd_parts]
+
+
+def posix_path(p):
+    """把 Windows 路径转成 Git Bash 可识别的形式；Linux 原样返回。
+
+    例如 C:\\Users\\x -> /c/Users/x
+    """
+    if not IS_WINDOWS:
+        return str(p)
+    p = str(p).replace("\\", "/")
+    m = re.match(r"^([A-Za-z]):/(.*)$", p)
+    if m:
+        return "/%s/%s" % (m.group(1).lower(), m.group(2))
+    return p
+
+
+def find_lark_cli():
+    """跨平台定位 lark-cli。
+
+    查找顺序：
+      Windows: 显式环境变量 → 蜜蜂 npm-global 下的原生 exe → PATH
+      Linux:   显式环境变量 → ~/.npm-global-user/bin → /usr/local/bin → PATH
+    """
+    env = os.environ.get("LARK_CLI", "").strip()
+    if env and os.path.exists(env):
+        return env
+
+    candidates = []
+    if IS_WINDOWS:
+        candidates += [
+            os.path.expandvars(
+                r"%APPDATA%\bee_ai_test\agent-runtime\npm-global"
+                r"\node_modules\@larksuite\cli\bin\lark-cli.exe"),
+            os.path.expandvars(r"%APPDATA%\bee_ai_test\agent-runtime\npm-global\lark-cli.cmd"),
+            os.path.expandvars(r"%APPDATA%\npm\lark-cli.cmd"),
+        ]
+    else:
+        candidates += [
+            os.path.expanduser("~/.npm-global-user/bin/lark-cli"),
+            os.path.expanduser("~/.npm-global/bin/lark-cli"),
+            "/usr/local/bin/lark-cli",
+            "/usr/bin/lark-cli",
+        ]
+    for c in candidates:
+        if c and os.path.exists(c):
+            return c
+    return shutil.which("lark-cli") or "lark-cli"
+
+
+def bash_path():
+    """返回可用的 bash；Windows 用 Git Bash，Linux 用 /bin/bash。"""
+    if not IS_WINDOWS:
+        return shutil.which("bash") or "/bin/bash"
+    for c in (r"C:\Program Files\Git\bin\bash.exe",
+              r"C:\Program Files (x86)\Git\bin\bash.exe"):
+        if os.path.exists(c):
+            return c
+    return shutil.which("bash") or "bash"
+
+
+def service_env(key, default=None):
+    """读取服务端配置：优先环境变量（Linux systemd EnvironmentFile），
+    回退到 data/local_config.env（Windows 本地文件）。
+
+    这样同一份代码在两种部署形态下都能取到配置，无需分叉。
+    """
+    v = os.environ.get(key)
+    if v:
+        return v
+    try:
+        env_file = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                                "data", "local_config.env")
+        with open(env_file, encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if line.startswith(key + "="):
+                    return line.split("=", 1)[1].strip().strip('"').strip("'")
+    except Exception:
+        pass
+    return default
 
 
 def pythonw_path():

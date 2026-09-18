@@ -28,19 +28,29 @@ fi
 # 把输入里的 \n 转成真实换行（bash 双引号不会自动解释 \n）
 MSG=$(printf '%b' "$MSG")
 
-# 优先调用原生 lark-cli.exe，避免 POSIX 包装脚本的 node 子进程不退出。
-APPDATA_POSIX="$(cygpath -u "${APPDATA:-}" 2>/dev/null || printf '%s' "${APPDATA:-}")"
-LARK_EXE="$APPDATA_POSIX/bee_ai_test/agent-runtime/npm-global/node_modules/@larksuite/cli/bin/lark-cli.exe"
-if [ -f "$LARK_EXE" ]; then
-    timeout -k 3 20 "$LARK_EXE" im +messages-send \
-        --user-id "$USER_OPEN_ID" \
-        --as bot \
-        --markdown "$MSG" >/dev/null 2>&1
-else
-    timeout -k 3 20 lark-cli im +messages-send \
-        --user-id "$USER_OPEN_ID" \
-        --as bot \
-        --markdown "$MSG" >/dev/null 2>&1
+# 跨平台定位 lark-cli：
+#   1) 显式环境变量 LARK_CLI（Linux systemd EnvironmentFile 用）
+#   2) Windows：蜜蜂 npm-global 下的原生 exe（避免 POSIX 包装脚本的 node 子进程不退出）
+#   3) PATH 中的 lark-cli（Linux: /usr/local/bin/lark-cli）
+resolve_lark() {
+    if [ -n "${LARK_CLI:-}" ] && [ -x "${LARK_CLI}" ]; then
+        printf '%s' "$LARK_CLI"; return 0
+    fi
+    if command -v cygpath >/dev/null 2>&1 && [ -n "${APPDATA:-}" ]; then
+        _p="$(cygpath -u "$APPDATA" 2>/dev/null)/bee_ai_test/agent-runtime/npm-global/node_modules/@larksuite/cli/bin/lark-cli.exe"
+        [ -f "$_p" ] && { printf '%s' "$_p"; return 0; }
+    fi
+    command -v lark-cli 2>/dev/null
+}
+LARK="$(resolve_lark)"
+if [ -z "$LARK" ]; then
+    echo "[CONFIG] 未找到 lark-cli（请安装并加入 PATH，或设置 LARK_CLI）" >&2
+    exit 1
 fi
+
+timeout -k 3 20 "$LARK" im +messages-send \
+    --user-id "$USER_OPEN_ID" \
+    --as bot \
+    --markdown "$MSG" >/dev/null 2>&1
 rc=$?
 exit $rc
