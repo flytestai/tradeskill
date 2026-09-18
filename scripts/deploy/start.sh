@@ -5,7 +5,7 @@
 # 隔离要点：
 #   - 容器名 kolplatform-*，与现有 flytest-* / cli-proxy-api 无命名冲突
 #   - 端口绑定 127.0.0.1:8020（宿主已占用 22/80/443/1455/8010/8085/8317/8912/…）
-#   - 独立数据卷 kolplatform_data / kolplatform_sync
+#   - 数据用 **bind mount** 挂宿主 data/ 目录（与宿主机脚本共享同一份数据）
 #   - 宿主机 Python/系统包完全不动，依赖全在镜像内
 #
 # 用法：
@@ -21,10 +21,14 @@ REST_NAME="kolplatform-rest"
 MCP_NAME="kolplatform-mcp"
 REST_PORT="${REST_PORT:-8020}"
 MCP_PORT="${MCP_PORT:-8021}"
-DATA_VOL="kolplatform_data"
-SYNC_VOL="kolplatform_sync"
-ENV_FILE="${ENV_FILE:-/opt/kol-skills-platform/.env}"
-ENV_RUNTIME="/opt/kol-skills-platform/.env.runtime"
+# ⚠️ 数据目录用 **bind mount**（而非 Docker 卷）：
+#    宿主机脚本（同步/播报）与容器必须共享同一份数据。
+#    用卷会导致「宿主机写源码目录、容器读卷」→ 两份互不可见的数据（已实测踩坑）。
+#    也**不能**用「data 指向卷的软链」—— 本仓库 git 跟踪了 data/ 下的配置文件，
+#    git reset/checkout 会重建普通目录并覆盖软链（已实测踩坑）。
+SKILL_DIR="$(cd "$(dirname "$0")/../.." && pwd)"
+ENV_FILE="${ENV_FILE:-$SKILL_DIR/.env}"
+ENV_RUNTIME="$SKILL_DIR/.env.runtime"
 
 WITH_MCP=0
 RESTART=0
@@ -56,12 +60,15 @@ fi
 docker image inspect "$IMAGE" >/dev/null 2>&1 || {
     echo "  ❌ 镜像不存在: $IMAGE"; echo "     请先构建: docker build -f scripts/deploy/Dockerfile -t $IMAGE ."; exit 1; }
 
-docker volume inspect "$DATA_VOL" >/dev/null 2>&1 || {
-    echo "  ❌ 数据卷不存在: $DATA_VOL"; echo "     请先运行: bash scripts/deploy/setup_volume.sh"; exit 1; }
+# 数据目录必须有数据库，否则容器起来也是空库
+[ -f "$SKILL_DIR/data/kol_opinions.db" ] || {
+    echo "  ❌ 缺少 $SKILL_DIR/data/kol_opinions.db"; exit 1; }
 
-# 数据卷必须有数据库，否则容器起来也是空库
-docker run --rm -v "$DATA_VOL":/d "$IMAGE" test -f /d/kol_opinions.db 2>/dev/null || {
-    echo "  ❌ 数据卷内缺少 kol_opinions.db"; echo "     请先运行: bash scripts/deploy/setup_volume.sh"; exit 1; }
+# 数据目录不应是软链：本仓库 git 跟踪 data/ 下的配置，
+# git reset/checkout 会重建普通目录并覆盖软链，导致数据不一致复发。
+if [ -L "$SKILL_DIR/data" ]; then
+    echo "  ⚠️  data 是软链 —— git 操作可能覆盖它，建议改为真实目录"
+fi
 
 echo "  ✅ 前置检查通过"
 
@@ -88,8 +95,8 @@ docker run -d \
     --env-file "$ENV_RUNTIME" \
     -e PLATFORM_HOST=0.0.0.0 \
     -e PLATFORM_PORT=8000 \
-    -v "$DATA_VOL":/app/data \
-    -v "$SYNC_VOL":/app/sync \
+    -v "$SKILL_DIR/data":/app/data \
+    -v "$SKILL_DIR/sync":/app/sync \
     --memory 320m --memory-swap 700m --cpus 0.8 \
     --log-opt max-size=10m --log-opt max-file=3 \
     "$IMAGE" >/dev/null
@@ -111,8 +118,8 @@ if [ "$WITH_MCP" = "1" ]; then
             -p "127.0.0.1:${MCP_PORT}:8000" \
             --env-file "$ENV_RUNTIME" \
             -e PLATFORM_HOST=0.0.0.0 \
-            -v "$DATA_VOL":/app/data:ro \
-            -v "$SYNC_VOL":/app/sync \
+            -v "$SKILL_DIR/data":/app/data:ro \
+            -v "$SKILL_DIR/sync":/app/sync \
             --memory 400m --memory-swap 800m --cpus 0.8 \
             --log-opt max-size=10m --log-opt max-file=3 \
             "$MCP_IMAGE" \
