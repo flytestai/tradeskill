@@ -259,7 +259,7 @@ git revert <commit>                 # 或 git checkout <旧版本> -- scripts/
 |---|---|
 | **REST** | `https://skill.flytest.com.cn` |
 | **MCP** | `https://skill.flytest.com.cn/mcp` |
-| 旧域跳转 | `etf.flytest.com.cn` → 301 → `skill.flytest.com.cn` |
+| 已下线旧域 | `etf.flytest.com.cn`（2026-09-18 彻底下线，return 444）|
 | 服务器 | 203.0.113.20（Debian 10 / Docker 18.09） |
 | 部署目录 | `/opt/kol-skills-platform` |
 | 容器 | `kolplatform-rest`（8020）/ `kolplatform-mcp`（8021），仅绑 127.0.0.1 |
@@ -284,4 +284,20 @@ docker logs -f kolplatform-rest
 bash scripts/deploy/start.sh --restart
 certbot certificates && certbot renew --dry-run
 tail -f /var/log/nginx/skill-platform.error.log
+```
+
+### 已下线域名的处理（rejected-domains）
+
+nginx 中若某域名不匹配任何 `server_name`，请求会落到该端口的 **default server**
+（实测：etf 下线后 http 落到 cliproxy 的 /management.html、https 落到 flytest 主站），
+会**意外暴露无关服务**。
+
+因此用 `sites-available/rejected-domains` 显式 `return 444`（关闭连接不返回内容），
+对客户端表现为「该域名无服务」。
+
+新增已下线域名：在该文件的 `server_name` 中追加即可。
+
+```bash
+# 回滚 etf 上线（恢复跳转而非拒绝）
+cat /root/kol-platform-backup-*/nginx/skill-platform | grep -A20 "旧域跳转"
 ```
