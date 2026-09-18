@@ -70,6 +70,23 @@ if [ -L "$SKILL_DIR/data" ]; then
     echo "  ⚠️  data 是软链 —— git 操作可能覆盖它，建议改为真实目录"
 fi
 
+# ---------------------------------------------------------------------------
+# 部署前自检（可跳过：PREFLIGHT=0）
+#   必要性：2026-09-19 曾把 context_format 的导入放到文件底部，导致
+#   skill_router 导入即 NameError；而 qa_analyzer 对该异常是静默吞掉的，
+#   只会悄悄降级、不报错 —— 与 09-18 生产故障同一模式。
+#   preflight 会在启动前拦住这类问题（导入/契约/口径/配置/取数）。
+# ---------------------------------------------------------------------------
+if [ "${PREFLIGHT:-1}" != "0" ] && [ -f "$SKILL_DIR/scripts/preflight.py" ]; then
+    echo "  → 部署前自检..."
+    if ( cd "$SKILL_DIR" && "${PLATFORM_PYTHON:-python3}" scripts/preflight.py --quick ); then
+        echo "  ✅ 自检通过"
+    else
+        echo "  🔴 自检未通过 —— 已中止启动（如需跳过请设 PREFLIGHT=0）"
+        exit 1
+    fi
+fi
+
 echo "  ✅ 前置检查通过"
 
 # ---------------------------------------------------------------------------
