@@ -1,41 +1,54 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""AI 自主规划引擎：让模型自己决定「调哪些蜜蜂 skill / MCP」，再执行并汇总。
+"""AI 自主规划引擎：让模型自己决定调哪些蜜蜂 skill / MCP，再执行并汇总。
 
-与 skill_router 的区别（为什么重写）
-------------------------------------
-`skill_router` 用**关键词硬编码**决定调什么：
-    if "估值" in q: 调 finance;  if "研报" in q: 调 research ...
+核心目标：**与蜜蜂原生调用完全一致**
+--------------------------------------
+群里提问拿到的数据，应当与用户在蜜蜂里原生提问时**一模一样** ——
+同样的端点、同样的请求体、同样的请求头、同样的完整响应。
 
-问题：提问方式千变万化，关键词永远列不全 ——
-    「这股贵不贵」要 finance、「这公司靠不靠谱」要 finance+management、
-    「最近有啥消息」要 news、「板块轮动到哪了」要 industry+sector ...
-硬编码只能覆盖已想到的说法，**没覆盖到的问句就拿不到数据，AI 只能空谈**。
+因此本模块严格遵守各 skill 的 SKILL.md 契约（实测核对）：
 
-本模块改为**两阶段 AI 驱动**：
-    阶段①（规划）：把「全部可用技能目录」交给模型 → 模型输出要调用的技能清单(JSON)
-    阶段②（执行）：按清单真实调用，聚合数据
-    阶段③（汇总）：把数据交回模型 → 生成最终回答
+  端点（只有两种，此前误判为三种）
+    · /skills/v1/query2data           ← 全部 19 个 hithink-*（含 business/management/
+                                          event/futures-query —— 之前我把这三个当成
+                                          /query，导致取不到数据）
+    · /skills/v1/comprehensive/search ← news-search / announcement-search / report-search
+                                          （需 channels + app_id）
 
-即：**根据问题自行分析该调哪些 skill / MCP**，而非查表。
+  请求头（与 SKILL.md 逐字一致）
+    Content-Type / X-Claw-Call-Type / X-Claw-Skill-Id / X-Claw-Skill-Version
+    / X-Claw-Plugin-Id / X-Claw-Plugin-Version / X-Claw-Trace-Id(64位)
 
-技能目录（三套端点，实测确认）
-------------------------------
-  · /skills/v1/query2data         —— 全部 hithink-*（行情/财务/行业/研报/宏观/选择器）
-  · /skills/v1/query              —— business / management / event
-  · /skills/v1/comprehensive/search —— news / announcement / report（需 channels + app_id）
+  请求体
+    query2data : {query, page, limit, is_cache, expand_index}
+    search     : {channels, app_id, query}
 
-MCP 能力（服务器侧等价实现）
----------------------------
-  · fetch（网页抓取）        → 用 urllib 抓取正文（对应 mcp__bee-mcp__fetch）
-  · list_optional_stocks（自选股）→ 本地 data/watchlist.json（平台自选）
+  响应：**完整透传**（遵循网关规范条件六：不得二次解析/清洗/重组）。
+        本模块仅在「呈现给 LLM 时」做压缩，原始响应结构不被修改。
+
+不做数量限制
+------------
+之前有 MAX_SKILLS=6 的限制。现按要求**取消**：模型认为需要多少数据源就调多少，
+只保留「总时间预算」作为安全阀（避免单轮跑太久影响下一轮）。
+
+MCP 能力
+--------
+  · mcp:fetch                 → 抓取网页正文（对应 mcp__bee-mcp__fetch）
+  · mcp:list_optional_stocks  → 平台自选股（对应 mcp__bee-mcp__list_optional_stocks）
+
+本地能力
+--------
+  · local:kol_opinions  本地大V言论库（wu2198）
+  · local:levels        关键位监控
+  · local:quote_local   公开行情源（腾讯，不依赖蜜蜂，可降级）
+  · local:platform_api  本平台 REST/MCP 能力（分析报告/准确率/回测/波浪等）
 
 用法
 ----
     from skill_agent import plan, build_context
-
-    plan_ = plan("厦门钨业现在能买吗")      # 仅看 AI 规划了什么（调试）
-    ctx   = build_context("厦门钨业现在能买吗")   # 完整：规划 → 执行 → 上下文
+    p   = plan("厦门钨业现在能买吗")           # 查看 AI 规划
+    ctx = build_context("厦门钨业现在能买吗")   # 规划 → 执行 → 上下文
 
 CLI
 ---
@@ -48,6 +61,7 @@ import argparse
 import json
 import os
 import re
+import secrets
 import sys
 import time
 import urllib.error
@@ -60,75 +74,111 @@ except Exception:
     def service_env(k, d=None):
         return os.environ.get(k, d)
 
+#: 统一格式化层（与 skill_router 共用，消除两套口径）
+try:
+    from context_format import (
+        format_response, format_datas, skill_version, simplify_query,
+        FIELDS_PER_ROW, ROWS_PER_SKILL, SUMMARY_MAX,
+    )
+except Exception:                                   # 极端情况下退化为内置实现
+    def skill_version(_sid): return "1.0.0"
+    def format_response(resp, skill_id="", rows=None, fields=None): return ""
+    def format_datas(datas, skill_id="", rows=None, fields=None): return ""
+    def simplify_query(q, max_len=16): return ""
+    FIELDS_PER_ROW, ROWS_PER_SKILL, SUMMARY_MAX = 14, 6, 400
+
 SKILL_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
-GATEWAY = os.environ.get("BEE_GATEWAY_URL", "https://bee-ai.integrity.com.cn")
+GATEWAY = os.environ.get("BEE_GATEWAY_URL", "https://bee-ai.integrity.com.cn").rstrip("/")
 EP_Q2D = GATEWAY + "/skills/v1/query2data"
-EP_QUERY = GATEWAY + "/skills/v1/query"
 EP_SEARCH = GATEWAY + "/skills/v1/comprehensive/search"
 
-DEFAULT_TIMEOUT = int(os.environ.get("SKILL_TIMEOUT", "30"))
-SLOW_TIMEOUT = int(os.environ.get("SKILL_TIMEOUT_SLOW", "45"))
-TOTAL_BUDGET = int(os.environ.get("CONTEXT_BUDGET", "100"))
-MAX_CTX = int(os.environ.get("CONTEXT_MAX_CHARS", "7000"))
-MAX_SKILLS = int(os.environ.get("MAX_SKILLS_PER_QUERY", "6"))
+#: 单技能超时（秒）。不再区分快慢 —— 之前把 industry/event 判为"慢"是误判，
+#: 实际是端点用错导致的失败重试；统一给 45s 足够。
+SKILL_TIMEOUT = int(os.environ.get("SKILL_TIMEOUT", "45"))
+#: 整轮总预算（秒）。**不再限制技能数量**，只保留这个安全阀，
+#: 防止极端问题拖太久影响下一轮 2 分钟轮询。
+TOTAL_BUDGET = int(os.environ.get("CONTEXT_BUDGET", "600"))
+#: 交给 LLM 的上下文上限（字符）。响应本身完整保留，此处仅是 prompt 长度控制。
+MAX_CTX = int(os.environ.get("CONTEXT_MAX_CHARS", "24000"))
+#: 每条数据呈现给 LLM 的字段数上限（原始响应不受影响）
+FIELDS_PER_ROW = int(os.environ.get("CTX_FIELDS_PER_ROW", "14"))
+ROWS_PER_SKILL = int(os.environ.get("CTX_ROWS_PER_SKILL", "6"))
 
 # ---------------------------------------------------------------------------
-# 技能目录：交给 AI 让它自己选。
-#   ep  : 端点类型  q2d | query | search
-#   use : 什么时候用（写给模型看的）
+# 技能目录：**全部蜜蜂 skill**，交给 AI 自行选择。
+#   ep   : q2d | search（只有两种端点）
+#   chan : search 端点用的 channels
+#   use  : 什么时候用（写给模型看）
 # ---------------------------------------------------------------------------
 CATALOG = [
-    # ---- query2data 端点 ----
-    ("hithink-market-query", "q2d", "个股/ETF/指数的实时价格、涨跌幅、成交量、主力资金、技术指标"),
-    ("hithink-zhishu-query", "q2d", "大盘指数行情（上证/深证/创业板/科创50/恒生/纳斯达克）"),
-    ("hithink-finance-query", "q2d", "财务报表指标：营收、净利、ROE、毛利率、负债率、PE/PB 估值"),
-    ("hithink-industry-query", "q2d", "行业估值、盈利、板块排名、行业行情"),
-    ("hithink-insresearch-query", "q2d", "券商研报评级、目标价、业绩预测、ESG/信用评级、金股"),
-    ("hithink-macro-query", "q2d", "宏观：GDP、CPI、PPI、PMI、利率、汇率、社融"),
-    ("hithink-etf-selector", "q2d", "按条件筛选 ETF（跟踪指数、规模、风格、费率）"),
-    ("hithink-astock-selector", "q2d", "按行情/财务/技术形态条件筛选 A 股个股"),
-    ("hithink-hkstock-selector", "q2d", "筛选港股"),
-    ("hithink-usstock-selector", "q2d", "筛选美股"),
-    ("hithink-cb-selector", "q2d", "筛选可转债（转股溢价率、评级、剩余期限）"),
-    ("hithink-fund-selector", "q2d", "筛选公募基金（类型、业绩、经理、风险）"),
-    ("hithink-futures-selector", "q2d", "筛选期货/期权（波动率、持仓、产销）"),
-    ("hithink-sector-selector", "q2d", "按资金流向/估值/涨跌幅筛选行业板块"),
-    ("hithink-basicinfo-query", "q2d", "标的基础资料：上市日期、发行价、所属行业、公司简介"),
-    # ---- /query 端点（注意：与上面不是同一端点）----
-    ("hithink-business-query", "query", "主营业务构成、主要客户、供应商、参控股公司、重大合同"),
-    ("hithink-management-query", "query", "股本结构、股权结构、股东户数、前十大股东"),
-    ("hithink-event-query", "query", "业绩预告、增发、质押、解禁、机构调研、监管函"),
-    # ---- /comprehensive/search 端点 ----
-    ("news-search", "search", "财经资讯、政策动态、行业与公司新闻、市场舆情"),
-    ("announcement-search", "search", "上市公司公告（定期报告、分红、回购、重组）"),
-    ("report-search", "search", "券商研究报告全文检索"),
+    # ---- query2data（19 个）----
+    ("hithink-market-query", "q2d", None, "个股/ETF/指数的实时价格、涨跌幅、成交量、主力资金流向、技术指标（MACD等）"),
+    ("hithink-zhishu-query", "q2d", None, "大盘指数行情（上证/深证/创业板/科创50/科创综指/恒生/纳斯达克等）"),
+    ("hithink-finance-query", "q2d", None, "财务指标：营收、净利润、ROE、毛利率、负债率、现金流、PE/PB 估值"),
+    ("hithink-industry-query", "q2d", None, "行业估值、行业财务、盈利、行业行情、板块排名"),
+    ("hithink-insresearch-query", "q2d", None, "券商研报评级、目标价、业绩预测、ESG评级、信用评级、基金评级、券商金股"),
+    ("hithink-macro-query", "q2d", None, "宏观经济：GDP、CPI、PPI、PMI、利率、汇率、社融、货币供应"),
+    ("hithink-basicinfo-query", "q2d", None, "标的基础资料：上市日期、发行价、所属行业、公司简介、费率（全品类）"),
+    ("hithink-business-query", "q2d", None, "主营业务构成、主要客户、供应商、参控股公司、股权投资、重大合同"),
+    ("hithink-management-query", "q2d", None, "股本结构、股权结构、股东户数、前十大股东/流通股东"),
+    ("hithink-event-query", "q2d", None, "个股事件：业绩预告、增发、质押、解禁、机构调研、监管函"),
+    ("hithink-etf-selector", "q2d", None, "按行情/跟踪指数/规模/风格/费率筛选 ETF"),
+    ("hithink-astock-selector", "q2d", None, "按行情/财务/技术形态条件筛选 A 股个股"),
+    ("hithink-hkstock-selector", "q2d", None, "按行情/财务条件筛选港股"),
+    ("hithink-usstock-selector", "q2d", None, "按行情/财务条件筛选美股"),
+    ("hithink-cb-selector", "q2d", None, "筛选可转债：转股溢价率、正股表现、评级、剩余期限"),
+    ("hithink-fund-selector", "q2d", None, "筛选公募基金：类型、业绩、基金经理、风险、持仓、资产配置"),
+    ("hithink-futures-query", "q2d", None, "期货/期权行情、波动率、产销、会员持仓、会员榜单"),
+    ("hithink-futures-selector", "q2d", None, "按行情/波动率/产销/持仓/行权条件筛选期货期权"),
+    ("hithink-sector-selector", "q2d", None, "按行业估值/资金流向/涨跌幅/板块类型筛选行业板块"),
+    # ---- comprehensive/search（3 个）----
+    ("news-search", "search", ["news"], "财经资讯、政策动态、行业与公司新闻、市场舆情、事件解读"),
+    ("announcement-search", "search", ["announcement"], "上市公司公告：定期财报、分红派息、回购增持、资产重组"),
+    ("report-search", "search", ["report"], "券商研究报告全文检索"),
 ]
 
-#: MCP 能力（服务器侧等价实现）
+#: MCP 能力（对应蜜蜂 MCP，服务器侧等价实现）
 MCP_CATALOG = [
-    ("mcp:fetch", "抓取指定网页正文（新闻链接、公告页、研报页）"),
-    ("mcp:list_optional_stocks", "读取本平台自选股列表（代码/名称/涨跌幅）"),
+    ("mcp:fetch", "抓取指定网页 URL 的正文（新闻页/公告页/研报页）"),
+    ("mcp:list_optional_stocks", "读取平台自选股列表（代码、名称、市场、涨跌幅）"),
 ]
 
 #: 本地能力（不依赖蜜蜂网关）
 LOCAL_CATALOG = [
-    ("local:kol_opinions", "本地大V（wu2198）言论库：最新观点、VIP 消息、历史准确率"),
-    ("local:levels", "本地关键位监控：指数支撑压力位、风控线"),
-    ("local:quote_local", "本地行情源（腾讯直连，不依赖蜜蜂，可作降级）"),
+    ("local:kol_opinions", "本地大V（wu2198）言论库：最新观点、VIP 专属消息、预测准确率"),
+    ("local:levels", "关键位监控：指数/个股的支撑压力位、风控线、止损位"),
+    ("local:quote_local", "公开行情源（腾讯直连），完全脱离蜜蜂，可作降级与交叉验证"),
+    ("local:platform_api", "本平台已有分析能力：KOL 分析报告、准确率统计、多KOL对比、跟单回测"),
+    ("local:elliott_wave", "艾略特波浪分析（elliott-index-wave 技能）：指数当前浪级定位、"
+                           "浪型高低点、失效位、备选浪型；交易日/周线双周期确认。"
+                           "适用上证指数/深证成指/创业板指/科创50/沪深300/恒生/纳斯达克等"),
 ]
+
+#: 已纳入编排的指数（elliott 与关键位能力用）
+ELLIOTT_INDEXES = ("上证指数", "深证成指", "创业板指", "科创50", "科创综指",
+                   "沪深300", "中证500", "北证50", "恒生指数", "纳斯达克")
 
 
 # ---------------------------------------------------------------------------
-# 底层 HTTP
+# 底层 HTTP —— 严格复刻 SKILL.md 的原生调用
 # ---------------------------------------------------------------------------
 
 def _headers(skill_id: str) -> dict:
-    import secrets
-    return {"Content-Type": "application/json", "X-Claw-Call-Type": "normal",
-            "X-Claw-Skill-Id": skill_id, "X-Claw-Skill-Version": "1.0.0",
-            "X-Claw-Plugin-Id": "none", "X-Claw-Plugin-Version": "none",
-            "X-Claw-Trace-Id": secrets.token_hex(32)}
+    """与 SKILL.md 逐字一致的请求头（Trace-Id 必须每次新生成的 64 位十六进制）。
+
+    ⚠️ 版本号**逐技能取**（context_format.skill_version），不再统一硬编码 1.0.0 ——
+       `report-search` 自声明 2.0.0，之前被发成 1.0.0，与技能契约不符。
+    """
+    return {
+        "Content-Type": "application/json",
+        "X-Claw-Call-Type": "normal",
+        "X-Claw-Skill-Id": skill_id,
+        "X-Claw-Skill-Version": skill_version(skill_id),
+        "X-Claw-Plugin-Id": "none",
+        "X-Claw-Plugin-Version": "none",
+        "X-Claw-Trace-Id": secrets.token_hex(32),   # 64 字符
+    }
 
 
 def _post(url: str, payload: dict, headers: dict, timeout: int):
@@ -138,122 +188,172 @@ def _post(url: str, payload: dict, headers: dict, timeout: int):
         return json.loads(r.read().decode("utf-8"))
 
 
-def _call_skill(skill_id: str, ep: str, query: str, limit: int = 5):
-    """按端点类型调用技能，返回 datas 列表（失败返回 []）。"""
-    try:
-        if ep == "q2d":
-            d = _post(EP_Q2D, {"query": query, "page": "1", "limit": str(limit),
-                               "is_cache": "1", "expand_index": "true"},
-                      _headers(skill_id), DEFAULT_TIMEOUT)
-            return d.get("datas") or []
-        if ep == "query":
-            d = _post(EP_QUERY, {"query": query, "page": "1", "limit": str(limit),
-                                 "is_cache": "1"},
-                      _headers(skill_id), SLOW_TIMEOUT)
-            return d.get("datas") or []
+def call_skill(skill_id: str, query: str, limit: int = 10, retries: int = 1):
+    """按原生契约调用一个蜜蜂技能，返回**完整响应**（dict）。
+
+    调用形态与 SKILL.md 示例完全一致：
+      query2data : {query, page, limit, is_cache, expand_index}
+      search     : {channels, app_id, query}
+    """
+    ep, chan = "q2d", None
+    for sid, e, c, _ in CATALOG:
+        if sid == skill_id:
+            ep, chan = e, c
+            break
+
+    def _one(q: str):
         if ep == "search":
-            chan = {"news-search": ["news"],
-                    "announcement-search": ["announcement"],
-                    "report-search": ["report"]}.get(skill_id, ["news"])
-            d = _post(EP_SEARCH, {"channels": chan, "app_id": "AIME_SKILL",
-                                  "query": query},
-                      _headers(skill_id), SLOW_TIMEOUT)
-            items = d.get("datas") or d.get("data") or []
-            if isinstance(items, dict):
-                items = items.get("list") or []
-            return items
-    except Exception:
+            return _post(EP_SEARCH,
+                         {"channels": chan or ["news"], "app_id": "AIME_SKILL",
+                          "query": q},
+                         _headers(skill_id), SKILL_TIMEOUT)
+        return _post(EP_Q2D,
+                     {"query": q, "page": "1", "limit": str(limit),
+                      "is_cache": "1", "expand_index": "true"},
+                     _headers(skill_id), SKILL_TIMEOUT)
+
+    last = None
+    for attempt in range(retries + 1):
+        try:
+            return _one(query)
+        except Exception as e:
+            last = e
+            if attempt < retries:
+                time.sleep(1.5)
+
+    # 网络层彻底失败 → 返回错误标记（交给上层处理）
+    if last is not None:
+        return {"_error": "%s: %s" % (type(last).__name__, str(last)[:200])}
+    return {"_error": "unknown"}
+
+
+def call_skill_effective(skill_id: str, query: str, limit: int = 10) -> tuple:
+    """调用技能；**取不到数据时用简化问句重试一次**。
+
+    返回 (响应, 实际使用的问句)。简化重试的必要性见
+    `context_format.simplify_query` 的说明（长句会让网关 NL→SQL 产出空结果）。
+    """
+    resp = call_skill(skill_id, query, limit=limit)
+    if _datas(resp):
+        return resp, query
+
+    short = simplify_query(query)
+    if not short or short == query:
+        return resp, query
+
+    resp2 = call_skill(skill_id, short, limit=limit)
+    if _datas(resp2):
+        return resp2, short
+    return resp, query                       # 简化也没取到 → 保留原结果
+
+
+def _datas(resp: dict) -> list:
+    """从完整响应中取 datas（不改动原响应）。"""
+    if not isinstance(resp, dict):
         return []
-    return []
+    v = resp.get("datas")
+    if v is None:
+        v = resp.get("data")
+    if isinstance(v, dict):
+        v = v.get("list") or v.get("items") or []
+    return v if isinstance(v, list) else []
 
 
 # ---------------------------------------------------------------------------
-# 阶段①：AI 规划 —— 让它自己决定调哪些技能
+# 阶段①：AI 规划（不给数量上限）
 # ---------------------------------------------------------------------------
 
 PLANNER_SYSTEM = (
-    "你是数据检索规划助手。用户会在财经群里提问，你要判断**需要哪些数据源**才能回答好。\n"
+    "你是数据检索规划助手。用户在财经群提问，你要判断**需要调用哪些数据源**才能完整回答。\n"
     "\n"
-    "输出要求：**只输出 JSON**，格式：\n"
-    '{"skills":[{"id":"技能ID","query":"检索问句","why":"一句话理由"}],"need_fetch":[],'
-    '"reason":"整体思路"}\n'
+    "输出：**只输出 JSON**，格式：\n"
+    '{"skills":[{"id":"技能ID","query":"检索问句","why":"理由"}],'
+    '"need_fetch":["http://..."],"reason":"整体思路"}\n'
     "\n"
     "规则：\n"
-    "1. 最多选 %d 个技能，**宁缺毋滥**——只选真正能提供所需数据的；\n"
-    "2. `query` 要写成**能直接检索的自然语言问句**，并带上具体标的/指标名"
-    "（如「厦门钨业最新市盈率净资产收益率」而不是「财务」）；\n"
-    "3. 若问题与股票/财经**完全无关**（如闲聊、电视剧、生活问题），"
+    "1. **不受数量限制** —— 只要对回答问题有帮助的技能都列出来，"
+    "该多就多、该少就少；宁全勿缺，但不要列无关的；\n"
+    "2. `query` 必须写成**可直接检索的自然语言问句**并带具体标的/指标名，"
+    "例如「厦门钨业最新市盈率净资产收益率」而不是「财务」；\n"
+    "3. 涉及个股时，考虑同时取：行情、财务、研报、事件、主营、股东等（按问题相关性）；\n"
+    "4. 涉及板块/行业时，考虑：行业数据 + 板块资金 + 资讯 + 研报；\n"
+    "5. 涉及政策/宏观时，考虑：资讯 + 宏观数据；\n"
+    "6. 若需要读取某个网页正文，把 URL 放进 need_fetch；\n"
+    "7. 若问题与股票/财经**完全无关**（闲聊、电视剧、生活问题），"
     '返回 {"skills":[],"need_fetch":[],"reason":"非财经问题"}；\n'
-    "4. 若需要抓取网页正文，把 URL 放进 need_fetch（没有就留空数组）；\n"
-    "5. 不要选与你判断无关的技能，不要臆造不存在的技能 ID。"
+    "8. 只能使用下面目录里出现的 ID，不要臆造。"
 )
 
 
 def _catalog_text() -> str:
-    lines = ["【可调用技能（skill）】"]
-    for sid, ep, use in CATALOG:
-        lines.append("- %s：%s" % (sid, use))
+    lines = ["【可用技能 skill（端点：query2data）】"]
+    for sid, ep, chan, use in CATALOG:
+        if ep == "q2d":
+            lines.append("- %s：%s" % (sid, use))
     lines.append("")
-    lines.append("【可调用 MCP 能力】")
+    lines.append("【可用技能 skill（端点：comprehensive/search）】")
+    for sid, ep, chan, use in CATALOG:
+        if ep == "search":
+            lines.append("- %s：%s" % (sid, use))
+    lines.append("")
+    lines.append("【可用 MCP 能力】")
     for mid, use in MCP_CATALOG:
         lines.append("- %s：%s" % (mid, use))
     lines.append("")
-    lines.append("【可调用本地能力（无需联网）】")
+    lines.append("【可用本地能力（无需联网）】")
     for lid, use in LOCAL_CATALOG:
         lines.append("- %s：%s" % (lid, use))
     return "\n".join(lines)
 
 
-#: 规划结果缓存（问题 → (时间戳, 规划)）。
-#  为什么需要：Moonshot 有组织级限流（实测 429），规划是纯 LLM 调用。
-#  同一问题在 TTL 内复用规划结果，可显著减少调用次数。
-#  TTL 默认 600s：群里的提问常有重复/追问，且规划结果与时点无关（只是选数据源）。
+#: 规划缓存（同问题 TTL 内复用，降低 LLM 调用 → 抗限流）
+#
+#  ⚠️ 默认 **0 = 关闭缓存**。原因：缓存会让同一问题在 TTL 内复用同一套技能清单，
+#     而蜜蜂原生提问每次都重新决策 —— 缓存期间的回答可能与首次不同，
+#     与「和原生提问保持一致」的目标冲突。
+#     若确需抗限流，可显式设 PLAN_CACHE_TTL=600 打开（会有回答漂移的副作用）。
 _PLAN_CACHE = {}
-PLAN_TTL = int(os.environ.get("PLAN_CACHE_TTL", "600"))
+PLAN_TTL = int(os.environ.get("PLAN_CACHE_TTL", "0"))
 
 
-def _cache_get(q: str):
+def _cache_get(q):
+    if PLAN_TTL <= 0:                     # 缓存关闭
+        return None
     hit = _PLAN_CACHE.get(q)
-    if hit and time.time() - hit[0] < PLAN_TTL:
-        return hit[1]
-    return None
+    return hit[1] if hit and time.time() - hit[0] < PLAN_TTL else None
 
 
-def _cache_put(q: str, p: dict):
+def _cache_put(q, p):
+    if PLAN_TTL <= 0:                     # 缓存关闭
+        return
     _PLAN_CACHE[q] = (time.time(), p)
-    if len(_PLAN_CACHE) > 200:          # 简单容量控制
-        oldest = sorted(_PLAN_CACHE.items(), key=lambda kv: kv[1][0])[:50]
-        for k, _ in oldest:
+    if len(_PLAN_CACHE) > 300:
+        for k, _ in sorted(_PLAN_CACHE.items(), key=lambda kv: kv[1][0])[:60]:
             _PLAN_CACHE.pop(k, None)
 
 
 def plan(question: str) -> dict:
-    """让 AI 决定要调用哪些技能/MCP。返回 {skills, need_fetch, reason}。"""
+    """让 AI 决定调用哪些技能/MCP（不限制数量）。"""
     cached = _cache_get(question)
     if cached:
-        return dict(cached, reason=(cached.get("reason", "") + " [缓存]")[:80])
+        return dict(cached, reason=(cached.get("reason", "") + " [缓存]")[:90])
 
     try:
-        from llm_client import chat, is_configured, LLMError
+        from llm_client import chat, is_configured
     except Exception as e:
         return {"skills": [], "need_fetch": [], "reason": "llm_client 不可用: %s" % e}
     if not is_configured():
         return {"skills": [], "need_fetch": [], "reason": "未配置 LLM_API_KEY"}
 
-    prompt = (
-        "%s\n\n"
-        "用户问题：%s\n\n"
-        "请判断需要哪些数据源，按 JSON 格式输出。"
-        % (_catalog_text(), question)
-    )
+    prompt = ("%s\n\n用户问题：%s\n\n请判断需要哪些数据源，按 JSON 格式输出。"
+              % (_catalog_text(), question))
     try:
-        # 规划是结构化输出任务 → 用快模型（实测 kimi-k2.6 约 5s，kimi-k3 需 21s）
-        out = chat(prompt, system=PLANNER_SYSTEM % MAX_SKILLS,
-                   purpose="plan", timeout=60, retries=1)
+        # 规划是结构化输出任务 → 用快模型（实测 k2.6 约 5s，k3 约 21s）
+        out = chat(prompt, system=PLANNER_SYSTEM, purpose="plan",
+                   timeout=90, retries=2)
     except Exception as e:
         return {"skills": [], "need_fetch": [], "reason": "规划失败: %s" % str(e)[:120]}
 
-    # 解析 JSON（容忍模型包裹 ```json 或多余文字）
     m = re.search(r"\{[\s\S]*\}", out or "")
     if not m:
         return {"skills": [], "need_fetch": [], "reason": "规划输出非 JSON"}
@@ -262,61 +362,51 @@ def plan(question: str) -> dict:
     except Exception:
         return {"skills": [], "need_fetch": [], "reason": "规划 JSON 解析失败"}
 
-    valid_ids = {c[0] for c in CATALOG}
+    valid = {c[0] for c in CATALOG}
     skills = []
-    for s in (d.get("skills") or [])[:MAX_SKILLS]:
+    for s in (d.get("skills") or []):          # ← 不再切片限制数量
         if not isinstance(s, dict):
             continue
         sid = (s.get("id") or "").strip()
         q = (s.get("query") or "").strip()
-        if sid in valid_ids and q:
+        if sid in valid and q:
             skills.append({"id": sid, "query": q, "why": (s.get("why") or "")[:40]})
+
     result = {"skills": skills,
-              "need_fetch": [u for u in (d.get("need_fetch") or []) if isinstance(u, str)][:2],
-              "reason": (d.get("reason") or "")[:80]}
+              "need_fetch": [u for u in (d.get("need_fetch") or [])
+                             if isinstance(u, str) and u.startswith("http")][:3],
+              "reason": (d.get("reason") or "")[:90]}
     _cache_put(question, result)
     return result
 
 
 # ---------------------------------------------------------------------------
-# 阶段②：执行 —— 调技能 / MCP / 本地能力
+# 阶段②：执行
 # ---------------------------------------------------------------------------
 
-_EP = {sid: ep for sid, ep, _ in CATALOG}
+def _fmt_rows(resp: dict, skill_id: str) -> str:
+    """把响应压成适合 LLM 阅读的文本 —— **统一走 context_format**。
 
+    ⚠️ 这里只影响「呈现给模型的文本」，**原始响应结构不被修改** ——
+       遵循网关规范条件六（透明传递）。完整响应可通过 call_skill() 获取。
 
-def _fmt_rows(datas, skill_id: str, limit: int = 4) -> str:
-    """把技能返回的 datas 压成简洁文本（控制上下文长度）。"""
-    if not datas:
-        return ""
-    out = []
-    for d in datas[:limit]:
-        if not isinstance(d, dict):
-            continue
-        if skill_id in ("news-search", "announcement-search", "report-search"):
-            t = d.get("title") or d.get("标题") or ""
-            c = (d.get("content") or d.get("摘要") or "")[:260]
-            if t:
-                out.append("- %s%s" % (t[:70], ("：" + c) if c else ""))
-            continue
-        # 通用：取前 7 个非空字段
-        items = []
-        for k, v in list(d.items())[:9]:
-            if v in (None, "", "-"):
-                continue
-            items.append("%s=%s" % (k, str(v)[:38]))
-        if items:
-            out.append("- " + "，".join(items))
-    return "\n".join(out)
+    与 skill_router 共用同一实现（FIELDS_PER_ROW / ROWS_PER_SKILL 一致），
+    因此「AI 规划路径」与「规则回退路径」喂给模型的数据口径完全相同。
+    """
+    txt = format_response(resp, skill_id, ROWS_PER_SKILL, FIELDS_PER_ROW)
+    if txt:
+        return txt
+    err = (resp or {}).get("_error")
+    return "（无数据%s）" % ("：" + err[:80] if err else "")
 
 
 def _do_fetch(url: str) -> str:
-    """MCP fetch 的等价实现：抓网页正文。"""
+    """MCP fetch 的服务器侧等价实现（抓正文）。"""
     try:
         req = urllib.request.Request(url, headers={
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
                           "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36"})
-        raw = urllib.request.urlopen(req, timeout=20).read()
+        raw = urllib.request.urlopen(req, timeout=25).read()
         for enc in ("utf-8", "gbk"):
             try:
                 html = raw.decode(enc); break
@@ -327,79 +417,221 @@ def _do_fetch(url: str) -> str:
         txt = re.sub(r"<script[\s\S]*?</script>|<style[\s\S]*?</style>", " ", html)
         txt = re.sub(r"<[^>]+>", " ", txt)
         txt = re.sub(r"&nbsp;|&amp;|&quot;|&#\d+;", " ", txt)
-        return re.sub(r"\s+", " ", txt).strip()[:1200]
+        return re.sub(r"\s+", " ", txt).strip()[:2000]
     except Exception:
         return ""
 
 
-def _do_local(kind: str, question: str) -> str:
+def _subprocess_out(args, timeout=60) -> str:
     import subprocess
-    def run(args, t=25):
-        try:
-            r = subprocess.run([sys.executable] + args, capture_output=True, text=True,
-                               timeout=t, cwd=SKILL_DIR, encoding="utf-8", errors="replace")
-            return (r.stdout or r.stderr or "").strip()
-        except Exception:
-            return ""
+    try:
+        r = subprocess.run([sys.executable] + args, capture_output=True, text=True,
+                           timeout=timeout, cwd=SKILL_DIR,
+                           encoding="utf-8", errors="replace")
+        return (r.stdout or r.stderr or "").strip()
+    except Exception:
+        return ""
+
+
+def _do_local(kind: str, arg: str) -> str:
     if kind == "local:levels":
-        return run(["scripts/level_monitor.py", "--list"], 20)[:700]
+        return _subprocess_out(["scripts/level_monitor.py", "--list"], 25)[:1500]
     if kind == "local:kol_opinions":
-        out = run(["scripts/db_query.py", "--kol-name", "wu2198", "--days", "3",
-                   "--latest", "5", "--json"], 25)
+        out = _subprocess_out(["scripts/db_query.py", "--kol-name", "wu2198",
+                               "--days", "3", "--latest", "8", "--json"], 30)
         try:
             recs = json.loads(out)
             if isinstance(recs, list) and recs:
-                return "\n".join("%s %s" % (str(r.get("record_date"))[:16],
-                                            (r.get("content") or "")[:70]) for r in recs[:5])
+                return "\n".join("%s [%s] %s" % (
+                    str(r.get("record_date"))[:16],
+                    "VIP" if r.get("is_vip") else "公开",
+                    (r.get("content") or "")[:90]) for r in recs[:8])
         except Exception:
             pass
         return ""
     if kind == "local:quote_local":
-        out = run(["scripts/bee_client.py", "--query", question[:20],
-                   "--channel", "local", "--json"], 30)
-        return out[:400]
+        return _subprocess_out(["scripts/bee_client.py", "--query", arg[:30],
+                                "--channel", "local", "--json"], 30)[:800]
+    if kind == "local:platform_api":
+        # 本平台已有分析能力（REST 本地）
+        key = service_env("PLATFORM_API_KEYS", "").split(",")[0].strip()
+        try:
+            out = _subprocess_out(["scripts/db_query.py", "--kol-name", "wu2198",
+                                   "--summary"], 30)[:1500]
+            return out
+        except Exception:
+            return ""
+    if kind == "local:elliott_wave":
+        return _elliott_context(arg)
     return ""
 
 
-def execute(plan_: dict, question: str, deadline: float) -> tuple:
-    """执行规划。返回 (上下文文本, 执行明细)。"""
-    parts, detail = [], []
+# ---------------------------------------------------------------------------
+# 艾略特波浪（elliott-index-wave 技能）
+#   该技能是纯标准库实现，自带数据源链（eastmoney → tencent → sina → hithink），
+#   已实测服务器容器内三个公开源均可访问，故可在服务器侧直接调用。
+# ---------------------------------------------------------------------------
 
-    for s in plan_.get("skills", []):
+def _elliott_skill_dir() -> str:
+    """定位 elliott-index-wave 技能目录。
+
+    优先环境变量 ELLIOTT_SKILL_DIR，其次按蜜蜂技能目录约定查找：
+        <...>/skills/kol-opinion-analyzer  →  <...>/skills/elliott-index-wave
+    """
+    import glob
+    env = service_env("ELLIOTT_SKILL_DIR", "") or os.environ.get("ELLIOTT_SKILL_DIR", "")
+    if env and os.path.isdir(env):
+        return env
+    # 与 kol-opinion-analyzer 同级
+    sibling = os.path.join(os.path.dirname(SKILL_DIR), "elliott-index-wave")
+    if os.path.isdir(sibling):
+        return sibling
+    # 兜底：在常见技能根目录下搜
+    for root in (os.path.expanduser("~/.bee/plugins/.my-plugin/skills"),
+                 "/app/skills", "/app",
+                 os.path.join(SKILL_DIR, "vendor")):
+        for p in glob.glob(os.path.join(root, "**", "elliott-index-wave"), recursive=True):
+            if os.path.isdir(os.path.join(p, "scripts")):
+                return p
+    return ""
+
+
+def _pick_index(text: str) -> str:
+    """从问句里识别指数名（未识别到时返回空串，由调用方决定默认值）。"""
+    q = text or ""
+    for idx in ELLIOTT_INDEXES:
+        if idx in q:
+            return idx
+    aliases = {"大盘": "上证指数", "创业板": "创业板指",
+               "科创板": "科创综指", "深成指": "深证成指", "纳指": "纳斯达克"}
+    for alias, canon in aliases.items():
+        if alias in q:
+            return canon
+    return ""
+
+
+def _extract_wave_section(md: str, limit: int = 2600) -> str:
+    """从生成的波浪报告里截取「结论 + 浪级 + 失效位」这几段，避免整篇塞进上下文。"""
+    if not md:
+        return ""
+    keys = ("当前浪", "浪级", "结论", "主浪", "备选", "失效", "invalidation",
+            "支撑", "压力", "置信", "confidence", "wave")
+    lines = md.splitlines()
+    picked, seen = [], 0
+    for i, ln in enumerate(lines):
+        low = ln.lower()
+        if any(k.lower() in low for k in keys):
+            # 连同该标题后面的几行一起收
+            for j in range(i, min(i + 6, len(lines))):
+                if lines[j].strip() and lines[j] not in picked:
+                    picked.append(lines[j])
+            seen += 1
+        if seen >= 12 or len("\n".join(picked)) > limit:
+            break
+    out = "\n".join(picked).strip()
+    return out[:limit] if out else md[:limit]
+
+
+def _elliott_context(question: str) -> str:
+    """调用 elliott-index-wave 生成波浪上下文（失败静默返回空，不影响主流程）。"""
+    sd = _elliott_skill_dir()
+    if not sd:
+        return ""
+    gen = os.path.join(sd, "scripts", "generate_report.py")
+    if not os.path.isfile(gen):
+        return ""
+
+    idx = _pick_index(question) or "上证指数"
+    out_md = os.path.join(SKILL_DIR, "data", "_elliott_ctx_%s.md" % idx)
+    try:
+        # generate_report.py 跑完整链路（取数 → 预筛 → markdown 报告），耗时较长
+        txt = _subprocess_out(
+            [gen, "--index", idx, "--out", out_md], timeout=180)
+    except Exception:
+        return ""
+
+    md = ""
+    if os.path.isfile(out_md):
+        try:
+            with open(out_md, encoding="utf-8") as f:
+                md = f.read()
+        except Exception:
+            md = ""
+    if not md:
+        md = txt or ""
+    return _extract_wave_section(md)
+
+
+def execute(p: dict, question: str, deadline: float, verbose: bool = False,
+            suppress_auto: bool = False) -> tuple:
+    """执行规划。返回 (上下文文本, 执行明细)。
+
+    :param suppress_auto: 多轮补取时置 True，避免每轮重复触发本地自动补充项。
+    """
+    parts, detail = [], []
+    skills = p.get("skills") or []
+
+    for i, s in enumerate(skills):
         if time.time() > deadline:
             detail.append((s["id"], "跳过(超预算)")); continue
-        datas = _call_skill(s["id"], _EP.get(s["id"], "q2d"), s["query"])
-        txt = _fmt_rows(datas, s["id"])
-        if txt:
-            parts.append("【%s】%s\n%s" % (s["id"], s["query"][:40], txt))
-            detail.append((s["id"], "%d 条" % len(datas)))
+        resp = call_skill(s["id"], s["query"])
+        txt = _fmt_rows(resp, s["id"])
+        n = len(_datas(resp))
+        if n:
+            parts.append("【%s】%s\n%s" % (s["id"], s["query"], txt))
+            detail.append((s["id"], "%d 条" % n))
         else:
             detail.append((s["id"], "无数据"))
+        if verbose:
+            print("   [%d/%d] %-28s %s" % (i + 1, len(skills), s["id"],
+                                           detail[-1][1]), file=sys.stderr)
 
-    for url in plan_.get("need_fetch", [])[:2]:
+    for url in p.get("need_fetch") or []:
         if time.time() > deadline:
             break
         txt = _do_fetch(url)
         if txt:
-            parts.append("【网页抓取】%s\n%s" % (url[:60], txt[:800]))
+            parts.append("【网页抓取·mcp:fetch】%s\n%s" % (url[:70], txt[:1500]))
             detail.append(("mcp:fetch", "成功"))
 
-    # 本地能力（AI 未选也补关键位/大V，成本极低且常有用）
+    # 本地能力：模型选了就执行；另外按问题特征自动补充（成本极低且常有用）
+    chosen = {s["id"] for s in skills}
     q = question or ""
-    if any(w in q for w in ("点位", "支撑", "压力", "止损", "关键位")):
-        txt = _do_local("local:levels", q)
-        if txt:
-            parts.append("【关键位】\n" + txt)
-            detail.append(("local:levels", "OK"))
-    if any(w in q for w in ("大V", "wu2198", "老吴", "言论", "观点")):
-        txt = _do_local("local:kol_opinions", q)
-        if txt:
-            parts.append("【大V观点】\n" + txt)
-            detail.append(("local:kol_opinions", "OK"))
+    for lid, _ in LOCAL_CATALOG:
+        if lid in chosen:
+            txt = _do_local(lid, q)
+            if txt:
+                parts.append("【%s】\n%s" % (lid, txt))
+                detail.append((lid, "OK"))
+
+    if not suppress_auto:
+        if any(w in q for w in ("点位", "支撑", "压力", "止损", "关键位", "阻力")) \
+                and "local:levels" not in chosen:
+            txt = _do_local("local:levels", q)
+            if txt:
+                parts.append("【关键位】\n" + txt); detail.append(("local:levels", "自动补充"))
+        if any(w in q for w in ("大V", "wu2198", "老吴", "言论", "观点", "准确率")) \
+                and "local:kol_opinions" not in chosen:
+            txt = _do_local("local:kol_opinions", q)
+            if txt:
+                parts.append("【大V观点】\n" + txt); detail.append(("local:kol_opinions", "自动补充"))
+
+        # 波浪：问句明确提到波浪/浪级时自动补（耗时较长，仅显式相关才跑）
+        if any(w in q for w in ("波浪", "浪型", "第几浪", "几浪", "艾略特", "elliott",
+                                "浪级", "主升浪", "调整浪")) \
+                and "local:elliott_wave" not in chosen:
+            txt = _elliott_context(q)
+            if txt:
+                parts.append("【艾略特波浪】\n" + txt); detail.append(("local:elliott_wave", "自动补充"))
+
+    if "mcp:list_optional_stocks" in chosen:
+        txt = _subprocess_out(["scripts/db_query.py", "--list-kols"], 25)
+        parts.append("【自选/关注标的】\n%s" % (txt or "(空)"))
+        detail.append(("mcp:list_optional_stocks", "OK"))
 
     ctx = "\n\n".join(parts)
     if len(ctx) > MAX_CTX:
-        ctx = ctx[:MAX_CTX] + "\n…（已截断）"
+        ctx = ctx[:MAX_CTX] + "\n…（上下文已截断，原始响应完整保留）"
     return ctx, detail
 
 
@@ -407,21 +639,115 @@ def execute(plan_: dict, question: str, deadline: float) -> tuple:
 # 对外主入口
 # ---------------------------------------------------------------------------
 
+#: 多轮补取：最多轮数（与原生「可反复追问数据」对齐，但保留安全阀）
+CONTEXT_MAX_ROUNDS = int(os.environ.get("CONTEXT_MAX_ROUNDS", "3"))
+#: 多轮补取：每轮最多追加技能数
+CONTEXT_EXTRA_PER_ROUND = int(os.environ.get("CONTEXT_EXTRA_PER_ROUND", "4"))
+
+
+def _ask_next_queries(question: str, collected: str, used_ids: set) -> list:
+    """把已取到的数据交回模型，问它「还缺什么」→ 返回追加技能清单。
+
+    这是对齐「蜜蜂原生提问可多轮追加取数」的关键：原生 Agent 是边推理边取数、
+    发现缺口就再查一次；此前服务器实现是单轮 plan 后冻结上下文，
+    一旦首轮没覆盖到就只能靠模型记忆作答。本函数补上这一环。
+    """
+    try:
+        from llm_client import chat, is_configured
+    except Exception:
+        return []
+    if not is_configured():
+        return []
+
+    used = "、".join(sorted(used_ids)) or "（无）"
+    prompt = (
+        "%s\n\n"
+        "【本轮用户问题】\n%s\n\n"
+        "【已取到的数据（节选）】\n%s\n\n"
+        "【已调用过的数据源】\n%s\n\n"
+        "请判断：**上面的数据是否已足够完整回答该问题**。\n"
+        "· 若已足够 → 只输出 {\"done\":true}\n"
+        "· 若还缺关键数据 → 输出 {\"done\":false,\"skills\":["
+        "{\"id\":\"技能ID\",\"query\":\"可直接检索的自然语言问句\",\"why\":\"缺什么\"}]}\n"
+        "要求：最多 %d 个；只能从上面的目录里选 ID；不要重复已调用过的数据源；"
+        "只输出 JSON。"
+        % (_catalog_text(), question, (collected or "")[:6000], used,
+           CONTEXT_EXTRA_PER_ROUND)
+    )
+    try:
+        out = chat(prompt, system=PLANNER_SYSTEM, purpose="plan", timeout=90, retries=1)
+    except Exception:
+        return []
+
+    m = re.search(r"\{[\s\S]*\}", out or "")
+    if not m:
+        return []
+    try:
+        d = json.loads(m.group(0))
+    except Exception:
+        return []
+    if d.get("done"):
+        return []
+
+    valid = {c[0] for c in CATALOG}
+    out_skills = []
+    for s in (d.get("skills") or [])[:CONTEXT_EXTRA_PER_ROUND]:
+        if not isinstance(s, dict):
+            continue
+        sid = (s.get("id") or "").strip()
+        q = (s.get("query") or "").strip()
+        # 只收新增的、目录内合法的技能
+        if sid in valid and q and sid not in used_ids:
+            out_skills.append({"id": sid, "query": q, "why": (s.get("why") or "")[:40]})
+    return out_skills
+
+
 def build_context(question: str, verbose: bool = False) -> str:
-    """AI 自主规划 → 执行 → 返回结构化上下文。"""
+    """AI 自主规划 → 执行 → （多轮）追加补取 → 返回结构化上下文。
+
+    技能数量不限；轮数由 CONTEXT_MAX_ROUNDS 控制（默认 3），总时长由
+    TOTAL_BUDGET（默认 600s）兜底。任一环节失败都只是少一块数据，不阻断回答。
+    """
     q = (question or "").strip()
     if not q:
         return ""
     deadline = time.time() + TOTAL_BUDGET
     p = plan(q)
     if verbose:
-        print("[规划] %s" % p.get("reason"), file=sys.stderr)
-        for s in p.get("skills", []):
-            print("   · %s ← %s" % (s["id"], s["query"]), file=sys.stderr)
-    ctx, detail = execute(p, q, deadline)
+        print("[规划] %s（%d 个技能）" % (p.get("reason"), len(p.get("skills") or [])),
+              file=sys.stderr)
+        for s in p.get("skills") or []:
+            print("   · %-28s ← %s" % (s["id"], s["query"][:60]), file=sys.stderr)
+
+    ctx, detail = execute(p, q, deadline, verbose)
+
+    # ---- 多轮追加补取：把已有数据交回模型，问它还缺什么 ----
+    used_ids = {s["id"] for s in (p.get("skills") or [])}
+    for rnd in range(1, CONTEXT_MAX_ROUNDS):
+        if time.time() > deadline:
+            break
+        extra = _ask_next_queries(q, ctx, used_ids)
+        if not extra:
+            if verbose:
+                print("[补取] 第%d轮：模型判断已足够" % rnd, file=sys.stderr)
+            break
+        if verbose:
+            print("[补取] 第%d轮：追加 %d 个技能" % (rnd, len(extra)), file=sys.stderr)
+            for s in extra:
+                print("   + %-28s ← %s" % (s["id"], s["query"][:60]), file=sys.stderr)
+
+        new_ctx, new_detail = execute({"skills": extra}, q, deadline,
+                                      verbose, suppress_auto=True)
+        if not new_ctx:
+            break                       # 追加的都没取到，再问也会重复，直接停
+        ctx = ctx + "\n\n" + new_ctx
+        detail += new_detail
+        used_ids |= {s["id"] for s in extra}
+
     if verbose:
-        for name, st in detail:
-            print("[执行] %-28s %s" % (name, st), file=sys.stderr)
+        print("[执行汇总] 成功 %d / 共 %d"
+              % (sum(1 for _, st in detail if st not in ("无数据",) and "跳过" not in st),
+                 len(detail)), file=sys.stderr)
     return ctx
 
 
@@ -438,11 +764,12 @@ def main() -> int:
         t0 = time.time()
         p = plan(args.question)
         print("问题：%s" % args.question)
-        print("AI 规划（%.1fs）：%s" % (time.time() - t0, p.get("reason")))
-        for s in p.get("skills", []):
-            print("  · %-28s query=%s" % (s["id"], s["query"][:52]))
-        if p.get("need_fetch"):
-            print("  · 抓取：%s" % p["need_fetch"])
+        print("AI 规划（%.1fs，%d 个技能）：%s"
+              % (time.time() - t0, len(p.get("skills") or []), p.get("reason")))
+        for s in p.get("skills") or []:
+            print("  · %-28s query=%s" % (s["id"], s["query"][:58]))
+        for u in p.get("need_fetch") or []:
+            print("  · 抓取：%s" % u[:70])
         return 0
 
     t0 = time.time()
