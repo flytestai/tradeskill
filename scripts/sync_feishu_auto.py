@@ -730,29 +730,39 @@ def ensure_schema(conn):
                        capture_output=True, timeout=60)
 
 
+_OWN_LOCK_TS = None  # 本进程写入锁的时间戳，用于释放时校验归属
+
+
 def _acquire_loop_lock():
     """原子获取循环锁，防止多个 --loop 进程同时轮询；返回 True 表示获得锁。"""
+    global _OWN_LOCK_TS
+    ts = str(time.time())
     try:
         fd = os.open(LOOP_LOCK_FILE, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-        os.write(fd, str(time.time()).encode())
+        os.write(fd, ts.encode())
         os.close(fd)
+        _OWN_LOCK_TS = ts
         return True
     except FileExistsError:
+        last = 0.0
         try:
             with open(LOOP_LOCK_FILE, "r") as f:
                 last = float(f.read().strip() or "0")
-            if time.time() - last < LOOP_STALE_SEC:
-                return False
         except Exception:
-            pass
+            last = 0.0
+        # 空/零/读不到 → 视为「他人正在创建或持有」，绝不接管。
+        # （锁文件创建瞬间是空的，若把 0 当过期就会多进程同时抢到 → 重复推送）
+        if last <= 0 or time.time() - last < LOOP_STALE_SEC:
+            return False
         try:
             os.remove(LOOP_LOCK_FILE)
         except Exception:
             return False
         try:
             fd = os.open(LOOP_LOCK_FILE, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-            os.write(fd, str(time.time()).encode())
+            os.write(fd, ts.encode())
             os.close(fd)
+            _OWN_LOCK_TS = ts
             return True
         except FileExistsError:
             return False
@@ -761,19 +771,35 @@ def _acquire_loop_lock():
 
 
 def _touch_loop_lock():
+    """刷新锁心跳。
+
+    Windows 上 O_EXCL 持有的是独占句柄，Python 的 open(...,"w") 打不开它，
+    会导致心跳静默失败、锁被误判过期，多个循环同时接管 → 重复推送。
+    必须走底层 os.open(O_TRUNC) 直接写同一个文件。
+    """
+    global _OWN_LOCK_TS
+    ts = str(time.time())
     try:
-        with open(LOOP_LOCK_FILE, "w") as f:
-            f.write(str(time.time()))
+        fd = os.open(LOOP_LOCK_FILE, os.O_WRONLY | os.O_CREAT | os.O_TRUNC)
+        os.write(fd, ts.encode())
+        os.close(fd)
+        _OWN_LOCK_TS = ts
     except Exception:
         pass
 
 
 def _release_loop_lock():
+    """只删除仍属于本进程的锁，避免误删后来接管者的锁。"""
     try:
-        if os.path.exists(LOOP_LOCK_FILE):
-            os.remove(LOOP_LOCK_FILE)
+        with open(LOOP_LOCK_FILE, "r") as f:
+            raw = f.read().strip()
     except Exception:
-        pass
+        return
+    if _OWN_LOCK_TS is not None and raw == _OWN_LOCK_TS:
+        try:
+            os.remove(LOOP_LOCK_FILE)
+        except Exception:
+            pass
 
 
 def run_loop(args):
