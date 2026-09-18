@@ -198,6 +198,29 @@ def check_auth(lark_cli):
             alert_feishu("授权过期", "🚨 **【授权告警】**\nlark-cli 授权将在 %d 天后过期(%s)，请提前重新扫码授权" % (days, expires[:10]))
         else:
             print("[AUTH] 授权正常，%s 到期" % expires[:10])
+
+        # 长假期专项预警：若「下一个交易日的等待天数」超过 refresh token 剩余有效期，
+        # 节后首次调用必然鉴权失败。提前提醒，避免假期结束后才发现同步已断。
+        # （正常情况下 auth_keepalive 会每天顺延窗口，本条仅在保活异常时触发。）
+        try:
+            from common import load_holidays as _lh
+            _hols = _lh(SKILL_DIR)
+            gap = 0
+            for _ in range(20):
+                gap += 1
+                probe = now8 + timedelta(days=gap)
+                # 逐日探测：工作日且非节假日即为下一个交易日
+                if probe.weekday() < 5 and probe.strftime("%Y-%m-%d") not in _hols:
+                    break
+            if gap >= 3 and days < gap + 1:
+                print("[AUTH] ⚠️ 未来 %d 天内无交易日，而授权仅剩 %d 天，节后可能失效" % (gap, days))
+                alert_feishu("假期授权风险",
+                             "🚨 **【假期授权风险】**\n未来 **%d 天**内无交易日，但 lark-cli 授权仅剩 **%d 天**。\n"
+                             "节后首次同步可能因 refresh token 过期而失败，"
+                             "请检查 `auth_keepalive` 是否正常运行，或提前执行 `lark-cli auth login`。"
+                             % (gap, days))
+        except Exception:
+            pass
     except Exception:
         pass
 

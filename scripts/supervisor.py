@@ -99,10 +99,20 @@ LOOPS = [
 ]
 
 # (名称, 间隔秒, 脚本参数, 是否仅在交易时间运行)
+#
+# ⚠️ auth_keepalive 必须放这里（而非 DAILY_AT），且 trading_only=False：
+#    DAILY_AT 受 is_trading_day() 门控，**节假日与周末完全不跑**，
+#    而飞书 OAuth refresh token 是 7 天滑动窗口（= 最近一次成功刷新 + 7 天），
+#    盘中轮询 sync_feishu 同样只在交易日 9:00-16:00 跑。
+#    若长假期间无人调用用户身份 API，节后首个交易日就会因窗口过期而鉴权失效
+#    （实测：9/30 16:00 最后一次刷新 → 10/7 16:00 过期 → 10/8 09:00 首次调用已过期）。
+#    本任务 6 小时触发一次，脚本内部按「距上次刷新 ≥20h」判定，
+#    实际每天真正刷新一次，把窗口持续顺延，与交易日/节假日无关。
 PERIODIC = [
     ("position_monitor", 300, ["scripts/position_monitor.py", "--notify"], True),
     ("monitor_alerts", 600, ["scripts/monitor_alerts.py"], True),
     ("react_cleanup", 300, ["scripts/react.py", "cleanup"], False),
+    ("auth_keepalive", 6 * 3600, ["scripts/auth_keepalive.py"], False),
 ]
 
 # 每日定点任务：(名称, [(时, 分), ...], 脚本参数)
