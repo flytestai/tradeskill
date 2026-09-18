@@ -10,6 +10,12 @@
 用法:
   python sync_qa_auto.py            # 前台长连接，消费事件并入队
   python sync_qa_auto.py --dry-run  # 只打印，不入队
+
+注意（历史故障）:
+  lark-cli 的 `event consume` 把 stdin EOF 当作退出信号（"stdin closed — shutting down"）。
+  早期版本这里用 stdin=DEVNULL 启动，导致消费者 0 秒即退出、被 supervisor 无限重启，
+  日志里只剩反复的“统一问答监听已启动”，任何 @机器人 / 私信都收不到。
+  现在统一用 stdin=PIPE 并保持打开，进程可长期驻留；另有空闲看门狗兜底重启。
 """
 import argparse
 import json
@@ -19,6 +25,7 @@ import shlex
 import shutil
 import subprocess
 import sys
+import threading
 import time
 from datetime import datetime, timezone, timedelta
 
@@ -133,47 +140,89 @@ def handle_event(obj, dry_run=False):
         print("[QA] %s 已入队 %s: %s" % (chat_type, item["sender_id"], text[:40]))
 
 
+def _reader(proc, idle_seconds, stop_evt):
+    """前台读取事件；超过 idle_seconds 没收到任何输出（也含心跳）则判定假死，杀掉以便重连。"""
+    try:
+        for line in proc.stdout:
+            idle_seconds["t"] = time.time()
+            line = line.strip()
+            if not line.startswith("{"):
+                continue
+            try:
+                obj = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            try:
+                handle_event(obj, idle_seconds.get("dry_run", False))
+            except Exception as e:
+                print("[QA] 处理事件异常: %s" % str(e)[:200], file=sys.stderr)
+    except Exception as e:
+        print("[QA] 读取异常: %s" % str(e)[:200], file=sys.stderr)
+    finally:
+        stop_evt.set()
+
+
 def consume(dry_run=False):
     lark = _posix_path(find_lark_cli())
     backoff = 5
+    idle_timeout = 1800.0  # 30 分钟无任何输出视为连接假死，主动重连
     while True:
         proc = None
         try:
             # Windows 不能直接 Popen npm 的 .cmd/无扩展脚本；统一经 Git Bash 启动，
             # 否则会反复出现 WinError 193，进程看似存活但实际上收不到事件。
+            #
+            # 关键：lark-cli event consume 把 stdin EOF 当退出信号，必须给一个保持打开的管道，
+            # 绝不能再用 DEVNULL，否则秒退并陷入「启动-退出-重启」死循环，收不到任何消息。
             cli_cmd = " ".join(shlex.quote(x) for x in [lark, "event", "consume", "im.message.receive_v1", "--as", "bot"])
             proc = subprocess.Popen(
                 [BASH, "-c", "exec " + cli_cmd],
-                stdin=subprocess.DEVNULL,
+                stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 text=True,
                 bufsize=1,
                 encoding="utf-8",
+                errors="replace",
                 creationflags=NO_WINDOW,
             )
             print("[QA] 统一问答监听已启动（群聊@机器人 + 私信）")
             backoff = 5
-            for line in proc.stdout:
-                line = line.strip()
-                if not line.startswith("{"):
-                    continue
+            state = {"t": time.time(), "dry_run": dry_run}
+            stop_evt = threading.Event()
+            th = threading.Thread(target=_reader, args=(proc, state, stop_evt), daemon=True)
+            th.start()
+            last_start = time.time()
+            while not stop_evt.is_set():
+                time.sleep(1)
+                if proc.poll() is not None:
+                    break
+                if time.time() - state["t"] > idle_timeout:
+                    print("[QA] 监听空闲超过 %.0f 分钟，主动重连" % (idle_timeout / 60), file=sys.stderr)
+                    break
+            if proc.poll() is None:
                 try:
-                    obj = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-                try:
-                    handle_event(obj, dry_run=dry_run)
-                except Exception as e:
-                    print("[QA] 处理事件异常: %s" % str(e)[:200], file=sys.stderr)
+                    proc.terminate()
+                    proc.wait(timeout=10)
+                except Exception:
+                    try:
+                        proc.kill()
+                    except Exception:
+                        pass
+            stop_evt.set()
+            if time.time() - last_start < 60:
+                # 秒退（典型原因：stdin EOF / 鉴权失效）——打印一次便于排查
+                print("[QA] 监听连接仅存活 %.0f 秒即退出，5 秒后重连" % (time.time() - last_start), file=sys.stderr)
         except Exception as e:
             print("[QA] 消费异常: %s" % str(e)[:200], file=sys.stderr)
         finally:
-            if proc is not None and proc.stdout is not None:
-                try:
-                    proc.stdout.close()
-                except Exception:
-                    pass
+            if proc is not None:
+                for s in (proc.stdin, proc.stdout):
+                    try:
+                        if s is not None:
+                            s.close()
+                    except Exception:
+                        pass
         time.sleep(backoff)
         backoff = min(backoff * 2, 60)
 
