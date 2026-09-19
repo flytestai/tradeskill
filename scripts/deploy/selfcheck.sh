@@ -61,9 +61,14 @@ problems=""
 _add() { problems="${problems}${problems:+, }$1"; }
 
 # ---- 1. 容器 ---------------------------------------------------------------
-for c in kolplatform-rest kolplatform-mcp; do
-    st="$(docker inspect "$c" --format '{{.State.Status}}' 2>/dev/null || echo missing)"
-    [ "$st" = "running" ] || _add "$c=$st"
+# 2026-09-20 适配变更：kol 平台从「Docker 容器」改为「systemd 服务」
+#   旧架构：docker run 两个容器（kolplatform-rest / kolplatform-mcp），REST 在 8020
+#   新架构：systemd 托管 kol-platform（REST 8020）+ trade365（8000）+ nginx/docker/cron
+#   检查方式随之由 `docker inspect` 改为 `systemctl is-active`。
+#   （新服务器基于 Ubuntu 22.04，kol 平台跑在 systemd 下，见服务器重建报告）
+for svc in kol-platform nginx docker cron; do
+    st="$(systemctl is-active "$svc" 2>/dev/null)"
+    [ "$st" = "active" ] || _add "$svc=$st"
 done
 
 # ---------------------------------------------------------------------------
