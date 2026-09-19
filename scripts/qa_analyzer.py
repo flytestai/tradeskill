@@ -55,7 +55,7 @@ LOG = os.path.join(SKILL_DIR, "data", "_qa_analyzer.log")
 
 def log(msg: str) -> None:
     import datetime
-    line = "[%s] %s" % (datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"), msg)
+    line = "[%s] %s" % (_bj_now().strftime("%Y-%m-%d %H:%M:%S"), msg)
     try:
         os.makedirs(os.path.dirname(LOG), exist_ok=True)
         with open(LOG, "a", encoding="utf-8") as f:

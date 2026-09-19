@@ -18,6 +18,14 @@ import argparse
 import json
 from datetime import datetime
 
+try:
+    from common import beijing_now as _bj_now
+except Exception:
+    def _bj_now():
+        from datetime import datetime, timezone, timedelta
+        return datetime.now(timezone(timedelta(hours=8)))
+
+
 from records_hash import content_hash
 import common  # noqa: F401  触发静默运行补丁
 
@@ -39,7 +47,10 @@ def save_record(db_path: str, kol_name: str, platform: str,
         return {'error': f'Database not found: {db_path}. Run db_init.py first.'}
 
     if not record_date:
-        record_date = datetime.now().strftime('%Y-%m-%d %H:%M')
+        # ⚠️ 必须用北京时间：宿主机时区实测为 US/Eastern（UTC-4），
+        #    裸 datetime.now() 会比东八区晚 12 小时，导致早晨入库的言论
+        #    被标成前一天。
+        record_date = _bj_now().strftime('%Y-%m-%d %H:%M')
 
     # Basic viewpoint extraction - look for keywords
     viewpoints = extract_viewpoints(content)

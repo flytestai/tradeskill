@@ -114,7 +114,13 @@ def levels_age_days():
     d = levels_asof()
     if d is None:
         return -1.0
-    return (datetime.datetime.now() - d).total_seconds() / 86400.0
+    # 用北京时间，与 levels_asof 的日期口径一致
+    try:
+        from common import beijing_now as _bj
+        _now = _bj().replace(tzinfo=None)
+    except Exception:
+        _now = datetime.datetime.now()
+    return (_now - d).total_seconds() / 86400.0
 
 
 def levels_staleness_note():

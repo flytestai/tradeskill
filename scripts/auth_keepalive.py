@@ -80,7 +80,7 @@ BASH = shutil.which("bash") or "bash"
 
 
 def log(msg: str, echo: bool = True) -> None:
-    line = "[%s] %s" % (datetime.now().strftime("%Y-%m-%d %H:%M:%S"), msg)
+    line = "[%s] %s" % (_bj_now().strftime("%Y-%m-%d %H:%M:%S"), msg)
     try:
         os.makedirs(os.path.dirname(LOG_FILE), exist_ok=True)
         with open(LOG_FILE, "a", encoding="utf-8") as f:

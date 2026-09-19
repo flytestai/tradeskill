@@ -61,7 +61,7 @@ CORE_MODULES = [
 
 
 def check_imports():
-    print("\n[1/6] 模块导入")
+    print("\n[1/7] 模块导入")
     bad = []
     for m in CORE_MODULES:
         if not os.path.isfile(os.path.join(SCRIPTS, m + ".py")):
@@ -82,7 +82,7 @@ def check_imports():
 # ---------------------------------------------------------------------------
 
 def check_contract():
-    print("\n[2/6] 接口契约")
+    print("\n[2/7] 接口契约")
     try:
         cf = importlib.import_module("context_format")
         sa = importlib.import_module("skill_agent")
@@ -146,7 +146,7 @@ def check_contract():
 # ---------------------------------------------------------------------------
 
 def check_format_consistency():
-    print("\n[3/6] 格式化口径一致性")
+    print("\n[3/7] 格式化口径一致性")
     try:
         sa = importlib.import_module("skill_agent")
         sr = importlib.import_module("skill_router")
@@ -189,7 +189,7 @@ def check_format_consistency():
 # ---------------------------------------------------------------------------
 
 def check_config():
-    print("\n[4/6] 配置读取")
+    print("\n[4/7] 配置读取")
     try:
         cf = importlib.import_module("context_format")
     except Exception as e:
@@ -218,7 +218,7 @@ def check_config():
 # ---------------------------------------------------------------------------
 
 def check_live():
-    print("\n[5/6] 真实取数（联网）")
+    print("\n[5/7] 真实取数（联网）")
     try:
         sa = importlib.import_module("skill_agent")
         sr = importlib.import_module("skill_router")
@@ -266,7 +266,7 @@ def check_state_files():
       · 水位文件被截断 → 返回空 → 机器人**重新拉取全部历史并重复回复**
       · 去重文件被截断 → 返回 {} → **重复回复所有历史问题**
     """
-    print("\n[6/6] 状态文件安全性")
+    print("\n[6/7] 状态文件安全性")
     try:
         sj = importlib.import_module("safe_json")
     except Exception as e:
@@ -317,6 +317,113 @@ def check_state_files():
             _ok("%s 已用原子读写" % f)
 
 
+def check_send_channel():
+    """群回复的唯一出口必须健壮，且幂等键要真正生效。
+
+    实测踩过的两个坑（都会让「发不出消息」变成难查的问题）：
+      1. common.send_card 在 `from feishu_client import ...` 失败时，
+         except 子句引用了未绑定的名字 → UnboundLocalError，
+         把可诊断的「通道不可用」变成看不懂的崩溃。
+      2. 幂等键只在 lark-cli 回退通道传，而容器内 lark-cli 不可用、
+         永远走纯 Python 通道 → **生产环境幂等保护实际失效**。
+    """
+    print("\n[7/7] 发送通道")
+    import re as _re
+    import os as _os
+
+    # 1) send_card 必须预先初始化错误变量（防 UnboundLocalError）
+    try:
+        p = _os.path.join(SCRIPTS, "common.py")
+        src = open(p, encoding="utf-8").read()
+    except Exception as e:
+        _bad("无法读取 common.py", str(e)[:100])
+        return
+
+    # ⚠️ 用「行范围」而非正则抽取函数体：send_card 可能是文件最后一个函数，
+    #    此时 `.*?\ndef ` 匹配不到 → body 为空 → 检查全部误报失败。
+    lines = src.split("\n")
+    start = None
+    for i, l in enumerate(lines):
+        if l.startswith("def send_card("):
+            start = i
+            break
+    if start is None:
+        _bad("common.py 中未找到 send_card")
+        return
+    end = start + 1
+    while end < len(lines) and not (lines[end].startswith("def ") or
+                                    lines[end].startswith("class ")):
+        end += 1
+    body = "\n".join(lines[start:end])
+
+    # 只看真实的 try/except 语句（行首缩进 + 关键字），忽略注释里出现的字样
+    first_try = first_exc = -1
+    for i, l in enumerate(body.split("\n")):
+        s = l.strip()
+        if s.startswith("#"):
+            continue
+        if s.startswith("try:") and first_try < 0:
+            first_try = i
+        if s.startswith("except") and first_exc < 0:
+            first_exc = i
+    init_line = -1
+    for i, l in enumerate(body.split("\n")):
+        if l.strip().startswith("_py_err = ") and not l.strip().startswith("#"):
+            init_line = i
+            break
+    if first_try >= 0 and 0 <= init_line < first_try:
+        _ok("send_card 预先初始化 _py_err（防 UnboundLocalError）")
+    else:
+        _bad("send_card 未预先初始化 _py_err",
+             "init@%d try@%d except@%d" % (init_line, first_try, first_exc))
+
+    # FeishuError 不能在 try 内 import 后直接在 except 用
+    if "_FeishuError = None" in body:
+        _ok("FeishuError 引用安全")
+    else:
+        _bad("FeishuError 仍在 try 内绑定后被 except 引用")
+
+    # 2) 幂等键必须传到纯 Python 通道
+    if "uuid=idem_key" in body:
+        _ok("幂等键已透传到 Python 通道")
+    else:
+        _bad("幂等键未传到 Python 通道", "容器内幂等保护失效")
+
+    try:
+        fc = _os.path.join(SCRIPTS, "feishu_client.py")
+        fsrc = open(fc, encoding="utf-8").read()
+        if 'uuid: str = ""' in fsrc and "&uuid=" in fsrc:
+            _ok("feishu_client.send 支持 uuid 参数")
+        else:
+            _bad("feishu_client.send 缺少 uuid 支持")
+    except Exception as e:
+        _bad("无法读取 feishu_client.py", str(e)[:80])
+
+    # 3) 实跑一次发送路径（不真发）：验证 ImportError 场景不崩
+    try:
+        import importlib as _il
+        import sys as _sys
+        saved = _sys.modules.get("feishu_client")
+        _sys.modules["feishu_client"] = None          # 制造 import 失败
+        cm = _il.import_module("common")
+        _il.reload(cm)
+        try:
+            cm.send_card("自检", chat_id="oc_selftest")
+            _ok("import 失败时 send_card 不崩（降级返回）")
+        except UnboundLocalError:
+            _bad("send_card 在 import 失败时仍 UnboundLocalError")
+        except Exception:
+            _ok("import 失败时 send_card 不崩（其他异常，非 UnboundLocalError）")
+        finally:
+            if saved is not None:
+                _sys.modules["feishu_client"] = saved
+            else:
+                _sys.modules.pop("feishu_client", None)
+            _il.reload(cm)
+    except Exception as e:
+        _bad("发送通道实跑检查失败", str(e)[:100])
+
+
 def main():
     ap = argparse.ArgumentParser(description="部署前自检")
     ap.add_argument("--quick", action="store_true", help="跳过联网取数")
@@ -331,8 +438,9 @@ def main():
     check_format_consistency()
     check_config()
     check_state_files()
+    check_send_channel()
     if args.quick:
-        print("\n[5/6] 真实取数 —— 已跳过（--quick）")
+        print("\n[5/7] 真实取数 —— 已跳过（--quick）")
     else:
         check_live()
 

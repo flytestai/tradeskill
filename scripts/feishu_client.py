@@ -146,19 +146,30 @@ def _post(path: str, payload: dict, timeout: int = 25) -> dict:
 
 
 def send(receive_id: str, content: str, msg_type: str = "text",
-         receive_id_type: str = "chat_id") -> dict:
+         receive_id_type: str = "chat_id", uuid: str = "") -> dict:
     """发送消息。
 
     :param receive_id:      群 chat_id 或用户 open_id
     :param content:         text 类型传纯文本；post 类型传富文本 JSON 字符串
     :param msg_type:        text / post / interactive
     :param receive_id_type: chat_id / open_id / user_id / email
+    :param uuid:            幂等键。同一 uuid 重复请求，飞书只会发一条。
+
+    ⚠️ 为什么需要 uuid（实测踩坑）
+      幂等保护此前**只在 lark-cli 回退通道生效**（`--idempotency-key`），
+      而容器内 lark-cli 不可用、永远走本函数这个纯 Python 通道 ——
+      等于**生产环境的幂等保护实际是失效的**。
+      群回复因超时重试/多进程并发时，会重复发同一条回答。
+      飞书 IM 接口原生支持 uuid 查询参数（已实测接受），故在此补上。
     """
     if not receive_id:
         raise FeishuError("缺少接收方 ID")
     payload = {"receive_id": receive_id, "msg_type": msg_type,
                "content": content}
     path = "/open-apis/im/v1/messages?receive_id_type=%s" % receive_id_type
+    if uuid:
+        # 飞书要求 uuid 为 1-50 字符；调用方已做截断
+        path += "&uuid=%s" % uuid[:50]
     d = _post(path, payload)
     if d.get("code") != 0:
         raise FeishuError("发送失败: code=%s msg=%s" % (d.get("code"), d.get("msg")))
