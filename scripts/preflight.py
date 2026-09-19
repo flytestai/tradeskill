@@ -1193,6 +1193,23 @@ def check_mcp_tools():
         else:
             _ok("MCP 工具真实调用通过 — %d/%d" % (passed, passed))
 
+        # 3b) 线程可用性 —— 2026-09-19 全量故障的根因就在这一项。
+        #     mcp SDK 用 anyio.to_thread.run_sync 执行**同步** tool，
+        #     而目标容器**无法创建线程** → 每个同步 tool 抛
+        #     RuntimeError("can't start new thread")，且被 SDK 脱敏成
+        #     `Error executing tool <name>`，完全不可见。
+        #     这里在 MCP 进程外复现同一条路径，命中即说明根因仍在。
+        try:
+            import sys as _sysmod
+            _t = __import__("threading").Thread(target=lambda: None)
+            _t.start(); _t.join(timeout=5)
+            _ok("线程可用 — 同步 tool 的执行路径正常")
+        except Exception as _te:
+            _bad("无法创建线程（同步 tool 将全部失败）",
+                 "%s: %s — anyio.to_thread.run_sync 会抛同款异常，"
+                 "需 api/mcp_server._patch_inline_threads 生效"
+                 % (type(_te).__name__, _te))
+
         # 4) 鉴权：无 Key 时端点等于完全开放（写接口暴露），必须报失败。
         #    Key 由 `.env` 提供（_load_env_files 已加载），故服务器上可判定；
         #    本机裸跑 preflight 时未配置属正常，只提示不判失败。
