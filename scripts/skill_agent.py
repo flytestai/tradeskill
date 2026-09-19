@@ -396,6 +396,12 @@ def plan(question: str) -> dict:
         out = chat(prompt, system=PLANNER_SYSTEM, purpose="plan",
                    timeout=PLAN_TIMEOUT, retries=1)
     except Exception as e:
+        # ⚠️ 规划失败要**可见**：最常见原因是 Kimi 组织级 3 RPM 限流，
+        #    表现为连续多个问题都返回 0 个技能（静默降级成规则路由）。
+        try:
+            sys.stderr.write("[plan] 规划失败（将回落规则路由）: %s\n" % str(e)[:150])
+        except Exception:
+            pass
         return {"skills": [], "need_fetch": [], "reason": "规划失败: %s" % str(e)[:120]}
 
     m = re.search(r"\{[\s\S]*\}", out or "")
@@ -412,13 +418,17 @@ def plan(question: str) -> dict:
     #    「以本地艾略特波浪分析能力为核心」，但返回的技能里没有任何 local:*，
     #    模型想用却用不了。现修正为三类并集。
     valid = ALL_CAPABILITIES
-    skills = []
+    skills, seen_ids = [], set()
     for s in (d.get("skills") or []):          # ← 不再切片限制数量
         if not isinstance(s, dict):
             continue
         sid = (s.get("id") or "").strip()
         q = (s.get("query") or "").strip()
-        if sid in valid and q:
+        # ⚠️ 必须去重：实测模型会把同一个技能列两次（如 news-search ×2、
+        #    macro-query ×2），导致同一数据源被抓两遍 —— 既浪费耗时，
+        #    又让「这个技能取到几份数据」变得不可预期。同一技能只保留首条。
+        if sid in valid and q and sid not in seen_ids:
+            seen_ids.add(sid)
             skills.append({"id": sid, "query": q, "why": (s.get("why") or "")[:40]})
 
     result = {"skills": skills,
@@ -794,14 +804,15 @@ def _ask_next_queries(question: str, collected: str, used_ids: set) -> list:
         return []
 
     valid = ALL_CAPABILITIES
-    out_skills = []
+    out_skills, _seen2 = [], set()
     for s in (d.get("skills") or [])[:CONTEXT_EXTRA_PER_ROUND]:
         if not isinstance(s, dict):
             continue
         sid = (s.get("id") or "").strip()
         q = (s.get("query") or "").strip()
         # 只收新增的、目录内合法的技能
-        if sid in valid and q and sid not in used_ids:
+        if sid in valid and q and sid not in used_ids and sid not in _seen2:
+            _seen2.add(sid)
             out_skills.append({"id": sid, "query": q, "why": (s.get("why") or "")[:40]})
     return out_skills
 
