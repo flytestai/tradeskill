@@ -12,6 +12,7 @@
 #
 # 用法（在服务器上，仓库根目录执行）
 #   bash scripts/deploy/deploy_mcp_fix.sh            # 全流程
+#   bash scripts/deploy/deploy_mcp_fix.sh --update   # 先安全更新代码，再全流程
 #   bash scripts/deploy/deploy_mcp_fix.sh --no-build # 跳过构建（只重启+验证）
 # ============================================================================
 set -uo pipefail
@@ -23,7 +24,13 @@ SKILL_DIR="${SKILL_DIR:-/opt/kol-skills-platform}"
 ENV_RUNTIME="${ENV_RUNTIME:-$SKILL_DIR/.env.runtime}"
 
 BUILD=1
-[ "${1:-}" = "--no-build" ] && BUILD=0
+UPDATE=0
+for a in "$@"; do
+    case "$a" in
+        --no-build) BUILD=0 ;;
+        --update)   UPDATE=1 ;;
+    esac
+done
 
 say()  { printf '\n\033[1m== %s ==\033[0m\n' "$*"; }
 warn() { printf '\033[33m⚠️  %s\033[0m\n' "$*"; }
@@ -64,9 +71,52 @@ asyncio.run(main())
 }
 
 # ---------------------------------------------------------------------------
+# 安全更新：只按「本次修复涉及的文件清单」从远端取文件，**不做 git pull**
+#
+# 为什么不用 git pull（项目自己的教训）
+#   push_sync.sh 的注释写得很清楚：服务器工作区有大量**未跟踪的部署特有文件**
+#   （vendor/、data 链接、.env 等），`git pull` 可能冲突或覆盖，
+#   进而影响正在运行的服务。故这里改为逐文件 `git checkout <remote> -- <path>`，
+#   只动这几个文件，风险最小、可预期。
+# ---------------------------------------------------------------------------
+update_files() {
+    say "0b. 安全更新代码（逐文件取远端版本，不做 git pull）"
+    local REF="${DEPLOY_REF:-origin/main}"
+    local files="scripts/api/mcp_server.py
+scripts/api/services.py
+scripts/api/auth.py
+scripts/preflight.py
+scripts/deploy/deploy_mcp_fix.sh
+scripts/deploy/nginx-skill.conf
+scripts/deploy/install.sh
+scripts/deploy/requirements-mcp.txt"
+
+    git fetch origin main --quiet 2>/dev/null || warn "git fetch 失败（离线？将用本地已有的 origin/main）"
+
+    local backup="/root/kol-mcp-fix-backup-$(date +%Y%m%d-%H%M%S)"
+    mkdir -p "$backup" || die "无法创建备份目录 $backup"
+    echo "  备份到: $backup（回滚：cp -a $backup/. $SKILL_DIR/）"
+    for f in $files; do
+        if [ -f "$f" ]; then
+            mkdir -p "$backup/$(dirname "$f")"
+            cp -a "$f" "$backup/$f"
+        fi
+    done
+
+    local fail=""
+    for f in $files; do
+        git checkout "$REF" -- "$f" 2>/dev/null || fail="$fail $f"
+    done
+    [ -z "$fail" ] || warn "以下文件未取到（继续，稍后前置校验会拦住）：$fail"
+    echo "  ✅ 已更新 $files 中的文件"
+}
+
+# ---------------------------------------------------------------------------
 say "0. 前置检查"
 [ -d "$SKILL_DIR" ] || die "找不到 $SKILL_DIR（用 SKILL_DIR=... 指定）"
 cd "$SKILL_DIR" || die "无法进入 $SKILL_DIR"
+
+[ "$UPDATE" = "1" ] && update_files
 
 if [ ! -f "$ENV_RUNTIME" ]; then
     warn "未找到 $ENV_RUNTIME —— 将改用 $SKILL_DIR/.env"
@@ -78,12 +128,14 @@ echo "  环境: $ENV_RUNTIME"
 
 # 关键：确认待部署代码里确实有本次修复
 grep -q "_guard" scripts/api/mcp_server.py \
-    || die "scripts/api/mcp_server.py 里没有 _guard —— 代码不是最新，请先 git pull"
+    || die "scripts/api/mcp_server.py 里没有 _guard —— 代码不是最新，请加 --update 或手动更新"
 grep -q "def selfcheck" scripts/api/services.py \
-    || die "scripts/api/services.py 里没有 selfcheck —— 代码不是最新，请先 git pull"
+    || die "scripts/api/services.py 里没有 selfcheck —— 代码不是最新，请加 --update"
 grep -q "RequireAuthMiddleware" scripts/api/mcp_server.py \
-    || die "缺少 RequireAuthMiddleware —— 代码不是最新，请先 git pull"
-echo "  ✅ 待部署代码含本次修复（_guard / selfcheck / RequireAuthMiddleware）"
+    || die "缺少 RequireAuthMiddleware —— 代码不是最新，请加 --update"
+grep -q "_patch_inline_threads" scripts/api/mcp_server.py \
+    || die "缺少线程修复 _patch_inline_threads —— 代码不是最新，请加 --update"
+echo "  ✅ 待部署代码含本次修复（_guard / selfcheck / RequireAuthMiddleware / 线程自救）"
 
 # 鉴权键是否就绪
 if grep -q '^PLATFORM_API_KEYS=.\+' "$ENV_RUNTIME"; then
