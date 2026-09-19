@@ -78,7 +78,7 @@ except Exception:
 try:
     from context_format import (
         format_response, format_datas, skill_version, simplify_query,
-        cfg as _cfg, cfg_int as _cfg_int,
+        cfg as _cfg, cfg_int as _cfg_int, read_text, write_text,
         FIELDS_PER_ROW, ROWS_PER_SKILL, SUMMARY_MAX,
     )
 except Exception:                                   # 极端情况下退化为内置实现
@@ -86,6 +86,18 @@ except Exception:                                   # 极端情况下退化为�
     def format_response(resp, skill_id="", rows=None, fields=None): return ""
     def format_datas(datas, skill_id="", rows=None, fields=None): return ""
     def simplify_query(q, max_len=16): return ""
+    def read_text(_p, _d=""):
+        try:
+            return open(_p, encoding="utf-8").read()
+        except Exception:
+            return _d
+    def write_text(_p, _t):
+        try:
+            os.makedirs(os.path.dirname(_p), exist_ok=True)
+            open(_p, "w", encoding="utf-8").write(_t)
+            return True
+        except Exception:
+            return False
     def _cfg(_k, d=""): return service_env(_k, d)
     def _cfg_int(_k, d):
         try: return int(_cfg(_k, str(d)) or d)
@@ -575,8 +587,7 @@ def _elliott_context(question: str) -> str:
     if ELLIOTT_CACHE_TTL > 0 and os.path.isfile(cache_txt):
         try:
             if time.time() - os.path.getmtime(cache_txt) < ELLIOTT_CACHE_TTL:
-                with open(cache_txt, encoding="utf-8") as f:
-                    cached = f.read().strip()
+                cached = read_text(cache_txt).strip()
                 if cached:
                     return cached
         except Exception:
@@ -602,12 +613,8 @@ def _elliott_context(question: str) -> str:
 
     # 落缓存（只缓存非空结果，避免把一次失败固化 6 小时）
     if result:
-        try:
-            os.makedirs(os.path.dirname(cache_txt), exist_ok=True)
-            with open(cache_txt, "w", encoding="utf-8") as f:
-                f.write(result)
-        except Exception:
-            pass
+        # 原子写：缓存由子进程写、主进程读，非原子写会读到半截内容
+        write_text(cache_txt, result)
     return result
 
 

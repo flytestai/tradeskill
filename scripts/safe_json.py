@@ -127,3 +127,45 @@ def append_json_list(path: str, item, key: str = None, limit: int = 0) -> bool:
     if limit and len(items) > limit:
         items = items[-limit:]
     return write_json(path, items)
+
+
+def read_text(path: str, default: str = "") -> str:
+    """读取纯文本（不存在/不可读时返回 default）。"""
+    try:
+        with open(path, encoding="utf-8") as f:
+            return f.read()
+    except Exception:
+        return default
+
+
+def write_text(path: str, text: str) -> bool:
+    """**原子**写入纯文本（临时文件 → os.replace）。
+
+    与 write_json 同理：避免读取方读到写了一半的内容。
+    实测场景：elliott 波浪缓存由 skill 子进程写入、由主进程读取，
+    非原子写会出现「读到半截文本」并当成有效缓存返回。
+    """
+    d = os.path.dirname(os.path.abspath(path))
+    try:
+        os.makedirs(d, exist_ok=True)
+    except Exception:
+        pass
+    tmp = None
+    try:
+        fd, tmp = tempfile.mkstemp(dir=d, prefix=".tmp_", suffix=".txt")
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(text)
+            f.flush()
+            try:
+                os.fsync(f.fileno())
+            except Exception:
+                pass
+        os.replace(tmp, path)
+        return True
+    except Exception:
+        if tmp:
+            try:
+                os.remove(tmp)
+            except Exception:
+                pass
+        return False
