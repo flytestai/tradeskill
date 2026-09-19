@@ -56,12 +56,13 @@ CORE_MODULES = [
     "feishu_client", "db_query", "db_save", "db_sync", "db_init",
     "price_alerts", "market_summary", "monitor_alerts", "level_monitor",
     "position_monitor", "predict_track", "kol_compare", "backtest",
+    "level_refresh", "qa_oneshot",
     "sync_litchi_auto", "sync_qa_auto", "sync_feishu_auto", "auth_keepalive",
 ]
 
 
 def check_imports():
-    print("\n[1/10] 模块导入")
+    print("\n[1/11] 模块导入")
     bad = []
     for m in CORE_MODULES:
         if not os.path.isfile(os.path.join(SCRIPTS, m + ".py")):
@@ -82,7 +83,7 @@ def check_imports():
 # ---------------------------------------------------------------------------
 
 def check_contract():
-    print("\n[2/10] 接口契约")
+    print("\n[2/11] 接口契约")
     try:
         cf = importlib.import_module("context_format")
         sa = importlib.import_module("skill_agent")
@@ -146,7 +147,7 @@ def check_contract():
 # ---------------------------------------------------------------------------
 
 def check_format_consistency():
-    print("\n[3/10] 格式化口径一致性")
+    print("\n[3/11] 格式化口径一致性")
     try:
         sa = importlib.import_module("skill_agent")
         sr = importlib.import_module("skill_router")
@@ -189,7 +190,7 @@ def check_format_consistency():
 # ---------------------------------------------------------------------------
 
 def check_config():
-    print("\n[4/10] 配置读取")
+    print("\n[4/11] 配置读取")
     try:
         cf = importlib.import_module("context_format")
     except Exception as e:
@@ -218,7 +219,7 @@ def check_config():
 # ---------------------------------------------------------------------------
 
 def check_live():
-    print("\n[5/10] 真实取数（联网）")
+    print("\n[5/11] 真实取数（联网）")
     try:
         sa = importlib.import_module("skill_agent")
         sr = importlib.import_module("skill_router")
@@ -266,7 +267,7 @@ def check_state_files():
       · 水位文件被截断 → 返回空 → 机器人**重新拉取全部历史并重复回复**
       · 去重文件被截断 → 返回 {} → **重复回复所有历史问题**
     """
-    print("\n[6/10] 状态文件安全性")
+    print("\n[6/11] 状态文件安全性")
     try:
         sj = importlib.import_module("safe_json")
     except Exception as e:
@@ -327,7 +328,7 @@ def check_send_channel():
       2. 幂等键只在 lark-cli 回退通道传，而容器内 lark-cli 不可用、
          永远走纯 Python 通道 → **生产环境幂等保护实际失效**。
     """
-    print("\n[7/10] 发送通道")
+    print("\n[7/11] 发送通道")
     import re as _re
     import os as _os
 
@@ -434,7 +435,7 @@ def check_http_errors():
       · 每个 404 都打印完整 traceback，日志被扫描流量刷满，
         真实故障的堆栈反而被淹没
     """
-    print("\n[8/10] HTTP 错误语义")
+    print("\n[8/11] HTTP 错误语义")
     import os as _os
 
     p = _os.path.join(SCRIPTS, "api", "rest_app.py")
@@ -496,7 +497,7 @@ def check_timeout_budget():
     而每层自己都「没超时」，排查时极难定位。
     故此处断言各常量之间存在正确的大小关系。
     """
-    print("\n[9/10] 超时预算有界性")
+    print("\n[9/11] 超时预算有界性")
     # ⚠️ services 位于 scripts/api/ 包内，而 preflight 在 scripts/ 下运行，
     #    sys.path 里没有 scripts/ —— 需要显式补上，否则 ModuleNotFoundError
     #    （实测：宿主机自检因此误报失败，并正确拦下了部署）。
@@ -565,7 +566,7 @@ def check_group_isolation():
     本检查断言：标题随目标群自适应（荔枝群/复盘群/未知群各不相同），
     且 send_to_group 支持显式主题覆盖。
     """
-    print("\n[10/10] 群隔离")
+    print("\n[10/11] 群隔离")
     import os as _os
     try:
         gr = importlib.import_module("group_reply")
@@ -612,6 +613,132 @@ def check_group_isolation():
         _ok("无硬编码群标题")
 
 
+def check_levels():
+    """关键位自动刷新的**配置完整性**（防「刷新成功但 0 点位」这类静默失效）。
+
+    ⚠️ 为什么需要（实测踩坑）
+      本项为此而生：`level_refresh.py` 第一版把 elliott 的 key 名写错了
+      （写成 wave4_up / c_confirm_below，实际是 wave4_invalidation_up /
+      C_confirm_below / C_reject_above），结果脚本**日志显示"已刷新"、
+      实际写入 0 个点位** —— 关键位悄悄变空，而没有任何报错。
+
+      另有两个同类坑：
+        · assess_wave.py 从 **stdin** 读 payload；用 --in 只会得到
+          {"error": ...}，同样表现为"无点位"
+        · 刷新日期若用服务器本地时区（US/Eastern），会比北京日期差一天，
+          陈旧度判断随之失真
+
+      故这里逐项断言「容易漂移的配置点」，而不是只看脚本能否跑通。
+    """
+    print("\n[11/11] 关键位刷新配置")
+
+    p = os.path.join(SCRIPTS, "level_refresh.py")
+    if not os.path.isfile(p):
+        _bad("未找到 level_refresh.py")
+        return
+    try:
+        with open(p, encoding="utf-8") as _f:
+            src = _f.read()
+    except Exception as e:
+        _bad("无法读取 level_refresh.py", str(e)[:100])
+        return
+
+    # 1) elliott 的 key 名必须与实测一致（写错会静默产出 0 点位）
+    #
+    # ⚠️ 必须先**剥离注释**再检查（本检查的第一版就栽在这）：
+    #    我在 level_refresh 的注释里也写了正确的 key 名作为说明，
+    #    导致「把代码里的 key 改回错误版」时，检查仍从注释里匹配到 → 误判通过。
+    #    改代码不改注释、或反之，都会让静态检查失去意义。
+    _code = "\n".join(l for l in src.split("\n")
+                      if not l.lstrip().startswith("#"))
+    need_keys = ("wave4_invalidation_up", "C_confirm_below", "C_reject_above")
+    missing = [k for k in need_keys if k not in _code]
+    if missing:
+        _bad("level_refresh 缺少实测 key 名（代码中，非注释）", ", ".join(missing))
+    else:
+        _ok("elliott key 名与实测一致（代码中）", "3 项映射键")
+
+    # 2) assess_wave 必须走 stdin（用 --in 会得到 error 结构）
+    if '"--in"' in _code or "'--in'" in _code:
+        _bad("level_refresh 仍用 --in 调 assess_wave",
+             "应改为 stdin（否则只会得到 error 结构、产出 0 点位）")
+    else:
+        _ok("assess_wave 走 stdin 调用")
+
+    # 3) 日期必须用北京时间
+    if "_today()" in src and "beijing_now" in src:
+        _ok("刷新日期使用北京时间")
+    else:
+        _bad("刷新日期未用北京时间", "服务器为 US/Eastern，会差约 12 小时")
+
+    # 4) 写入必须走 safe_json（原子写）
+    if "write_json" in src and "read_json" in src:
+        _ok("关键位写入使用原子写")
+    else:
+        _bad("关键位未使用 safe_json 原子写")
+
+    # 5) 现有关键位文件必须有数据、且不是空值
+    try:
+        import importlib as _il
+        lr = _il.import_module("level_refresh")
+        from safe_json import read_json as _rj
+        lv = _rj(lr.LEVELS_FILE, default={})
+        if not isinstance(lv, dict) or not lv:
+            _bad("关键位文件为空", "需先跑一次 level_refresh.py")
+        else:
+            empty = [k for k, v in lv.items() if not v]
+            total = sum(len(v) for v in lv.values() if isinstance(v, list))
+            if empty:
+                _bad("部分指数无点位", ", ".join(empty))
+            elif total == 0:
+                _bad("关键位总数为 0", "刷新静默失效")
+            else:
+                _ok("关键位已有数据", "%d 个指数 / %d 个点位" % (len(lv), total))
+    except Exception as e:
+        _bad("关键位数据检查失败", str(e)[:100])
+
+    # 6) 陈旧度：超过 7 天说明自动刷新没在跑
+    try:
+        import importlib as _il
+        lr = _il.import_module("level_refresh")
+        import datetime as _dt
+        asof = ""
+        try:
+            asof = open(lr.ASOF_FILE, encoding="utf-8").read().strip()
+        except Exception:
+            pass
+        if asof:
+            try:
+                d = _dt.datetime.strptime(asof[:10], "%Y-%m-%d")
+                today = lr._today()
+                days = (_dt.datetime.strptime(today, "%Y-%m-%d") - d).days
+                if days > 7:
+                    _bad("关键位已过期 %d 天" % days,
+                         "自动刷新可能未执行（cron 交易日 08:30）")
+                else:
+                    _ok("关键位数据新鲜", "%s（%d 天前）" % (asof[:10], days))
+            except Exception as e:
+                _bad("陈旧度解析失败", str(e)[:80])
+        else:
+            _bad("缺少数据日期文件", "level_asof.txt 不存在")
+    except Exception as e:
+        _bad("陈旧度检查失败", str(e)[:100])
+
+    # 7) 定时刷新是否已注册（有 cron 才算真正自动化）
+    try:
+        import subprocess as _sp
+        r = _sp.run(["crontab", "-l"], capture_output=True, text=True, timeout=15)
+        cron = (r.stdout or "")
+        if "level_refresh" in cron or "_run_level_refresh" in cron:
+            _ok("已注册定时刷新")
+        else:
+            _bad("未注册关键位定时刷新",
+                 "建议 cron 交易日 08:30 调 _run_level_refresh.sh")
+    except Exception:
+        # 无 crontab 命令（如 Windows 本地）→ 跳过而非报错
+        _ok("定时刷新检查 —— 已跳过（本环境无 crontab）")
+
+
 def main():
     ap = argparse.ArgumentParser(description="部署前自检")
     ap.add_argument("--quick", action="store_true", help="跳过联网取数")
@@ -630,8 +757,9 @@ def main():
     check_http_errors()
     check_timeout_budget()
     check_group_isolation()
+    check_levels()
     if args.quick:
-        print("\n[5/10] 真实取数 —— 已跳过（--quick）")
+        print("\n[5/11] 真实取数 —— 已跳过（--quick）")
     else:
         check_live()
 
