@@ -61,7 +61,7 @@ CORE_MODULES = [
 
 
 def check_imports():
-    print("\n[1/8] 模块导入")
+    print("\n[1/9] 模块导入")
     bad = []
     for m in CORE_MODULES:
         if not os.path.isfile(os.path.join(SCRIPTS, m + ".py")):
@@ -82,7 +82,7 @@ def check_imports():
 # ---------------------------------------------------------------------------
 
 def check_contract():
-    print("\n[2/8] 接口契约")
+    print("\n[2/9] 接口契约")
     try:
         cf = importlib.import_module("context_format")
         sa = importlib.import_module("skill_agent")
@@ -146,7 +146,7 @@ def check_contract():
 # ---------------------------------------------------------------------------
 
 def check_format_consistency():
-    print("\n[3/8] 格式化口径一致性")
+    print("\n[3/9] 格式化口径一致性")
     try:
         sa = importlib.import_module("skill_agent")
         sr = importlib.import_module("skill_router")
@@ -189,7 +189,7 @@ def check_format_consistency():
 # ---------------------------------------------------------------------------
 
 def check_config():
-    print("\n[4/8] 配置读取")
+    print("\n[4/9] 配置读取")
     try:
         cf = importlib.import_module("context_format")
     except Exception as e:
@@ -218,7 +218,7 @@ def check_config():
 # ---------------------------------------------------------------------------
 
 def check_live():
-    print("\n[5/8] 真实取数（联网）")
+    print("\n[5/9] 真实取数（联网）")
     try:
         sa = importlib.import_module("skill_agent")
         sr = importlib.import_module("skill_router")
@@ -266,7 +266,7 @@ def check_state_files():
       · 水位文件被截断 → 返回空 → 机器人**重新拉取全部历史并重复回复**
       · 去重文件被截断 → 返回 {} → **重复回复所有历史问题**
     """
-    print("\n[6/8] 状态文件安全性")
+    print("\n[6/9] 状态文件安全性")
     try:
         sj = importlib.import_module("safe_json")
     except Exception as e:
@@ -327,7 +327,7 @@ def check_send_channel():
       2. 幂等键只在 lark-cli 回退通道传，而容器内 lark-cli 不可用、
          永远走纯 Python 通道 → **生产环境幂等保护实际失效**。
     """
-    print("\n[7/8] 发送通道")
+    print("\n[7/9] 发送通道")
     import re as _re
     import os as _os
 
@@ -434,7 +434,7 @@ def check_http_errors():
       · 每个 404 都打印完整 traceback，日志被扫描流量刷满，
         真实故障的堆栈反而被淹没
     """
-    print("\n[8/8] HTTP 错误语义")
+    print("\n[8/9] HTTP 错误语义")
     import os as _os
 
     p = _os.path.join(SCRIPTS, "api", "rest_app.py")
@@ -482,6 +482,73 @@ def check_http_errors():
         _bad("HTTP 状态实跑检查失败", "%s: %s" % (type(e).__name__, str(e)[:90]))
 
 
+def check_timeout_budget():
+    """各阶段超时必须**有界**，且叠加后不超过上层限制。
+
+    实测踩坑（本项为此而生）：各阶段超时是独立的，叠加会突破上层：
+      · nginx            180s
+      · Flask 脚本超时   120s（PLATFORM_SCRIPT_TIMEOUT）
+      · llm_ask 整体     125s（LLM_ASK_BUDGET）
+      · 上下文构建        55s（AI_ENHANCE_BUDGET）
+      · 单次规划          30s（PLAN_TIMEOUT）
+      · Kimi 生成        120s（LLM_TIMEOUT）
+    若「上下文构建 + 生成」可同时跑满，就会超 180s → nginx 返回 504，
+    而每层自己都「没超时」，排查时极难定位。
+    故此处断言各常量之间存在正确的大小关系。
+    """
+    print("\n[9/9] 超时预算有界性")
+    try:
+        sa = importlib.import_module("skill_agent")
+        qa = importlib.import_module("qa_analyzer")
+        sv = importlib.import_module("services")
+    except Exception as e:
+        _bad("无法加载模块", str(e)[:120])
+        return
+
+    nginx = 180
+    flask_t = 120
+    ask = getattr(sv, "LLM_ASK_BUDGET", None)
+    enh = getattr(qa, "AI_ENHANCE_BUDGET", None)
+    plan = getattr(sa, "PLAN_TIMEOUT", None)
+
+    if ask is None or enh is None or plan is None:
+        _bad("超时常量缺失", "ask=%s enh=%s plan=%s" % (ask, enh, plan))
+        return
+
+    if plan < enh:
+        _ok("规划超时 < 上下文预算", "%ds < %ds" % (plan, enh))
+    else:
+        _bad("规划超时 >= 上下文预算", "%ds vs %ds —— 规划可能吃满预算" % (plan, enh))
+
+    # 关键：整体预算必须留出下层的余量（ask 覆盖 enh + 部分生成时间）
+    if ask < nginx:
+        _ok("llm_ask 整体预算 < nginx 超时", "%ds < %ds" % (ask, nginx))
+    else:
+        _bad("llm_ask 预算 >= nginx 超时", "%ds vs %ds —— 会 504" % (ask, nginx))
+
+    if enh < ask:
+        _ok("上下文预算 < llm_ask 整体", "%ds < %ds" % (enh, ask))
+    else:
+        _bad("上下文预算 >= llm_ask 整体", "%ds vs %ds" % (enh, ask))
+
+    if flask_t <= nginx:
+        _ok("Flask 脚本超时 <= nginx", "%ds <= %ds" % (flask_t, nginx))
+    else:
+        _bad("Flask 脚本超时 > nginx", "%ds vs %ds" % (flask_t, nginx))
+
+    # 生成阶段必须被动态收紧（不能固定 120s 与取数并行叠加）
+    try:
+        src = open(os.path.join(SCRIPTS, "api", "services.py"), encoding="utf-8").read()
+        if "LLM_ASK_BUDGET - (_time.time() - _t0)" in src.replace(" ", " "):
+            _ok("生成长度按剩余时间动态收紧")
+        elif "left = int(LLM_ASK_BUDGET" in src:
+            _ok("生成长度按剩余时间动态收紧")
+        else:
+            _bad("生成阶段未动态收紧", "取数+生成可能叠加超 180s")
+    except Exception as e:
+        _bad("无法校验动态收紧", str(e)[:80])
+
+
 def main():
     ap = argparse.ArgumentParser(description="部署前自检")
     ap.add_argument("--quick", action="store_true", help="跳过联网取数")
@@ -498,8 +565,9 @@ def main():
     check_state_files()
     check_send_channel()
     check_http_errors()
+    check_timeout_budget()
     if args.quick:
-        print("\n[5/8] 真实取数 —— 已跳过（--quick）")
+        print("\n[5/9] 真实取数 —— 已跳过（--quick）")
     else:
         check_live()
 

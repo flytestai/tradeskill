@@ -271,13 +271,32 @@ def llm_status() -> dict:
             "base_url": base_url(), "model": model(), "max_tokens": max_tokens()}
 
 
+#: llm_ask 的整体墙钟预算（秒）。
+#
+# ⚠️ 为什么需要（结构性风险）
+#   各阶段超时是**独立**的，叠加起来会突破上层限制：
+#       Kimi 生成   LLM_TIMEOUT = 120s
+#       上下文构建  AI_ENHANCE_BUDGET = 55s
+#       ───────────────────────────────
+#       理论最坏 175s，再加读文件/序列化开销 → 逼近甚至超过 nginx 的 180s。
+#   一旦超过，nginx 返回 504，用户看到「没数据」，而各阶段自己都「没超时」。
+#   故设整体上限 125s，并让生成阶段按「剩余时间」动态收紧。
+LLM_ASK_BUDGET = int(os.environ.get("QA_ASK_BUDGET", "125"))
+
+
 def llm_ask(question: str, context: str = "", auto_context: bool = True) -> dict:
     """调用 Kimi 回答问题。
 
     :param auto_context: 为 True（默认）且未显式提供 context 时，
         自动按问题内容取平台数据（行情/关键位/大V言论）注入，
         避免模型因缺少实时数据而拒答或用过时知识回答。
+
+    整体耗时受 LLM_ASK_BUDGET 约束：先取数、再按剩余时间生成，
+    保证「取数 + 生成」之和不超过上层超时（否则会 504）。
     """
+    import time as _time
+    _t0 = _time.time()
+
     if not question or not question.strip():
         raise ServiceError("缺少 question")
 
@@ -292,8 +311,14 @@ def llm_ask(question: str, context: str = "", auto_context: bool = True) -> dict
         from llm_client import analyze_question, LLMError
     except Exception as e:
         raise ServiceError("llm_client 不可用: %s" % e)
+
+    # 生成超时 = 总预算 − 已用；不足 20s 则直接放弃生成（避免必然超时）
+    left = int(LLM_ASK_BUDGET - (_time.time() - _t0))
+    if left < 20:
+        raise ServiceError("取数阶段耗时过长（%.0fs），已无足够时间生成回答"
+                           % (_time.time() - _t0))
     try:
-        return {"text": analyze_question(question.strip(), ctx),
+        return {"text": analyze_question(question.strip(), ctx, timeout=left),
                 "context_used": bool(ctx),
                 "context_len": len(ctx)}
     except LLMError as e:
