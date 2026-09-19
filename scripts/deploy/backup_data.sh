@@ -31,6 +31,8 @@ set -uo pipefail
 
 KOL_DIR="/opt/kol-skills-platform"
 T365_DIR="/opt/trade365"
+# trade365 飞书机器人 + supervisor（与后端分开部署，见 2026-09-19 第十一轮）
+T365_BOT_DIR="/opt/trade365-bot"
 BACKUP_ROOT="/opt/kol-backups"
 KEEP_DAYS=7
 
@@ -115,6 +117,32 @@ with dst:
 dst.close(); src.close()
 " 2>/dev/null || { echo "  [WARN] db 备份失败"; fail=1; }
 fi
+
+# ---- 运行中的代码（2026-09-19 第十一轮补充）--------------------------------
+#
+# ⚠️ 为什么必须备份代码（此前完全遗漏）
+#   备份一直只覆盖"数据"，**不含任何代码**。而这两处代码此前还**没有版本管理**：
+#     · /opt/trade365       trade365 后端（宿主直接运行，非容器）
+#     · /opt/trade365-bot   飞书机器人 + supervisor（宿主运行）
+#   即：数据有备份、代码却没有 —— 机器损坏时，数据能恢复但**代码无处可寻**。
+#
+#   （2026-09-19 已为这两处建立 git 关联，git 是主要保障；
+#     此处再加一层本地快照，覆盖"git 也没同步出去"的窗口期。）
+#
+#   只存源码，排除运行态与缓存，保持快照精简。
+for pair in "$T365_DIR:trade365-code" "$T365_BOT_DIR:trade365-bot-code"; do
+    src="${pair%%:*}"; name="${pair##*:}"
+    [ -d "$src" ] || continue
+    mkdir -p "$DEST/$name"
+    tar czf "$DEST/$name/src.tar.gz" \
+        --exclude='data' --exclude='__pycache__' --exclude='*.pyc' \
+        --exclude='*.bak*' --exclude='.git' --exclude='*.log' \
+        -C "$(dirname "$src")" "$(basename "$src")" 2>/dev/null || true
+    if [ -f "$DEST/$name/src.tar.gz" ]; then
+        n=$(tar tzf "$DEST/$name/src.tar.gz" 2>/dev/null | grep -c '\.py$\|\.sh$\|\.js$\|\.html$\|\.css$')
+        echo "  代码快照: $name（$n 个源文件）"
+    fi
+done
 
 # ---- trade365 关键数据 ------------------------------------------------------
 for f in meetings.json review.json watchlist.json holdings.json \
