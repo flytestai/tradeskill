@@ -10,6 +10,15 @@
 import sqlite3, os, argparse
 from datetime import datetime
 
+# 北京时间（日志时间戳与 cron 的 TZ=Asia/Shanghai 对齐）
+try:
+    from common import beijing_now as _bj_now
+except Exception:
+    def _bj_now():
+        from datetime import datetime, timezone, timedelta
+        return datetime.now(timezone(timedelta(hours=8)))
+
+
 SKILL_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DB_PATH = os.path.join(SKILL_DIR, "data", "kol_opinions.db")
 
