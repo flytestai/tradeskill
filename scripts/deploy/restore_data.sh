@@ -46,7 +46,7 @@ done
 if [ "$MODE" = "list" ]; then
     echo "=== 可用快照（$BACKUP_ROOT）==="
     [ -d "$BACKUP_ROOT" ] || { echo "  (无)"; exit 0; }
-    for d in $(ls -1d "$BACKUP_ROOT"/*/ 2>/dev/null | sort -r); do
+    for d in $(ls -1d "$BACKUP_ROOT"/*/ 2>/dev/null | grep -v '/_pre-restore' | sort -r); do
         n=$(find "$d" -type f | wc -l)
         printf "  %-14s %2d 个文件  %s\n" "$(basename "$d")" "$n" "$(du -sh "$d" | cut -f1)"
     done
@@ -55,7 +55,7 @@ fi
 
 # ---- 选定快照 ---------------------------------------------------------------
 if [ -z "$SNAP_DATE" ]; then
-    SNAP_DATE="$(ls -1d "$BACKUP_ROOT"/*/ 2>/dev/null | sort | tail -1 | xargs -r basename)"
+    SNAP_DATE="$(ls -1d "$BACKUP_ROOT"/*/ 2>/dev/null | grep -v '/_pre-restore' | sort | tail -1 | xargs -r basename)"
 fi
 SNAP="$BACKUP_ROOT/$SNAP_DATE"
 if [ -z "$SNAP_DATE" ] || [ ! -d "$SNAP" ]; then
