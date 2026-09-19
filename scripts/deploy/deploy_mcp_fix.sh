@@ -30,6 +30,40 @@ warn() { printf '\033[33m⚠️  %s\033[0m\n' "$*"; }
 die()  { printf '\033[31m❌ %s\033[0m\n' "$*"; exit 1; }
 
 # ---------------------------------------------------------------------------
+# 只读根因探针 —— **可在未修复的旧容器上直接跑**，用来确证根因
+#
+# 确证结论（本地已复现，逐字一致）：宿主容器无法创建线程，而 mcp SDK 用
+#   anyio.to_thread.run_sync(...) 执行**同步** tool
+# → 每个同步 tool 抛 RuntimeError("can't start new thread")
+# → 被 SDK 的裸 except Exception 吞成 `Error executing tool <name>`
+# ---------------------------------------------------------------------------
+probe_threads() {
+    local cname="$1"
+    say "只读根因探针：容器能否创建线程（$cname）"
+    docker exec "$cname" python -c "
+import threading
+try:
+    t = threading.Thread(target=lambda: None); t.start(); t.join(timeout=5)
+    print('  ✅ 线程可用')
+except Exception as e:
+    print('  🔴 无法创建线程:', type(e).__name__, e)
+" 2>&1 | sed 's/^/  /' || warn "探针执行失败（容器名或权限问题）"
+
+    echo "  --- 同步 tool 的执行路径实测（anyio.to_thread.run_sync）---"
+    docker exec "$cname" python -c "
+import asyncio, anyio.to_thread
+async def main():
+    try:
+        r = await anyio.to_thread.run_sync(lambda: 'ok')
+        print('  ✅ run_sync 正常返回:', r)
+    except Exception as e:
+        print('  🔴 run_sync 失败:', type(e).__name__, str(e)[:80])
+        print('     → 这会让**每一个同步 MCP tool** 报 Error executing tool <name>')
+asyncio.run(main())
+" 2>&1 | sed 's/^/  /' || true
+}
+
+# ---------------------------------------------------------------------------
 say "0. 前置检查"
 [ -d "$SKILL_DIR" ] || die "找不到 $SKILL_DIR（用 SKILL_DIR=... 指定）"
 cd "$SKILL_DIR" || die "无法进入 $SKILL_DIR"
@@ -80,6 +114,8 @@ try:
     import api.mcp_server as m
     assert hasattr(m,'_guard'), '_guard 缺失'
     assert hasattr(m,'RequireAuthMiddleware'), 'RequireAuthMiddleware 缺失'
+    assert hasattr(m,'_threads_available'), '_threads_available 缺失（线程修复未带上）'
+    assert hasattr(m,'_patch_inline_threads'), '_patch_inline_threads 缺失（线程修复未带上）'
 except Exception as e:
     print('  ❌ 镜像内 mcp_server 校验失败:', type(e).__name__, e); ok=False
 try:
@@ -94,8 +130,24 @@ sys.exit(0 if ok else 1)
 " || die "镜像内不含本次修复 —— 检查 .dockerignore / build context"
 echo "  ✅ 镜像内代码正确"
 
+# 镜像内直接探测线程能力（构建环境与运行环境可能不同，但先看一眼）
+say "2b. 镜像内线程能力探测"
+docker run --rm --entrypoint python "$MCP_IMAGE" -c "
+import threading
+try:
+    t=threading.Thread(target=lambda:None); t.start(); t.join(timeout=5); print('  ✅ 线程可用')
+except Exception as e: print('  🔴 无法创建线程:', type(e).__name__, e)
+"
+
 # ---------------------------------------------------------------------------
 say "3. 重启 MCP 容器"
+# 重启前先对**旧容器**跑只读根因探针（确证根因，且不改动任何东西）
+if docker ps --filter "name=^${MCP_NAME}$" -q | grep -q .; then
+    probe_threads "$MCP_NAME"
+else
+    echo "  （旧容器未运行，跳过旧容器探针）"
+fi
+
 docker rm -f "$MCP_NAME" >/dev/null 2>&1 || true
 docker run -d \
     --name "$MCP_NAME" \
@@ -121,7 +173,11 @@ docker ps --filter "name=$MCP_NAME" -q | grep -q . || {
 
 # 启动自检输出（本次新增，用来一眼看出"缺什么"）
 say "4. 读取启动自检输出"
-docker logs --tail=30 "$MCP_NAME" 2>&1 | grep -E "\[mcp\]" | sed 's/^/  /' || true
+docker logs --tail=40 "$MCP_NAME" 2>&1 | grep -E "\[mcp\]" | sed 's/^/  /' || true
+# 线程路径必须明确打印；若显示"无法创建线程"，说明补丁已生效（这是预期）
+docker logs --tail=40 "$MCP_NAME" 2>&1 | grep -q "\[mcp\]\[threads\]" \
+    && echo "  ✅ 线程路径已在启动日志中明确（不再静默）" \
+    || warn "启动日志里没有线程路径打印 —— 镜像可能不是最新"
 
 # ---------------------------------------------------------------------------
 say "5. ★ 真实调用验证（关键步骤 —— 只测握手曾漏掉全量故障）"
