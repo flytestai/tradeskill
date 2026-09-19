@@ -78,12 +78,12 @@ except Exception:
 try:
     from context_format import (
         format_response, format_datas, skill_version, simplify_query,
-        cfg as _cfg, cfg_int as _cfg_int, read_text, write_text,
+        cfg as _cfg, cfg_int as _cfg_int,
         FIELDS_PER_ROW, ROWS_PER_SKILL, SUMMARY_MAX,
     )
 except Exception:                                   # 极端情况下退化为内置实现
     def skill_version(_sid): return "1.0.0"
-    def format_response(resp, skill_id="", rows=None, fields=None): return ""
+    def format_response(resp, skill_id="", rows=None, fields=None, budget=None): return ""
     def format_datas(datas, skill_id="", rows=None, fields=None): return ""
     def simplify_query(q, max_len=16): return ""
     def read_text(_p, _d=""):
@@ -103,6 +103,28 @@ except Exception:                                   # 极端情况下退化为�
         try: return int(_cfg(_k, str(d)) or d)
         except Exception: return d
     FIELDS_PER_ROW, ROWS_PER_SKILL, SUMMARY_MAX = 14, 6, 400
+
+# ⚠️ 文本原子读写来自 safe_json（不是 context_format）—— 实测踩坑：
+#    上轮把它们挂到 context_format 的 import 上，导致整个导入失败、
+#    静默退化为 4 参数的 format_response stub，调用方传 5 参即 TypeError。
+#    故拆成独立 try，且退化实现保留完整签名。
+try:
+    from safe_json import read_text, write_text
+except Exception:
+    def read_text(_p, _d=""):
+        try:
+            return open(_p, encoding="utf-8").read()
+        except Exception:
+            return _d
+
+    def write_text(_p, _t):
+        try:
+            os.makedirs(os.path.dirname(_p), exist_ok=True)
+            with open(_p, "w", encoding="utf-8") as _f:
+                _f.write(_t)
+            return True
+        except Exception:
+            return False
 
 SKILL_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -372,7 +394,7 @@ def plan(question: str) -> dict:
     try:
         # 规划是结构化输出任务 → 用快模型（实测 k2.6 约 5s，k3 约 21s）
         out = chat(prompt, system=PLANNER_SYSTEM, purpose="plan",
-                   timeout=90, retries=2)
+                   timeout=PLAN_TIMEOUT, retries=1)
     except Exception as e:
         return {"skills": [], "need_fetch": [], "reason": "规划失败: %s" % str(e)[:120]}
 
@@ -709,6 +731,16 @@ def execute(p: dict, question: str, deadline: float, verbose: bool = False,
 CONTEXT_MAX_ROUNDS = _cfg_int("CONTEXT_MAX_ROUNDS", 3)
 #: 多轮补取：每轮最多追加技能数
 CONTEXT_EXTRA_PER_ROUND = _cfg_int("CONTEXT_EXTRA_PER_ROUND", 4)
+#: 单次「规划」LLM 调用的超时（秒）。
+#  ⚠️ 实测踩坑：原为 90 且 retries=2 → 最坏 90×3=270s，单是规划就吃满了
+#     TOTAL_BUDGET(600s)，再叠加技能执行就会超出 REST 层 120s 超时，
+#     导致整个请求被截断、context_len=0。
+#     另实测规划耗时（3 次平均，提示词 1680 字）：
+#        kimi-k2.6 → 21.5s      kimi-k3 → 17.7s
+#     故 30s 对 k3 有充足余量；即便超时也有规则路由兜底，不会零数据。
+#     并且规则路由已作为兜底先行执行（见 qa_analyzer.build_context），
+#     故这里超时的代价只是「少一些增强数据」，不会再出现「零数据」。
+PLAN_TIMEOUT = _cfg_int("PLAN_TIMEOUT", 30)
 #: 多轮补取时交给模型的「已取数据」节选长度（字符）
 COLLECTED_BRIEF = _cfg_int("CONTEXT_COLLECTED_BRIEF", 6000)
 
@@ -746,7 +778,8 @@ def _ask_next_queries(question: str, collected: str, used_ids: set) -> list:
         % (_catalog_text(), question, _brief, used, CONTEXT_EXTRA_PER_ROUND)
     )
     try:
-        out = chat(prompt, system=PLANNER_SYSTEM, purpose="plan", timeout=90, retries=1)
+        out = chat(prompt, system=PLANNER_SYSTEM, purpose="plan",
+                   timeout=PLAN_TIMEOUT, retries=0)
     except Exception:
         return []
 
@@ -773,16 +806,23 @@ def _ask_next_queries(question: str, collected: str, used_ids: set) -> list:
     return out_skills
 
 
-def build_context(question: str, verbose: bool = False) -> str:
+def build_context(question: str, verbose: bool = False,
+                  budget_sec: int = None) -> str:
     """AI 自主规划 → 执行 → （多轮）追加补取 → 返回结构化上下文。
 
-    技能数量不限；轮数由 CONTEXT_MAX_ROUNDS 控制（默认 3），总时长由
-    TOTAL_BUDGET（默认 600s）兜底。任一环节失败都只是少一块数据，不阻断回答。
+    技能数量不限；轮数由 CONTEXT_MAX_ROUNDS 控制（默认 3）。
+
+    :param budget_sec: 本次取数的**硬性墙钟预算**（秒）。默认取 TOTAL_BUDGET。
+        ⚠️ 实测踩坑：规划单次 LLM 调用最坏可到 90s（45s×2），叠加多轮补取后
+        整条链路可达 166s，而 REST 层只有 120s 超时 —— 请求被截断、返回零数据。
+        故必须由调用方按「上层超时」倒推一个更紧的预算传进来；
+        预算耗尽即停止追加取数，用已有数据返回（保证「有数据」优先于「数据全」）。
     """
     q = (question or "").strip()
     if not q:
         return ""
-    deadline = time.time() + TOTAL_BUDGET
+    deadline = time.time() + (budget_sec if budget_sec and budget_sec > 0
+                              else TOTAL_BUDGET)
     p = plan(q)
     if verbose:
         print("[规划] %s（%d 个技能）" % (p.get("reason"), len(p.get("skills") or [])),
@@ -795,7 +835,8 @@ def build_context(question: str, verbose: bool = False) -> str:
     # ---- 多轮追加补取：把已有数据交回模型，问它还缺什么 ----
     used_ids = {s["id"] for s in (p.get("skills") or [])}
     for rnd in range(1, CONTEXT_MAX_ROUNDS):
-        if time.time() > deadline:
+        # 预留 1 轮 LLM + 技能的时间，避免「刚好跨过 deadline」导致返回空白
+        if time.time() > deadline or (deadline - time.time()) < 30:
             break
         extra = _ask_next_queries(q, ctx, used_ids)
         if not extra:

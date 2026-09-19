@@ -117,9 +117,17 @@ def is_configured() -> bool:
 # 核心调用
 # --------------------------------------------------------------------------
 
-#: 用途 → 模型分工（性能实测：规划用 k2.6 仅 5s，k3 需 21s；汇总仍用 k3 保质量）
+#: 用途 → 模型分工
+#
+# ⚠️ 规划模型的选择依据**已更新**（原注释「k2.6 仅 5s、k3 需 21s」是早期测量，
+#    当时规划提示词还很短；现在技能目录+约束已 1680 字，不再适用）。
+#    2026-09-19 实测（3 次平均）：
+#        kimi-k2.6 → 21.5s      kimi-k3 → 17.7s      两者均 3/3 成功
+#    k3 反而更快，故规划默认改用 k3。
+#    规划单次超时由 skill_agent.PLAN_TIMEOUT 控制（默认 30s）；
+#    且规则路由已先行兜底，规划超时不会导致「零数据」。
 MODEL_BY_PURPOSE = {
-    "plan": os.environ.get("LLM_MODEL_PLAN", "kimi-k2.6"),
+    "plan": os.environ.get("LLM_MODEL_PLAN", "kimi-k3"),
     "summarize": os.environ.get("LLM_MODEL_SUMMARIZE", ""),   # 空=用默认 LLM_MODEL
     "chat": "",
 }
