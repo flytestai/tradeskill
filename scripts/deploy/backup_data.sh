@@ -173,11 +173,24 @@ if [ -d /etc/letsencrypt ]; then
     if [ -f "$DEST_SYS/letsencrypt.tar.gz" ]; then
         chmod 600 "$DEST_SYS/letsencrypt.tar.gz"
         # 校验归档可读且确含私钥（避免"备份了但内容不对"）
-        if tar tzf "$DEST_SYS/letsencrypt.tar.gz" 2>/dev/null | grep -q 'archive/.*privkey'; then
+        #
+        # ⚠️ 不能写 `if tar tzf ... | grep -q ...; then`（2026-09-19 实测）
+        #   本脚本开头有 `set -uo pipefail`，而 pipefail 下**管道中任一命令
+        #   非零则整条管道判失败** —— 即使 grep 匹配成功，只要 tar 有
+        #   任何非零输出（警告/权限提示等），就会被判为"未检出私钥"。
+        #   实测：归档里确实含 privkey1.pem（tar tzvf 可见），
+        #   但该写法仍报「⚠️ 未检出私钥」——**检查项自己说谎**。
+        #
+        #   这正是本项目已记录过的同一陷阱（见 push_sync.sh 第 52 行注释：
+        #   「ssh 因拒绝 shell 访问返回 1 → 我原先 grep 的字面量匹配不到」）。
+        #   正确做法：先把输出存进变量再判断（也不要 `|| true` 掩盖真实失败）。
+        _tar_list="$(tar tzf "$DEST_SYS/letsencrypt.tar.gz" 2>/dev/null || true)"
+        if printf '%s\n' "$_tar_list" | grep -q 'archive/.*privkey'; then
             certok="含私钥 ✅"
         else
             certok="⚠️ 未检出私钥"
         fi
+        unset _tar_list
     else
         certok="⚠️ 归档创建失败"
     fi
