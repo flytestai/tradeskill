@@ -182,7 +182,7 @@ def _patch_inline_threads() -> bool:
 
 
 class RequireAuthMiddleware:
-    """MCP 端点鉴权（ASGI 中间件）：堵住「公网裸奔」，但不误伤内网调用。
+    """MCP 端点鉴权（ASGI 中间件）——默认**只告警不拦截**。
 
     问题（2026-09-19 实测）
     ----------------------
@@ -190,32 +190,45 @@ class RequireAuthMiddleware:
     而同容器 REST（/api/v1/kol/list）无 Key 返回 401 —— 同一个服务两套标准。
     /healthz 还自述 `auth_enabled: true`，与实际行为矛盾。
 
-    设计取舍
-    --------
-    现有客户端（蜜蜂网关等）在此端点上**不发凭据**，直接强制鉴权会连它们
-    一起打死 —— 2026-09-19 刚发生过一次同类「修一个坏一个」的事故。
-    故按来源分级：
+    ⚠️ 但"直接强制"会打死正在运行的端点（本会话真实踩过）
+    -----------------------------------------------------
+    第一版我实现了"公网必须带 Key，否则 401"，部署后**立刻出事**：
 
-        · 回环 / 私有网段（Nginx 反代来自 127.0.0.1）→ 放行，仅记录
-        · 其他来源（公网直连）                        → 必须带有效 Key，否则 401
+        [mcp][auth] 拒绝 198.51.100.10：缺少 API Key
+        HTTP/1.1 401 Unauthorized
 
-    公网经 Nginx 反代进来属于前者，因此**要真正在公网生效，还需在 Nginx
-    层把凭据透传并叠加 IP 限制**（见 scripts/deploy/nginx-skill.conf）。
-    本中间件至少保证：**任何能直连到本端口的外部来源都不再裸奔**。
-    如需对所有来源强制鉴权（Nginx 属回环也会被拦）：设
-    PLATFORM_MCP_AUTH_STRICT=1。
+    中间件逻辑本身是对的（准确识别出公网真实 IP），
+    但**现有客户端（蜜蜂网关等）在这个端点上不发任何凭据** →
+    公网入口被整体挡住，比原来的"无鉴权"更糟。
+
+    更值得记的是：我的"真实调用验证"是从**服务器内部**发起的
+    （来源 172.17.0.1 被判为内网放行），所以验证全绿，
+    **完全没覆盖公网路径** —— 验证盲区，与本次事故一脉相承。
+    教训：验证必须覆盖**真实使用路径**，而不只是"能连通"。
+
+    模式（单一开关 PLATFORM_MCP_AUTH_MODE，默认 warn）
+    --------------------------------------------------
+        warn（默认）: 记录谁在无凭据访问，**不拦截** —— 不破坏现状，
+                      同时让风险可见（原来连日志都没有）
+        enforce     : 拒绝公网来源（回环/私网放行）
+        strict      : 任何来源都必须带有效 Key
+
+    从 warn 切换到 enforce 的前置条件：
+      1) 所有 MCP 客户端（蜜蜂 connector / WorkBuddy / 自建）都已能发 Key
+      2) Nginx 已配置凭据透传（见 scripts/deploy/nginx-skill.conf）
+    在 1) 未满足前开 enforce 会立刻中断服务。
     """
 
-    def __init__(self, app, strict: bool = False):
+    def __init__(self, app, mode: str = "warn"):
         self.app = app
-        self.strict = strict
+        self.mode = mode
 
     async def __call__(self, scope, receive, send):
         if scope.get("type") != "http":
             return await self.app(scope, receive, send)
 
         if not config.API_KEYS:
-            # 未配置任何 Key → 无处可校验，保持原状（并在启动日志中告警）
+            # 未配置任何 Key → 无处可校验（启动时已告警）
             return await self.app(scope, receive, send)
 
         headers = {k.decode("latin-1").lower(): v.decode("latin-1")
@@ -224,33 +237,39 @@ class RequireAuthMiddleware:
         # X-Forwarded-For 首段才是真实客户端（Nginx 反代场景）
         fwd = (headers.get("x-forwarded-for") or "").split(",")[0].strip()
         real_ip = fwd or client
-
         from_local = auth.is_local_client(real_ip)
-        if from_local and not self.strict:
-            # 内网/回环：放行（Nginx 反代即属此类）
-            has_key = bool(auth.extract_key(headers))
-            if not has_key:
-                print("[mcp][auth] 放行内网来源 %s（未带凭据，非严格模式）" % real_ip,
-                      file=sys.stderr)
+
+        key = auth.extract_key(headers)
+        ok = False
+        why = "缺少凭据"
+        if key:
+            try:
+                auth.resolve_key(key)
+                ok = True
+            except auth.AuthError as e:
+                why = str(e)
+
+        if ok:
+            return await self.app(scope, receive, send)      # 已鉴权，直接放行
+
+        # 未通过鉴权：按模式决定"只记"还是"拦"
+        need_block = (self.mode == "strict") or (self.mode == "enforce" and not from_local)
+
+        if not need_block:
+            print("[mcp][auth][warn] 未鉴权访问 ip=%s mode=%s（未拦截；%s）"
+                  % (real_ip, self.mode, why), file=sys.stderr)
             return await self.app(scope, receive, send)
 
-        # 公网来源（或严格模式）→ 必须带有效 Key
-        try:
-            auth.resolve_key(auth.extract_key(headers))
-        except auth.AuthError as e:
-            print("[mcp][auth] 拒绝 %s：%s" % (real_ip, e), file=sys.stderr)
-            body = json.dumps({"ok": False, "error": {
-                "type": "auth", "message": str(e),
-                "hint": "MCP 端点需要 X-API-Key 或 Authorization: Bearer <key>"}},
-                ensure_ascii=False).encode("utf-8")
-            await send({"type": "http.response.start", "status": 401,
-                        "headers": [(b"content-type", b"application/json; charset=utf-8"),
-                                    (b"content-length", str(len(body)).encode()),
-                                    (b"www-authenticate", b'Bearer realm="kol-platform"')]})
-            await send({"type": "http.response.body", "body": body})
-            return
-
-        return await self.app(scope, receive, send)
+        print("[mcp][auth] 拒绝 ip=%s mode=%s：%s" % (real_ip, self.mode, why), file=sys.stderr)
+        body = json.dumps({"ok": False, "error": {
+            "type": "auth", "message": why,
+            "hint": "MCP 端点需要 X-API-Key 或 Authorization: Bearer <key>"}},
+            ensure_ascii=False).encode("utf-8")
+        await send({"type": "http.response.start", "status": 401,
+                    "headers": [(b"content-type", b"application/json; charset=utf-8"),
+                                (b"content-length", str(len(body)).encode()),
+                                (b"www-authenticate", b'Bearer realm="kol-platform"')]})
+        await send({"type": "http.response.body", "body": body})
 
 
 def run_http(mcp, host: str, port: int) -> int:
@@ -261,7 +280,15 @@ def run_http(mcp, host: str, port: int) -> int:
     若该 API 在当前 SDK 版本不可用，则回退到 `run()`（鉴权缺失，
     但明确打印告警 —— 绝不静默降级）。
     """
-    strict = (os.environ.get("PLATFORM_MCP_AUTH_STRICT") or "").strip() in ("1", "true", "yes")
+    # 鉴权模式：warn（默认，只记不拦）/ enforce（拦公网）/ strict（拦全部）
+    # 兼容旧开关 PLATFORM_MCP_AUTH_STRICT=1 → strict
+    mode = (os.environ.get("PLATFORM_MCP_AUTH_MODE") or "").strip().lower()
+    if not mode:
+        mode = "strict" if (os.environ.get("PLATFORM_MCP_AUTH_STRICT") or "").strip() \
+            in ("1", "true", "yes") else "warn"
+    if mode not in ("warn", "enforce", "strict"):
+        print("[mcp][auth] ⚠️ 未知模式 %r，回退为 warn" % mode, file=sys.stderr)
+        mode = "warn"
     path = "/mcp"
 
     if hasattr(mcp, "streamable_http_app"):
@@ -271,13 +298,15 @@ def run_http(mcp, host: str, port: int) -> int:
             # 传 127.0.0.1 时会自动开启 DNS rebinding 保护并要求 Host 匹配；
             # 对外服务必须传真实绑定地址，否则反代会被 421 拒绝。
             app = mcp.streamable_http_app(host=host)
-            app.add_middleware(RequireAuthMiddleware, strict=strict)
+            app.add_middleware(RequireAuthMiddleware, mode=mode)
             if not config.API_KEYS:
                 print("[mcp][auth] ⚠️ 未配置 PLATFORM_API_KEYS —— "
                       "MCP 端点无任何鉴权，请仅在可信网络暴露", file=sys.stderr)
             else:
-                print("[mcp][auth] 已启用分级鉴权（严格模式=%s，共 %d 个 Key）"
-                      % (strict, len(config.API_KEYS)), file=sys.stderr)
+                print("[mcp][auth] 鉴权模式=%s（%d 个 Key）%s"
+                      % (mode, len(config.API_KEYS),
+                         "—— 仅记录未鉴权访问，不拦截" if mode == "warn" else ""),
+                      file=sys.stderr)
             print("[mcp] streamable-http 监听 http://%s:%s%s" % (host, port, path))
             uvicorn.run(app, host=host, port=port, log_level="info")
             return 0
