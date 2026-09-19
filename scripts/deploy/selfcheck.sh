@@ -64,18 +64,45 @@ for c in kolplatform-rest kolplatform-mcp; do
     [ "$st" = "running" ] || _add "$c=$st"
 done
 
+# ---------------------------------------------------------------------------
+# 带重试的 HTTP 探测（REST 与 trade365 共用）
+#
+# ⚠️ 两个坑都踩过，必须同时避免：
+#
+#  1) `curl ... || echo 000` 会拼成 "000000"
+#     curl 失败时 `-w '%{http_code}'` 已经输出 "000"，
+#     再 `|| echo 000` 又多输出一次 → 得到 6 个 0 的畸形值。
+#     （第五轮在 preflight 修过同一写法，却漏了这个文件 —— 于是
+#      自监控持续误报 "REST healthz=000000"，而 REST 其实一直是 200。）
+#
+#  2) 单次探测失败就判故障 → 误报
+#     实测该容器为单线程（宿主限制），长请求会短暂阻塞探针；
+#     一次超时不代表服务挂了。必须**重试 N 次**才判失败。
+#     实测反例：报 "000000" 的那一刻，REST 直连 200、耗时 4ms、
+#     容器 0 重启、访问日志里该请求也返回了 200 —— 纯属探针自身抖动。
+# ---------------------------------------------------------------------------
+_probe_http() {
+    # $1=url  $2=超时秒  $3=尝试次数
+    local url="$1" tmo="${2:-20}" tries="${3:-3}" i code
+    for i in $(seq 1 "$tries"); do
+        code="$(curl -s -o /dev/null -w '%{http_code}' -m "$tmo" "$url" 2>/dev/null)"
+        [ -n "$code" ] || code="000"
+        [ "$code" != "000" ] && { printf '%s' "$code"; return 0; }
+        [ "$i" -lt "$tries" ] && sleep 2
+    done
+    printf '%s' "${code:-000}"
+}
+
 # ---- 2. REST 深度健康 -------------------------------------------------------
-hz="$(curl -s -o /dev/null -w '%{http_code}' -m 30 \
-      'http://127.0.0.1:8020/healthz?deep=1' 2>/dev/null || echo 000)"
+hz="$(_probe_http 'http://127.0.0.1:8020/healthz?deep=1' 25 3)"
 case "$hz" in
     200|207) ;;
-    *) _add "REST healthz=$hz" ;;
+    *) _add "REST healthz=$hz（已重试3次）" ;;
 esac
 
 # ---- 3. trade365 -----------------------------------------------------------
-t365="$(curl -s -o /dev/null -w '%{http_code}' -m 30 \
-        'http://127.0.0.1:8000/api/overview' 2>/dev/null || echo 000)"
-[ "$t365" = "200" ] || _add "trade365=$t365"
+t365="$(_probe_http 'http://127.0.0.1:8000/api/overview' 25 3)"
+[ "$t365" = "200" ] || _add "trade365=$t365（已重试3次）"
 
 # ---- 4. 关键状态文件可解析 ---------------------------------------------------
 for f in group_qa_queue.json group_qa_answered.json level_targets.json \
@@ -92,6 +119,57 @@ done
 # ---- 5. 磁盘 ---------------------------------------------------------------
 use="$(df / | tail -1 | awk '{print $5}' | tr -d '%')"
 [ -n "$use" ] && [ "$use" -gt 90 ] 2>/dev/null && _add "磁盘=${use}%"
+
+# ---------------------------------------------------------------------------
+# ---- 6. 定时任务「是否在预期时刻执行」（本轮新增，针对一个真实静默故障）----
+#
+# ⚠️ 为什么必须加（2026-09-19 实测发现）
+#   宿主机时区是 **US/Eastern**，而 crontab 的小时字段是**北京时间口径**
+#   （45 8 = 盘前、0 11 = 盘中、*/5 9-15 = 盘中持仓监控…），
+#   且 Debian 的 cron（vixie 3.0pl1）**忽略 TZ/CRON_TZ 用于调度**
+#   （官方文档：cron ignores it other than passing it on through）。
+#
+#   实证：9/18（周五）日志显示
+#       monitor-alerts 实际 21:40 北京 = 09:40 EDT
+#   → 所有交易时段任务**整体晚约 12 小时**：
+#       盘前 20:45（收盘后）、盘中 23:00（盘后）、
+#       关键位 20:30、持仓监控 21:00~03:59（半夜）
+#
+#   最要命的不是错位本身，而是**它完全没有症状**：
+#   任务照常执行、退出码全 0，自监控 5 项检查全 ✅。
+#   本项检查就是补上这个盲区 —— 让"任务没在该跑的时候跑"变成告警。
+#
+# 判定方式：取任务日志里最新一条记录的【北京时间时刻】，
+#   若落在预期的交易时段之外且当天已过预期时点，则告警。
+# ---------------------------------------------------------------------------
+_host_log="$KOL_DIR/data/_host_task.log"
+if [ -f "$_host_log" ]; then
+    # 日志时间戳由脚本按北京时间写入 → 直接解析即可
+    last_ts="$(grep -oE '^--- [0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2}' "$_host_log" | tail -1 | cut -d' ' -f2-)"
+    if [ -n "$last_ts" ]; then
+        last_epoch="$(date -d "$last_ts" +%s 2>/dev/null || echo 0)"
+        now_epoch="$(date -d "$(TZ=Asia/Shanghai date '+%F %T')" +%s 2>/dev/null || echo 0)"
+        if [ "$last_epoch" -gt 0 ] && [ "$now_epoch" -gt 0 ]; then
+            age=$(( now_epoch - last_epoch ))
+            # 常态任务（qa / react-cleanup）每 2~10 分钟一次，
+            # 故超过 30 分钟没有任何记录 = 定时任务链路已停摆
+            [ "$age" -gt 1800 ] && _add "定时任务停摆：日志最新记录距今 $((age/60)) 分钟（$_host_log）"
+        fi
+
+        # ★ 时区错位检测：交易时段任务的触发时刻应落在大致 08:00~16:30（北京）。
+        #   查看当天「交易时段类」任务记录，若它们集中在 20:00~04:00
+        #   说明 cron 用错了时区（晚 12h）。
+        trade_ts="$(grep -E '(premarket|intraday|position-monitor|monitor-alerts|summary-close|level)' "$_host_log" \
+                    | grep -oE '^--- [0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2}' \
+                    | tail -1 | awk '{print $3}')"
+        if [ -n "$trade_ts" ]; then
+            hh="${trade_ts%%:*}"
+            if [ "$hh" -ge 19 ] || [ "$hh" -lt 5 ] 2>/dev/null; then
+                _add "定时任务时区错位：交易类任务最近触发于北京时间 ${trade_ts}（应落在 08:00~16:30）—— 宿主机时区=$(cat /etc/timezone 2>/dev/null)，cron 忽略 CRON_TZ"
+            fi
+        fi
+    fi
+fi
 
 # ---- 输出 ------------------------------------------------------------------
 if [ -n "$problems" ]; then
