@@ -170,7 +170,7 @@ def fetch_messages_since(chat_id, start_iso=None):
     if start_iso:
         cmd += ["--start", start_iso]
     try:
-        r = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=60, encoding='utf-8', errors='replace')
     except Exception as e:
         print("[ERROR] lark-cli 拉取异常: %s" % str(e)[:200], file=sys.stderr)
         return None

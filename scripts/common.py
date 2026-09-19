@@ -418,7 +418,7 @@ def send_card(markdown, chat_id=None, user_id=None, title="通知", subtitle="",
     if idem_key:
         args += ["--idempotency-key", idem_key[:50]]
     try:
-        result = subprocess.run(args, capture_output=True, text=True, timeout=45)
+        result = subprocess.run(args, capture_output=True, text=True, timeout=45, encoding='utf-8', errors='replace')
         data = json.loads(result.stdout or "{}")
         if result.returncode == 0 and data.get("ok"):
             return True, ""

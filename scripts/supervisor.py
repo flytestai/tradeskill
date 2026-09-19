@@ -173,7 +173,7 @@ def run_once_script(args):
     try:
         r = subprocess.run([PY] + args, cwd=SKILL_DIR,
                            capture_output=True, text=True, timeout=240,
-                           creationflags=NO_WINDOW)
+                           creationflags=NO_WINDOW, encoding='utf-8', errors='replace')
         tail = (r.stdout or "").strip().splitlines()
         if tail:
             print("[supervisor] %s -> %s" % (args[0], tail[-1][:120]))

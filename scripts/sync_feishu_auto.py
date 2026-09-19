@@ -186,7 +186,7 @@ def check_auth(lark_cli):
         # 共享临时 JSON 文件造成空文件/半写入，进而误报授权或同步失败。
         cmd = "timeout -k 3 15 " + _lark_shell_cmd(lark_cli, ["auth", "status"])
         r = subprocess.run([BASH, "-c", cmd], capture_output=True, text=True,
-                           timeout=20, cwd=SKILL_DIR)
+                           timeout=20, cwd=SKILL_DIR, encoding='utf-8', errors='replace')
         if r.returncode != 0:
             raise RuntimeError("lark-cli auth status exit=%s: %s" %
                                (r.returncode, (r.stderr or "").strip()[:160]))
@@ -295,7 +295,7 @@ def pull_latest():
         pass
     try:
         r = subprocess.run(["git", "-C", SKILL_DIR, "pull", "--rebase"],
-                           capture_output=True, text=True, timeout=20)
+                           capture_output=True, text=True, timeout=20, encoding='utf-8', errors='replace')
         with open(cache_file, "w") as f:
             f.write(str(time.time()))
         if r.returncode == 0:
@@ -364,7 +364,7 @@ def alert_feishu(key, msg):
         subprocess.run(
             [BASH, os.path.join(SKILL_DIR, "scripts", "alert_once_private.sh"),
              "%s_%s" % (key, day), "below", msg],
-            capture_output=True, text=True, timeout=30, cwd=SKILL_DIR)
+            capture_output=True, text=True, timeout=30, cwd=SKILL_DIR, encoding='utf-8', errors='replace')
     except Exception:
         pass
 
@@ -441,7 +441,7 @@ def push_sync_async():
         try:
             r = subprocess.run([pythonw_path(), SYNC_SCRIPT, "push"],
                                capture_output=True, text=True, timeout=180,
-                               cwd=SKILL_DIR)
+                               cwd=SKILL_DIR, encoding='utf-8', errors='replace')
             tail = ((r.stdout or "") + (r.stderr or "")).strip().splitlines()
             if r.returncode == 0:
                 print("[SYNC] GitHub 后台推送完成")
@@ -649,7 +649,7 @@ def fetch_messages_since(lark_cli=None, chat_id=None, start_iso=None):
     for attempt in range(2):
         try:
             r = subprocess.run([BASH, "-c", cmd], capture_output=True, text=True,
-                               timeout=120, cwd=SKILL_DIR)
+                               timeout=120, cwd=SKILL_DIR, encoding='utf-8', errors='replace')
             if r.returncode != 0:
                 last_error = "exit=%s %s" % (r.returncode, (r.stderr or "").strip()[:180])
             else:
@@ -708,7 +708,7 @@ def download_image(lark_cli, message_id, image_key):
         args = ["im", "+messages-resources-download", "--message-id", message_id,
                 "--file-key", image_key, "--type", "image", "--output", rel, "--json"]
         r = subprocess.run([BASH, "-c", _lark_shell_cmd(lark_cli, args)],
-                           capture_output=True, text=True, timeout=60, cwd=SKILL_DIR)
+                           capture_output=True, text=True, timeout=60, cwd=SKILL_DIR, encoding='utf-8', errors='replace')
         if r.returncode == 0:
             # 实际文件名可能带扩展名，回退用 key 作为路径
             for fn in os.listdir(os.path.join(SKILL_DIR, "assets", "feishu_images")):

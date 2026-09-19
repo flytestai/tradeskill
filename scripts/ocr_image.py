@@ -24,7 +24,7 @@ def ocr(image_path, lang="chi_sim+eng", timeout=60):
         return ""
     try:
         r = subprocess.run([_find_tesseract(), image_path, "stdout", "-l", lang],
-                           capture_output=True, text=True, timeout=timeout)
+                           capture_output=True, text=True, timeout=timeout, encoding='utf-8', errors='replace')
         if r.returncode != 0:
             return ""
         return (r.stdout or "").strip()
