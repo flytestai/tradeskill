@@ -22,17 +22,19 @@
 #   实测：108.165.164.23 出现 3499 次、92.118.39.77 出现 425 次，
 #         均未被封。
 #
-#   解决：用**内置**的 aggressive 模式（不要自研 filter）：
-#       fail2ban-regex /var/log/auth.log 'sshd[aggressive]'
-#       → Failregex: 175784 total, 175784 matched
+#   解决：**内置 filter 也不覆盖这种形态** —— 实测 normal/ddos/extra/
+#         aggressive 四种模式对该行**全部 0 matched**，故必须自研。
+#         见 scripts/deploy/fail2ban-sshd-closed.conf（配套 [sshd-closed] jail）
 #
-#   ⚠️ 我第一版写了个自定义 filter 去匹配 [preauth] 行，
-#      jail 显示已加载、却 `Total failed: 0` —— 一条都没匹配上。
-#      逐条 fail2ban-regex 验证才发现：
-#        · 含 `[preauth]` 后缀的行，连 `^.*<HOST>.*$` 都匹配不上
-#        · `^` 锚定无效（fail2ban 匹配的是**含 syslog 前缀的整行**）
-#      故：**优先用内置 filter，不要自研**；若必须自研，
-#      务必用 fail2ban-regex 逐条验证，而不是看 jail 是否加载成功。
+#   ⚠️ 排查中连踩两坑，都属"配了但没生效"：
+#     坑 1 双重转义：先用 Python 生成配置，\S \d 落盘成了**字面反斜杠**
+#          → 正则永远匹配不上；而 jail 仍显示 active，
+#            只有 `Total failed: 0` 暴露了问题。
+#     坑 2 误判内置能力：一度以为 `sshd[mode=aggressive]` 够用 ——
+#          它整体显示 175784 matched，但那是匹配了**别的行**；
+#          用单行测试目标日志行才证明是 0 matched。
+#     → 教训：**必须用"单行 + 目标日志行"验证**。
+#       整体匹配数、jail 是否 active，都不能证明它真的生效。
 #
 # 【教训 2】backend 与"日志时区"会让 filter 静默失效
 #   · backend：旧版 fail2ban(0.10.2) 的 `auto` 不可靠，显式用 `polling`。
@@ -69,12 +71,13 @@ filter   = sshd
 logpath  = /var/log/auth.log
 maxretry = 5
 
-# 加强模式：补充 ddos/extra 规则，覆盖"连接即断开"等加固后的形态
-[sshd-aggressive]
+# 加固后形态：连接即断开（需自研 filter —— 内置模式均不覆盖，见
+# scripts/deploy/fail2ban-sshd-closed.conf 的实测说明与验证方法）
+[sshd-closed]
 enabled  = true
 port     = ssh
-filter   = sshd[mode=aggressive]
+filter   = sshd-closed
 logpath  = /var/log/auth.log
-maxretry = 10
-findtime = 600
+maxretry = 8
+findtime = 1800
 bantime  = 7200
