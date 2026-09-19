@@ -128,12 +128,47 @@ def auto_bold(text, extra_names=None):
     return text
 
 
-def build_message(sender_id, sender, question, answer, add_disclaimer=True):
+#: 形如 ou_ 开头的 open_id（飞书 open_id 通常 20+ 字符十六进制）
+_OPEN_ID_RE = re.compile(r"^ou_[0-9a-f]{16,}$", re.I)
+
+
+def _valid_open_id(v):
+    """判断能否安全用于卡片里的 <at user_id=...>。
+
+    ⚠️ 为什么必须校验（实测踩坑）
+      卡片里的 `<at user_id="xxx">` 若指向**无法解析的 open_id**，
+      飞书会直接拒绝整张卡片：
+          code 230099 / ErrCode 100290  "Failed to create card content"
+      实测对照：同一张卡片，去掉无效 <at> 即可正常发出。
+
+      后果不只是「@不到人」，而是**整条回复永远发不出去**，
+      且 qa_analyzer 将其视为失败 → 队列下轮重试 → **永久卡死**。
+      故：格式可疑时宁可不 @，也绝不能让回复发不出。
+    """
+    return bool(_OPEN_ID_RE.match((v or "").strip()))
+
+
+def _looks_like_mention_error(err):
+    """判断发送失败是否与卡片里的 @ 有关。
+
+    飞书对「无法解析的 <at user_id>」返回：
+        230099  Failed to create card content
+        100290  ErrCode（"there is ..." 之类的卡片内容校验失败）
+    另外 lark-cli 可能只回传 "Failed to create card content"。
+    """
+    e = str(err or "")
+    return ("230099" in e or "100290" in e
+            or "Failed to create card content" in e
+            or "card content" in e.lower())
+
+
+def build_message(sender_id, sender, question, answer, add_disclaimer=True,
+                  force_text_mention=False):
     q = (question or "").strip().replace("\n", " ")
     if len(q) > 80:
         q = q[:80] + "…"
-    # 提问行：@昵称:问题（有 open_id 用 <at> 真@通知，回退纯文本 @昵称，都没有则保留通用提示）
-    if sender_id:
+    # 提问行：@昵称:问题（open_id 合法才用 <at> 真@通知，否则回退纯文本 @昵称）
+    if sender_id and _valid_open_id(sender_id) and not force_text_mention:
         who = f'<at user_id="{sender_id}"></at>'
     elif sender:
         who = f"@{sender}"
@@ -224,6 +259,19 @@ def main():
         ("%s|%s|%s" % (args.sender_id or args.sender, question, answer)).encode("utf-8")
     ).hexdigest()[:16]
     ok, err = send_to_group(markdown, chat_id, idem_key)
+
+    # ⚠️ 兜底重试：若因「@ 的 open_id 无效」被拒（飞书 230099 / ErrCode 100290），
+    #    去掉 <at> 再发一次 —— 宁可 @不到人，也不能让回复发不出去。
+    #    实测：无效 <at> 会让整张卡片创建失败，导致该问题在队列里**永久重试**。
+    if (not ok) and args.chat_type != "p2p" and _valid_open_id(args.sender_id) \
+            and _looks_like_mention_error(err):
+        print("[WARN] 首次发送失败（疑似 @ 无效用户），降级为纯文本 @ 重试: %s"
+              % str(err)[:120], file=sys.stderr)
+        markdown = build_message(args.sender_id, args.sender, question, answer,
+                                 add_disclaimer=not args.no_disclaimer,
+                                 force_text_mention=True)
+        ok, err = send_to_group(markdown, chat_id, idem_key + "t")
+
     if ok:
         answered_at = datetime.now(timezone(timedelta(hours=8))).strftime("%Y-%m-%d %H:%M:%S")
         qa_dedup.mark_answered(args.sender_id, question, args.sender, answered_at)
