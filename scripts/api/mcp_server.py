@@ -116,6 +116,71 @@ def _guard(fn):
     return wrapper
 
 
+def _threads_available() -> tuple:
+    """探测本进程能否创建线程。返回 (可用, 错误说明)。
+
+    为什么必须在启动时探测（2026-09-19 根因，已在本地确证）
+    ------------------------------------------------------
+    目标宿主的容器**无法创建线程**（项目早已记录：README 写「该宿主容器
+    无法创建线程，已自适应」、Dockerfile 写「实测抛 can't start new thread」）。
+    REST 因此被降级为 `threaded=False` 绕开了这个限制。
+
+    但 MCP 侧踩了同一个坑，且**静默**：mcp SDK 对同步 tool 的执行方式是
+
+        # mcp/server/mcpserver/utilities/func_metadata.py
+        return await anyio.to_thread.run_sync(functools.partial(fn, **kwargs))
+
+    即「同步函数 → 丢到工作线程跑」。容器建不了线程 → 抛 RuntimeError →
+    被 SDK 的裸 `except Exception` 吞成 `Error executing tool <name>`。
+
+    这**精确解释**了观测到的全部现象：
+      · 18 个同步 tool 全军覆没、返回同构文案
+      · `initialize` / `tools/list`（异步、不走线程）正常
+      · 同容器 REST 正常（已降级 threaded=False）
+
+    本地复现（把 anyio.to_thread.run_sync 换成抛异常）：
+        ❌ UnexpectedToolError: Error executing tool capabilities
+           真实原因(__cause__): RuntimeError: can't start new thread
+    与服务器 15 个工具的报错**逐字一致**。
+    """
+    import threading
+    try:
+        t = threading.Thread(target=lambda: None)
+        t.start()
+        t.join(timeout=5)
+        return True, ""
+    except Exception as e:
+        return False, "%s: %s" % (type(e).__name__, e)
+
+
+def _patch_inline_threads() -> bool:
+    """无可用线程时，让 anyio 的 to_thread 就地执行（同步）。返回是否打了补丁。
+
+    取舍：这会把阻塞式工作放在事件循环线程上，MCP 请求因此**串行化**。
+    但这是「能用」与「整个端点不可用」之间的选择，且该容器本就无法并发；
+    MCP 属低频端点，串行化的代价远小于全量失效。
+    """
+    try:
+        import anyio.to_thread as _tt
+    except Exception as e:
+        print("[mcp][threads] 无法导入 anyio.to_thread: %s" % e, file=sys.stderr)
+        return False
+
+    if getattr(_tt, "_kol_inline_patched", False):
+        return True
+
+    async def _run_sync_inline(func, *args, **kwargs):
+        # anyio 的签名是 run_sync(func, *args, abandon_on_cancel=..., limiter=...)
+        kwargs.pop("abandon_on_cancel", None)
+        kwargs.pop("limiter", None)
+        kwargs.pop("cancellable", None)
+        return func(*args, **kwargs)
+
+    _tt.run_sync = _run_sync_inline
+    _tt._kol_inline_patched = True
+    return True
+
+
 class RequireAuthMiddleware:
     """MCP 端点鉴权（ASGI 中间件）：堵住「公网裸奔」，但不误伤内网调用。
 
@@ -242,6 +307,22 @@ def build_server():
             "未安装可用的 mcp SDK。请执行：pip install \"mcp\"\n"
             "  错误详情: %s\n"
             "（REST 接口不受影响，可继续使用 python -m api.rest_app）" % (_MCP_IMPORT_ERR or "未知"))
+
+    # ★ 线程可用性处理（必须在注册/运行 tool 之前完成）
+    #   目标容器无法创建线程，而 SDK 把同步 tool 丢到 anyio 工作线程执行
+    #   → 原本会让**每一个同步 tool 全部失败且原因被脱敏**（详见 _threads_available）。
+    ok, why = _threads_available()
+    if ok:
+        print("[mcp][threads] 线程可用 —— 同步 tool 走 anyio 工作线程")
+        if os.environ.get("PLATFORM_MCP_FORCE_INLINE") in ("1", "true", "yes"):
+            _patch_inline_threads()
+            print("[mcp][threads] 已按 PLATFORM_MCP_FORCE_INLINE 强制就地执行")
+    else:
+        patched = _patch_inline_threads()
+        print("[mcp][threads] ⚠️ 本进程**无法创建线程**（%s）—— 已%s" % (
+            why, "改为就地执行（请求将串行处理）" if patched else "尝试打补丁但失败"))
+        if not patched:
+            print("[mcp][threads] 🔴 所有同步 tool 将不可用！", file=sys.stderr)
 
     mcp = ServerClass("kol-skills-platform")
 
