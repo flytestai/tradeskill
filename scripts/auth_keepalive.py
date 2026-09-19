@@ -55,6 +55,15 @@ import sys
 import time
 from datetime import datetime, timedelta, timezone
 
+# 北京时间（日志时间戳与 cron 的 TZ=Asia/Shanghai 对齐）
+try:
+    from common import beijing_now as _bj_now
+except Exception:
+    def _bj_now():
+        from datetime import datetime, timezone, timedelta
+        return datetime.now(timezone(timedelta(hours=8)))
+
+
 SKILL_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(SKILL_DIR, "scripts"))
 
