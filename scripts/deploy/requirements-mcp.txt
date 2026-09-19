@@ -6,4 +6,16 @@
 #   mcp 1.x 提供 mcp.server.fastmcp.FastMCP
 #   mcp 2.x 改名为 mcp.server.mcpserver.MCPServer
 # 本项目 `api/mcp_server.py` 已做双版本兼容，两者均可运行。
-mcp>=1.0
+# ---------------------------------------------------------------------------
+# 版本区间（2026-09-19 收敛）
+#   下限：本项目使用了 `mcp.server.mcpserver`（2.x 改名后的模块）
+#         与 `streamable_http_app()`（用于注入鉴权中间件）
+#   上限：2.x 大版本内已验证；跨 3.x 需重新验证 tool 注册与 ASGI 形态
+#
+# 为什么必须钉住下限 —— 实测血案：
+#   mcp 2.x 对**未预料异常**统一脱敏为 `Error executing tool <name>`，
+#   若不锁版本，上升级后同类故障**仍会以同样方式静默**。
+#   配套修复见 api/mcp_server.py 的 `_guard`（把异常翻成可见的 ToolError）
+#   与 `services.selfcheck()`（把「缺什么」在启动时打印出来）。
+# ---------------------------------------------------------------------------
+mcp>=2.0,<3.0

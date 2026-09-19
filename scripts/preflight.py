@@ -96,7 +96,7 @@ CORE_MODULES = [
 
 
 def check_imports():
-    print("\n[1/16] 模块导入")
+    print("\n[1/17] 模块导入")
     bad = []
     for m in CORE_MODULES:
         if not os.path.isfile(os.path.join(SCRIPTS, m + ".py")):
@@ -117,7 +117,7 @@ def check_imports():
 # ---------------------------------------------------------------------------
 
 def check_contract():
-    print("\n[2/16] 接口契约")
+    print("\n[2/17] 接口契约")
     try:
         cf = importlib.import_module("context_format")
         sa = importlib.import_module("skill_agent")
@@ -181,7 +181,7 @@ def check_contract():
 # ---------------------------------------------------------------------------
 
 def check_format_consistency():
-    print("\n[3/16] 格式化口径一致性")
+    print("\n[3/17] 格式化口径一致性")
     try:
         sa = importlib.import_module("skill_agent")
         sr = importlib.import_module("skill_router")
@@ -224,7 +224,7 @@ def check_format_consistency():
 # ---------------------------------------------------------------------------
 
 def check_config():
-    print("\n[4/16] 配置读取")
+    print("\n[4/17] 配置读取")
     try:
         cf = importlib.import_module("context_format")
     except Exception as e:
@@ -253,7 +253,7 @@ def check_config():
 # ---------------------------------------------------------------------------
 
 def check_live():
-    print("\n[5/16] 真实取数（联网）")
+    print("\n[5/17] 真实取数（联网）")
     try:
         sa = importlib.import_module("skill_agent")
         sr = importlib.import_module("skill_router")
@@ -301,7 +301,7 @@ def check_state_files():
       · 水位文件被截断 → 返回空 → 机器人**重新拉取全部历史并重复回复**
       · 去重文件被截断 → 返回 {} → **重复回复所有历史问题**
     """
-    print("\n[6/16] 状态文件安全性")
+    print("\n[6/17] 状态文件安全性")
     try:
         sj = importlib.import_module("safe_json")
     except Exception as e:
@@ -362,7 +362,7 @@ def check_send_channel():
       2. 幂等键只在 lark-cli 回退通道传，而容器内 lark-cli 不可用、
          永远走纯 Python 通道 → **生产环境幂等保护实际失效**。
     """
-    print("\n[7/16] 发送通道")
+    print("\n[7/17] 发送通道")
     import re as _re
     import os as _os
 
@@ -469,7 +469,7 @@ def check_http_errors():
       · 每个 404 都打印完整 traceback，日志被扫描流量刷满，
         真实故障的堆栈反而被淹没
     """
-    print("\n[8/16] HTTP 错误语义")
+    print("\n[8/17] HTTP 错误语义")
     import os as _os
 
     p = _os.path.join(SCRIPTS, "api", "rest_app.py")
@@ -531,7 +531,7 @@ def check_timeout_budget():
     而每层自己都「没超时」，排查时极难定位。
     故此处断言各常量之间存在正确的大小关系。
     """
-    print("\n[9/16] 超时预算有界性")
+    print("\n[9/17] 超时预算有界性")
     # ⚠️ services 位于 scripts/api/ 包内，而 preflight 在 scripts/ 下运行，
     #    sys.path 里没有 scripts/ —— 需要显式补上，否则 ModuleNotFoundError
     #    （实测：宿主机自检因此误报失败，并正确拦下了部署）。
@@ -600,7 +600,7 @@ def check_group_isolation():
     本检查断言：标题随目标群自适应（荔枝群/复盘群/未知群各不相同），
     且 send_to_group 支持显式主题覆盖。
     """
-    print("\n[10/16] 群隔离")
+    print("\n[10/17] 群隔离")
     import os as _os
     try:
         gr = importlib.import_module("group_reply")
@@ -664,7 +664,7 @@ def check_levels():
 
       故这里逐项断言「容易漂移的配置点」，而不是只看脚本能否跑通。
     """
-    print("\n[11/16] 关键位刷新配置")
+    print("\n[11/17] 关键位刷新配置")
 
     p = os.path.join(SCRIPTS, "level_refresh.py")
     if not os.path.isfile(p):
@@ -789,7 +789,7 @@ def check_undefined_symbols():
       本检查用 AST 找出「加载时引用、但模块内无定义也无导入」的名字，
       把这类问题拦在部署前。
     """
-    print("\n[7/16] 未定义符号（静态）")
+    print("\n[12/17] 未定义符号（静态）")
     import ast as _ast
 
     # 这些是内置/环境自动注入的常见名字，不检查
@@ -843,7 +843,8 @@ def check_deploy_scripts():
     ⚠️ 为什么需要（本项为此而生，且是实测踩到的大坑）
       `setup_host_tasks.sh` 曾是 **CRLF 行尾**，而它在 heredoc 里生成
       `_run_task.sh` 时会把 CRLF 原样写入 —— 于是生成的脚本里
-      出现**真实的  字符**，其中 `tr -d '<CR>'` 更是把命令拆成两行、
+      出现**真实的 
+ 字符**，其中 `tr -d '<CR>'` 更是把命令拆成两行、
       引号无法闭合 → 整个脚本 `syntax error`。
 
       后果：**9 个 cron 任务全部失败**（premarket / position-monitor /
@@ -855,7 +856,7 @@ def check_deploy_scripts():
         1. 所有 .sh 必须是 LF 行尾（.gitattributes 明确要求 *.sh eol=lf）
         2. 所有 .sh 必须通过 `bash -n` 语法检查
     """
-    print("\n[8/16] 部署脚本")
+    print("\n[13/17] 部署脚本")
     import glob as _glob
     import subprocess as _sp
 
@@ -932,7 +933,7 @@ def check_log_rotation():
       本检查断言：轮转配置存在、可被 logrotate 解析、且 timer 在跑。
       （非 Linux / 无 logrotate 的环境优雅跳过，不误报）
     """
-    print("\n[9/16] 日志轮转")
+    print("\n[14/17] 日志轮转")
     import shutil as _sh
     import subprocess as _sp
 
@@ -986,7 +987,7 @@ def check_backup():
 
       （非服务器环境优雅跳过，不误报）
     """
-    print("\n[10/16] 数据备份")
+    print("\n[15/17] 数据备份")
     root = "/opt/kol-backups"
     if not os.path.isdir("/opt/kol-skills-platform/data"):
         _ok("备份检查 —— 已跳过（非服务器环境）")
@@ -1109,6 +1110,108 @@ def check_backup():
         _ok("Deploy Key 检查 —— 已跳过（%s）" % str(e)[:40])
 
 
+def check_mcp_tools():
+    """MCP 工具**真实调用** —— 只测「端口通不通」曾漏掉一次全量故障。
+
+    ⚠️ 为什么需要（本项为此而生，2026-09-19 血案）
+      此前的检查只断言：
+        · MCP initialize 握手返回 200
+        · docker logs 里有 "session manager started"
+        · 自监控项「✅ MCP /mcp」= 端口有响应
+      于是**18 个工具全部调用失败**这件事，被这些检查一致判为「正常」，
+      故障静默数小时。根因（mcp 2.x SDK）：
+          except Exception as exc:
+              raise UnexpectedToolError(f"Error executing tool {self.name}")
+      未预料异常被**脱敏**成同构文案，客户端侧完全看不出真实原因。
+
+      本项改为**逐工具真实调用**，任何一个失败即判失败。
+      （仅在本机能连到 MCP 端点时执行，非服务器环境优雅跳过）
+    """
+    print("\n[16/17] MCP 工具真实调用")
+    url = (os.environ.get("PLATFORM_MCP_URL")
+           or "http://127.0.0.1:8021/mcp")
+    try:
+        import json as _json
+        import urllib.request as _u
+
+        H = {"Content-Type": "application/json",
+             "Accept": "application/json, text/event-stream"}
+        SID = {"v": ""}
+
+        def _post(body, sid=""):
+            h = dict(H)
+            if sid:
+                h["mcp-session-id"] = sid
+            req = _u.Request(url, data=_json.dumps(body).encode("utf-8"),
+                             headers=h, method="POST")
+            with _u.urlopen(req, timeout=30) as r:
+                sid2 = r.headers.get("mcp-session-id") or sid
+                SID["v"] = sid2
+                raw = r.read().decode("utf-8", "replace")
+            if "data: " in raw:
+                raw = raw.split("data: ", 1)[-1].strip()
+            return _json.loads(raw)
+
+        # 1) 握手
+        _post({"jsonrpc": "2.0", "id": 1, "method": "initialize",
+               "params": {"protocolVersion": "2024-11-05", "capabilities": {},
+                          "clientInfo": {"name": "preflight", "version": "1"}}})
+        sid = SID["v"]
+
+        # 2) 必须暴露 selfcheck（本次新增的自诊工具）
+        tl = _post({"jsonrpc": "2.0", "id": 2, "method": "tools/list",
+                    "params": {}}, sid)["result"]["tools"]
+        names = [t["name"] for t in tl]
+        if "selfcheck" in names:
+            _ok("已暴露 selfcheck 自诊工具")
+        else:
+            _bad("MCP 缺少 selfcheck 工具",
+                 "镜像过旧（本次新增），无法自诊；当前 %d 个工具" % len(names))
+
+        # 3) 逐工具真实调用（只读工具；写/高成本工具不碰）
+        probe = {"selfcheck": {}, "capabilities": {}, "kol_list": {},
+                 "llm_status": {}, "qa_queue_status": {}}
+        failed, passed = [], 0
+        for name, args in probe.items():
+            if name not in names:
+                continue
+            try:
+                res = _post({"jsonrpc": "2.0", "id": 9, "method": "tools/call",
+                             "params": {"name": name, "arguments": args}},
+                            sid).get("result", {})
+                if res.get("isError") is True:
+                    txt = "".join(c.get("text", "") for c in res.get("content", []))
+                    failed.append("%s: %s" % (name, txt[:120]))
+                else:
+                    passed += 1
+            except Exception as e:
+                failed.append("%s: %s" % (name, str(e)[:120]))
+
+        if failed:
+            _bad("MCP 工具调用失败 %d/%d" % (len(failed), passed + len(failed)),
+                 "；".join(failed)[:400])
+        else:
+            _ok("MCP 工具真实调用通过 — %d/%d" % (passed, passed))
+
+        # 4) 鉴权：无 Key 时端点等于完全开放（写接口暴露），必须报失败。
+        #    Key 由 `.env` 提供（_load_env_files 已加载），故服务器上可判定；
+        #    本机裸跑 preflight 时未配置属正常，只提示不判失败。
+        if os.environ.get("PLATFORM_API_KEYS"):
+            _ok("MCP 鉴权已配置（PLATFORM_API_KEYS 非空）")
+        elif os.path.isdir("/opt/kol-skills-platform"):
+            _bad("MCP 未配置任何 API Key",
+                 "端点对任何来源都无鉴权（kol_add_prediction 等写接口暴露）")
+        else:
+            _ok("MCP 鉴权 —— 已跳过（本机未配置 Key，属正常）")
+
+    except Exception as e:
+        # 连不上 → 可能本机没跑 MCP；服务器上则视为失败
+        if os.path.isdir("/opt/kol-skills-platform"):
+            _bad("MCP 端点不可达", "%s: %s" % (url, str(e)[:120]))
+        else:
+            _ok("MCP 工具检查 —— 已跳过（本机未运行 MCP，%s）" % str(e)[:60])
+
+
 def check_planner():
     """规划链路配置：防「选错技能」与「静默失效」。
 
@@ -1128,7 +1231,7 @@ def check_planner():
       · **失败可见** —— 规划失败最常见原因是 Kimi 组织级 3 RPM 限流；
         若静默返回空技能列表，日志里看不出发生过什么。
     """
-    print("\n[12/16] 规划链路")
+    print("\n[17/17] 规划链路")
     try:
         sa = importlib.import_module("skill_agent")
     except Exception as e:
@@ -1253,9 +1356,10 @@ def main():
     check_deploy_scripts()
     check_log_rotation()
     check_backup()
+    check_mcp_tools()
     check_planner()
     if args.quick:
-        print("\n[5/16] 真实取数 —— 已跳过（--quick）")
+        print("\n[5/17] 真实取数 —— 已跳过（--quick）")
     else:
         check_live()
 
