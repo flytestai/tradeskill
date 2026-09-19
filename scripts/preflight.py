@@ -995,8 +995,13 @@ def check_backup():
     if not os.path.isdir(root):
         _bad("无备份目录", "%s 不存在（关键数据无保护）" % root)
         return
+    # ⚠️ 必须排除恢复前的安全副本（_pre-restore-*）——
+    #    它是 restore_data.sh 在恢复前自动存的「可回退」副本，
+    #    不是日常快照：参与排序会**顶替真实快照**，
+    #    让「新鲜度」判断失真（实测踩到）。
     snaps = sorted(d for d in os.listdir(root)
-                   if os.path.isdir(os.path.join(root, d)))
+                   if os.path.isdir(os.path.join(root, d))
+                   and not d.startswith("_pre-restore"))
     if not snaps:
         _bad("无任何备份快照", "backup_data.sh 可能未运行")
         return

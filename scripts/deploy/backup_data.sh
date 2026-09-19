@@ -115,7 +115,8 @@ done
 
 # ---- 轮转：只保留最近 N 天 --------------------------------------------------
 if [ -d "$BACKUP_ROOT" ]; then
-    ls -1dt "$BACKUP_ROOT"/*/ 2>/dev/null | tail -n +$((KEEP_DAYS + 1)) | while read -r old; do
+    # 排除 _pre-restore-*（恢复前安全副本，单独保留，不参与快照轮转）
+    ls -1dt "$BACKUP_ROOT"/*/ 2>/dev/null | grep -v '/_pre-restore'         | tail -n +$((KEEP_DAYS + 1)) | while read -r old; do
         rm -rf "$old"
     done
 fi
