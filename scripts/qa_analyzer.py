@@ -78,7 +78,14 @@ LOG = os.path.join(SKILL_DIR, "data", "_qa_analyzer.log")
 #
 # 注意：规则路由已先提供基础数据，故 AI 增强即使超时也只损失「额外维度」，
 # 不会再出现「零数据」。
-AI_ENHANCE_BUDGET = int(os.environ.get("QA_AI_BUDGET", "55"))
+# 2026-09-20 调整：55 → 70
+#   原因：LLM 切换到 glm-5.3（推理模型），规划延迟显著增加
+#         （实测稳态 11.6~14.7s，冷启动 25.2s）。
+#         原 55s 预算下 PLAN_TIMEOUT 只能给到 50s，余量偏紧。
+#   安全性：Flask 的 PLATFORM_SCRIPT_TIMEOUT=120s 是真正天花板，
+#         70s 预算离它还有 50s 安全垫。
+#   实测端到端：上下文 56.2s + 生成 6.2s = 62.4s，在 70s 预算内 ✅
+AI_ENHANCE_BUDGET = int(os.environ.get("QA_AI_BUDGET", "70"))
 
 
 def log(msg: str) -> None:

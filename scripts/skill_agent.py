@@ -761,11 +761,18 @@ CONTEXT_EXTRA_PER_ROUND = _cfg_int("CONTEXT_EXTRA_PER_ROUND", 4)
 #         （用户看不出问题，但 AI 规划实际失效）。
 #     · 故默认提到 50s。
 #
-#   ★ 上限约束：**必须 < qa_analyzer.AI_ENHANCE_BUDGET（默认 55s）**。
+#   ★ 上限约束：**必须 < qa_analyzer.AI_ENHANCE_BUDGET**。
 #     该预算是「规划 + 多轮补取」的总时长，PLAN_TIMEOUT 只是其中一段。
-#     若 PLAN_TIMEOUT ≥ 该预算，外层会先超时、内层白等，反而更糟 ——
-#     故不能直接设成 60s 或更大。
-PLAN_TIMEOUT = _cfg_int("PLAN_TIMEOUT", 50)
+#     若 PLAN_TIMEOUT ≥ 该预算，外层会先超时、内层白等，反而更糟。
+#
+#   2026-09-20 二次调整（按用户要求放宽）：
+#     QA_AI_BUDGET      55 → 70s
+#     PLAN_TIMEOUT      50 → 60s
+#     实测端到端：上下文 56.2s + 生成 6.2s = 62.4s
+#     逐层核对：nginx 180s / Flask 120s / 预算 70s / 规划 60s —— 全部放得下 ✅
+#     （Flask 的 PLATFORM_SCRIPT_TIMEOUT=120s 是真正的天花板，
+#       70s 预算离它还有 50s 安全垫）
+PLAN_TIMEOUT = _cfg_int("PLAN_TIMEOUT", 60)
 #: 多轮补取时交给模型的「已取数据」节选长度（字符）
 COLLECTED_BRIEF = _cfg_int("CONTEXT_COLLECTED_BRIEF", 6000)
 
