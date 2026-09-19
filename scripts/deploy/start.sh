@@ -128,6 +128,28 @@ if [ "$WITH_MCP" = "1" ]; then
         # --no-healthcheck：MCP 镜像继承了 Dockerfile 的 HEALTHCHECK（探 /healthz），
         # 但 MCP 只暴露 /mcp（POST + SSE），探 /healthz 恒为 404，
         # 会把容器误标为 unhealthy。故此处显式关闭健康检查。
+        # data 挂载模式：默认只读（MCP 只提供查询，不需要写）。
+        #
+        # ⚠️ 但这个默认值曾经害死人（2026-09-19 实测）
+        #    MCP 原先**硬编码** `:ro`，而 SQLite 默认以读写模式打开数据库、
+        #    需要创建 journal —— 在只读文件系统上直接抛
+        #        sqlite3.OperationalError: unable to open database file
+        #    于是所有依赖数据库的工具（kol_list/kol_records/kol_summary/
+        #    kol_accuracy/kol_predictions…）全部失败。
+        #
+        #    这一层被「容器无法创建线程」那层完全掩盖，直到线程问题修掉
+        #    才暴露出来。现在**两侧都已加固**：
+        #      · 脚本侧：纯读脚本改用只读 URI（mode=ro&immutable=1）
+        #      · 部署侧：本开关，必要时可切成读写
+        #    设 MCP_DATA_RW=1 即可恢复读写挂载（如确有写入需求）。
+        _DATA_MOUNT="$SKILL_DIR/data:/app/data"
+        if [ "${MCP_DATA_RW:-0}" = "1" ]; then
+            echo "  ℹ️  MCP data 挂载：读写（MCP_DATA_RW=1）"
+        else
+            _DATA_MOUNT="$_DATA_MOUNT:ro"
+            echo "  ℹ️  MCP data 挂载：只读（SQLite 走只读 URI，已适配）"
+        fi
+
         echo "  → 启动 $MCP_NAME (127.0.0.1:$MCP_PORT -> 8000)"
         docker run -d \
             --name "$MCP_NAME" \
@@ -136,7 +158,7 @@ if [ "$WITH_MCP" = "1" ]; then
             -p "127.0.0.1:${MCP_PORT}:8000" \
             --env-file "$ENV_RUNTIME" \
             -e PLATFORM_HOST=0.0.0.0 \
-            -v "$SKILL_DIR/data":/app/data:ro \
+            -v "$_DATA_MOUNT" \
             -v "$SKILL_DIR/sync":/app/sync \
             -v "$SKILL_DIR/vendor":/app/vendor:ro \
             --memory 400m --memory-swap 800m --cpus 0.8 \

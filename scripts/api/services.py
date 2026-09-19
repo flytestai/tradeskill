@@ -420,8 +420,6 @@ def selfcheck() -> dict:
     「容器里到底缺了什么」。这个函数把「工具能不能跑」拆成可判定的几项，
     并在 MCP 启动时打印，使同类故障下次能一眼定位。
     """
-    import shutil
-
     checks = {}
 
     # 1) 解释器
@@ -442,6 +440,14 @@ def selfcheck() -> dict:
     #    ⚠️ 表名以 db_init.py 为准：kol_records / predictions / analysis_reports。
     #    此前误写成 kol_opinions（库文件名），导致自检恒定报红 —— 自检本身
     #    也会说谎，所以这里连"表是否存在"一起查。
+    #
+    #    ⚠️ 必须用 sqlite3 的**只读 URI**打开（见 api/config.db_uri）：
+    #    MCP 容器把 data 挂成只读（start.sh 的 :ro，因该容器不需要写数据），
+    #    而 SQLite 默认以读写模式打开、需要建 journal 文件，
+    #    在只读文件系统上直接抛 "unable to open database file"。
+    #    实测（2026-09-19，服务器）：
+    #       普通 connect('/app/data/kol_opinions.db')      → 失败
+    #       connect('file:...?mode=ro&immutable=1', uri=True) → 748 行 ✅
     dbp = config.db_path()
     # ⚠️ rows 必须在这里初始化：数据库打不开时会走 except 分支，
     #    而下方 checks["database"] 无条件引用 rows —— 漏了就会
@@ -450,7 +456,7 @@ def selfcheck() -> dict:
     needed_tables = ["kol_records", "predictions"]
     try:
         import sqlite3
-        con = sqlite3.connect("file:%s?mode=ro" % dbp, uri=True)
+        con = sqlite3.connect(config.db_uri(), uri=True)
         tables = [r[0] for r in con.execute(
             "select name from sqlite_master where type='table'")]
         missing_tables = [t for t in needed_tables if t not in tables]
@@ -467,6 +473,12 @@ def selfcheck() -> dict:
                           "records": rows}
 
     # 4) 依赖（importlib.util 不随 importlib 自动加载，须显式导入）
+    #
+    # ⚠️ 只检查**平台代码真正 import 的**模块，否则自检会变成噪音源。
+    #    本轮踩过：曾把 `requests` 列为必需依赖并报 False，但全仓库检索
+    #    scripts/api 与平台脚本**没有任何** import requests 的地方
+    #    （bee_client 走 urllib，REST 用 flask）—— 纯属误报，
+    #    会让"自检未通过"看起来像故障，反而淹没真实问题。
     import importlib.util
 
     def _has(mod):
@@ -476,9 +488,9 @@ def selfcheck() -> dict:
             return False
 
     checks["deps"] = {
-        "requests": _has("requests"),
-        "flask": _has("flask") or shutil.which("flask") is not None,
-        "mcp": _has("mcp"),
+        "mcp": _has("mcp"),          # MCP 服务端（本进程必需）
+        "flask": _has("flask"),      # REST 服务端（同镜像）
+        "uvicorn": _has("uvicorn"),  # MCP 的 HTTP 传输（run_http 依赖）
     }
 
     checks["ok"] = bool(

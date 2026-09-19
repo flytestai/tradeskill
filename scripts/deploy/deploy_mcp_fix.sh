@@ -85,8 +85,13 @@ update_files() {
     local files="scripts/api/mcp_server.py
 scripts/api/services.py
 scripts/api/auth.py
+scripts/api/config.py
+scripts/db_query.py
+scripts/kol_compare.py
+scripts/predict_track.py
 scripts/preflight.py
 scripts/deploy/deploy_mcp_fix.sh
+scripts/deploy/start.sh
 scripts/deploy/nginx-skill.conf
 scripts/deploy/install.sh
 scripts/deploy/requirements-mcp.txt"
@@ -135,6 +140,8 @@ grep -q "RequireAuthMiddleware" scripts/api/mcp_server.py \
     || die "缺少 RequireAuthMiddleware —— 代码不是最新，请加 --update"
 grep -q "_patch_inline_threads" scripts/api/mcp_server.py \
     || die "缺少线程修复 _patch_inline_threads —— 代码不是最新，请加 --update"
+grep -q "def db_uri" scripts/api/config.py \
+    || die "缺少只读 URI 修复（config.db_uri）—— 代码不是最新，请加 --update"
 echo "  ✅ 待部署代码含本次修复（_guard / selfcheck / RequireAuthMiddleware / 线程自救）"
 
 # 鉴权键是否就绪
@@ -200,6 +207,17 @@ else
     echo "  （旧容器未运行，跳过旧容器探针）"
 fi
 
+# data 挂载：默认只读（MCP 只查询）。
+# 脚本侧已改用只读 URI（mode=ro&immutable=1），故只读挂载下也能正常读写
+# 数据库内容（纯 SELECT）。如需写入，设 MCP_DATA_RW=1。
+_DATA_MOUNT="$SKILL_DIR/data:/app/data"
+if [ "${MCP_DATA_RW:-0}" = "1" ]; then
+    echo "  ℹ️  data 挂载：读写（MCP_DATA_RW=1）"
+else
+    _DATA_MOUNT="$_DATA_MOUNT:ro"
+    echo "  ℹ️  data 挂载：只读（SQLite 走只读 URI，已验证可用）"
+fi
+
 docker rm -f "$MCP_NAME" >/dev/null 2>&1 || true
 docker run -d \
     --name "$MCP_NAME" \
@@ -208,7 +226,7 @@ docker run -d \
     -p "127.0.0.1:${MCP_PORT}:8000" \
     --env-file "$ENV_RUNTIME" \
     -e PLATFORM_HOST=0.0.0.0 \
-    -v "$SKILL_DIR/data":/app/data:ro \
+    -v "$_DATA_MOUNT" \
     -v "$SKILL_DIR/sync":/app/sync \
     -v "$SKILL_DIR/vendor":/app/vendor:ro \
     --memory 400m --memory-swap 800m --cpus 0.8 \

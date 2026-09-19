@@ -34,10 +34,31 @@ CREATE INDEX IF NOT EXISTS idx_pred_verdict ON predictions(verdict);
 """
 
 def connect():
-    conn = sqlite3.connect(DB_PATH, timeout=10)
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("PRAGMA busy_timeout=5000")
-    return conn
+    """连接数据库。
+
+    ⚠️ 自动降级（2026-09-19 服务器实测新增）
+    ----------------------------------------
+    本模块既可写（--add/--verify）也可纯读（--list/--report）。
+    MCP 容器把 data 目录挂成**只读**，此时：
+      · 读写连接在建 journal 时抛
+        `sqlite3.OperationalError: unable to open database file`
+      · `PRAGMA journal_mode=WAL` 同样需要写权限，也会失败
+    → 导致 predict_track 的**只读**用例（预测列表/准确率报告）在 MCP 侧
+      也一并失效。
+
+    故：先按读写尝试；失败则回退为只读 URI（mode=ro&immutable=1）。
+    只读连接下写操作由 SQLite 自行拒绝，语义清晰，不会静默写坏数据。
+    """
+    try:
+        conn = sqlite3.connect(DB_PATH, timeout=10)
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA busy_timeout=5000")
+        return conn
+    except sqlite3.OperationalError:
+        p = str(DB_PATH).replace("\\", "/")
+        if not p.startswith("/"):
+            p = "/" + p
+        return sqlite3.connect("file:%s?mode=ro&immutable=1" % p, uri=True)
 
 def init():
     conn = connect()
