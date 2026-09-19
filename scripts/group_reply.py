@@ -196,9 +196,49 @@ def build_p2p_message(answer, add_disclaimer=True):
     return "\n".join(lines)
 
 
-def send_to_group(markdown, chat_id, idem_key):
-    """通过 Card 2.0（机器人身份）发到群，返回是否成功。"""
-    return send_card(markdown, chat_id=chat_id, title="荔枝群问答",
+#: chat_id → 群名（用于卡片标题按群自适应，避免「张冠李戴」）
+GROUP_TITLES = {
+    "VIP_PUSH_CHAT_ID": "荔枝群问答",
+    "REVIEW_CHAT_ID": "复盘群问答",
+}
+
+
+def _title_for_chat(chat_id):
+    """按目标群返回合适的卡片标题。
+
+    ⚠️ 为什么必须自适应（实测踩坑）
+      标题原先**硬编码为「荔枝群问答」**，于是只要回复发到别的群，
+      卡片上仍写着「荔枝群问答」—— 用户会直接理解为
+      「**荔枝群的问答跑到这个群来了**」，即典型的「串群」现象。
+
+      尤其在本项目开启「合并为一套处理」后：每日复盘群的用户提问会被
+      bot 桥接给 kol 问答，回复就发在复盘群，但标题写着「荔枝群问答」，
+      必然被误认为串群。故标题必须跟着目标群走。
+      可用 --title 显式覆盖；无法识别群时退化为中性标题「群问答」。
+    """
+    cid = (chat_id or "").strip()
+    if not cid:
+        return "群问答"
+    for env_key, title in GROUP_TITLES.items():
+        try:
+            with open(LOCAL_ENV, "r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if line.startswith(env_key + "="):
+                        if line.split("=", 1)[1].strip() == cid:
+                            return title
+        except Exception:
+            pass
+    return "群问答"
+
+
+def send_to_group(markdown, chat_id, idem_key, title=""):
+    """通过 Card 2.0（机器人身份）发到群，返回是否成功。
+
+    :param title: 卡片标题；留空则按目标群自适应（见 _title_for_chat）
+    """
+    return send_card(markdown, chat_id=chat_id,
+                      title=title or _title_for_chat(chat_id),
                       subtitle="AI回复", template="blue", idem_key=idem_key)
 
 
@@ -214,6 +254,7 @@ def main():
     ap.add_argument("--chat-id", default="", help="目标 chat_id（群聊默认 VIP_PUSH_CHAT_ID；私信必填）")
     ap.add_argument("--chat-type", default="group", choices=["group", "p2p"], help="发送目标：group=群聊 / p2p=私信（默认 group）")
     ap.add_argument("--no-disclaimer", action="store_true", help="不加免责声明（默认加）")
+    ap.add_argument("--title", default="", help="卡片标题（留空则按目标群自适应）")
     ap.add_argument("--dry-run", action="store_true", help="只打印消息，不发送")
     args = ap.parse_args()
 
@@ -258,7 +299,7 @@ def main():
     idem_key = idem_prefix + hashlib.md5(
         ("%s|%s|%s" % (args.sender_id or args.sender, question, answer)).encode("utf-8")
     ).hexdigest()[:16]
-    ok, err = send_to_group(markdown, chat_id, idem_key)
+    ok, err = send_to_group(markdown, chat_id, idem_key, args.title)
 
     # ⚠️ 兜底重试：若因「@ 的 open_id 无效」被拒（飞书 230099 / ErrCode 100290），
     #    去掉 <at> 再发一次 —— 宁可 @不到人，也不能让回复发不出去。
@@ -270,7 +311,7 @@ def main():
         markdown = build_message(args.sender_id, args.sender, question, answer,
                                  add_disclaimer=not args.no_disclaimer,
                                  force_text_mention=True)
-        ok, err = send_to_group(markdown, chat_id, idem_key + "t")
+        ok, err = send_to_group(markdown, chat_id, idem_key + "t", args.title)
 
     if ok:
         answered_at = datetime.now(timezone(timedelta(hours=8))).strftime("%Y-%m-%d %H:%M:%S")

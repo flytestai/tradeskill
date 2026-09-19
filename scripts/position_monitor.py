@@ -28,6 +28,22 @@ def connect():
     conn.row_factory = sqlite3.Row
     return conn
 
+LOCAL_ENV = os.path.join(SKILL_DIR, "data", "local_config.env")
+
+
+def _env_value(key, default=""):
+    """读取 data/local_config.env 里的配置（不存在返回 default）。"""
+    try:
+        with open(LOCAL_ENV, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if line.startswith(key + "="):
+                    return line.split("=", 1)[1].strip()
+    except Exception:
+        pass
+    return default
+
+
 def get_position_history(kol_name):
     """获取仓位变化历史（按时间正序）"""
     conn = connect()
@@ -190,8 +206,16 @@ def notify_once(args):
             msg += "\n⚠️⚠️ 已减到1米，接近清仓！"
         _save_state(size, rdate)
         try:
-            subprocess.run([BASH, os.path.join(SKILL_DIR, "scripts", "notify_group.sh"), msg],
-                           capture_output=True, timeout=30, cwd=SKILL_DIR)
+            # ⚠️ 必须显式指定目标群（实测踩坑）：
+            #    notify_group.sh 不传群 ID 时会默认发到 VIP_PUSH_CHAT_ID（荔枝群），
+            #    而仓位告警是**全局**的（按 kol_name 追踪，不属于任何来源群）——
+            #    若有人期望它发到复盘群，就会表现为「消息跑到别的群」。
+            #    故这里允许用 POSITION_ALERT_CHAT_ID 显式指定，未配置时保持原默认。
+            _alert_chat = _env_value("POSITION_ALERT_CHAT_ID", "")
+            _cmd = [BASH, os.path.join(SKILL_DIR, "scripts", "notify_group.sh"), msg]
+            if _alert_chat:
+                _cmd.append(_alert_chat)
+            subprocess.run(_cmd, capture_output=True, timeout=30, cwd=SKILL_DIR)
         except Exception as e:
             print("[WARN] 仓位告警发送失败: %s" % e)
         print("[ALERT] " + msg.replace("\n", " | "))
