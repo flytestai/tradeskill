@@ -98,7 +98,11 @@ ERRLOG="$DEPLOY_DIR/data/_qa_errors.log"
 "$PY" scripts/sync_litchi_auto.py --group litchi  >/dev/null 2>&1
 rc1=$?
 # ---- ② 拉取每日复盘群 @机器人 消息入队 ----
-"$PY" scripts/sync_litchi_auto.py --group review  >/dev/null 2>&1
+# 复盘群改由 trade365 bot 统一轮询（「合并为一套处理」）：
+#   trade365 与 kol 问答是同一个飞书应用、同一个群，两边各自轮询会导致
+#   用户 @ 一次被回两条。现由 trade365 bot 作为该群唯一轮询器，
+#   非交易命令再桥接回 kol 问答（scripts/qa_oneshot.py）。
+# "$PY" scripts/sync_litchi_auto.py --group review  >/dev/null 2>&1
 rc2=$?
 # ---- ③ 处理队列（Kimi 分析 → 回复到群）----
 "$PY" scripts/qa_analyzer.py >/dev/null 2>&1
