@@ -96,7 +96,7 @@ CORE_MODULES = [
 
 
 def check_imports():
-    print("\n[1/15] 模块导入")
+    print("\n[1/16] 模块导入")
     bad = []
     for m in CORE_MODULES:
         if not os.path.isfile(os.path.join(SCRIPTS, m + ".py")):
@@ -117,7 +117,7 @@ def check_imports():
 # ---------------------------------------------------------------------------
 
 def check_contract():
-    print("\n[2/15] 接口契约")
+    print("\n[2/16] 接口契约")
     try:
         cf = importlib.import_module("context_format")
         sa = importlib.import_module("skill_agent")
@@ -181,7 +181,7 @@ def check_contract():
 # ---------------------------------------------------------------------------
 
 def check_format_consistency():
-    print("\n[3/15] 格式化口径一致性")
+    print("\n[3/16] 格式化口径一致性")
     try:
         sa = importlib.import_module("skill_agent")
         sr = importlib.import_module("skill_router")
@@ -224,7 +224,7 @@ def check_format_consistency():
 # ---------------------------------------------------------------------------
 
 def check_config():
-    print("\n[4/15] 配置读取")
+    print("\n[4/16] 配置读取")
     try:
         cf = importlib.import_module("context_format")
     except Exception as e:
@@ -253,7 +253,7 @@ def check_config():
 # ---------------------------------------------------------------------------
 
 def check_live():
-    print("\n[5/15] 真实取数（联网）")
+    print("\n[5/16] 真实取数（联网）")
     try:
         sa = importlib.import_module("skill_agent")
         sr = importlib.import_module("skill_router")
@@ -301,7 +301,7 @@ def check_state_files():
       · 水位文件被截断 → 返回空 → 机器人**重新拉取全部历史并重复回复**
       · 去重文件被截断 → 返回 {} → **重复回复所有历史问题**
     """
-    print("\n[6/15] 状态文件安全性")
+    print("\n[6/16] 状态文件安全性")
     try:
         sj = importlib.import_module("safe_json")
     except Exception as e:
@@ -362,7 +362,7 @@ def check_send_channel():
       2. 幂等键只在 lark-cli 回退通道传，而容器内 lark-cli 不可用、
          永远走纯 Python 通道 → **生产环境幂等保护实际失效**。
     """
-    print("\n[7/15] 发送通道")
+    print("\n[7/16] 发送通道")
     import re as _re
     import os as _os
 
@@ -469,7 +469,7 @@ def check_http_errors():
       · 每个 404 都打印完整 traceback，日志被扫描流量刷满，
         真实故障的堆栈反而被淹没
     """
-    print("\n[8/15] HTTP 错误语义")
+    print("\n[8/16] HTTP 错误语义")
     import os as _os
 
     p = _os.path.join(SCRIPTS, "api", "rest_app.py")
@@ -531,7 +531,7 @@ def check_timeout_budget():
     而每层自己都「没超时」，排查时极难定位。
     故此处断言各常量之间存在正确的大小关系。
     """
-    print("\n[9/15] 超时预算有界性")
+    print("\n[9/16] 超时预算有界性")
     # ⚠️ services 位于 scripts/api/ 包内，而 preflight 在 scripts/ 下运行，
     #    sys.path 里没有 scripts/ —— 需要显式补上，否则 ModuleNotFoundError
     #    （实测：宿主机自检因此误报失败，并正确拦下了部署）。
@@ -600,7 +600,7 @@ def check_group_isolation():
     本检查断言：标题随目标群自适应（荔枝群/复盘群/未知群各不相同），
     且 send_to_group 支持显式主题覆盖。
     """
-    print("\n[10/15] 群隔离")
+    print("\n[10/16] 群隔离")
     import os as _os
     try:
         gr = importlib.import_module("group_reply")
@@ -664,7 +664,7 @@ def check_levels():
 
       故这里逐项断言「容易漂移的配置点」，而不是只看脚本能否跑通。
     """
-    print("\n[11/15] 关键位刷新配置")
+    print("\n[11/16] 关键位刷新配置")
 
     p = os.path.join(SCRIPTS, "level_refresh.py")
     if not os.path.isfile(p):
@@ -789,7 +789,7 @@ def check_undefined_symbols():
       本检查用 AST 找出「加载时引用、但模块内无定义也无导入」的名字，
       把这类问题拦在部署前。
     """
-    print("\n[7/15] 未定义符号（静态）")
+    print("\n[7/16] 未定义符号（静态）")
     import ast as _ast
 
     # 这些是内置/环境自动注入的常见名字，不检查
@@ -855,7 +855,7 @@ def check_deploy_scripts():
         1. 所有 .sh 必须是 LF 行尾（.gitattributes 明确要求 *.sh eol=lf）
         2. 所有 .sh 必须通过 `bash -n` 语法检查
     """
-    print("\n[8/15] 部署脚本")
+    print("\n[8/16] 部署脚本")
     import glob as _glob
     import subprocess as _sp
 
@@ -932,7 +932,7 @@ def check_log_rotation():
       本检查断言：轮转配置存在、可被 logrotate 解析、且 timer 在跑。
       （非 Linux / 无 logrotate 的环境优雅跳过，不误报）
     """
-    print("\n[9/15] 日志轮转")
+    print("\n[9/16] 日志轮转")
     import shutil as _sh
     import subprocess as _sp
 
@@ -971,6 +971,83 @@ def check_log_rotation():
         _ok("logrotate.timer 检查 —— 已跳过（无 systemctl）")
 
 
+def check_backup():
+    """关键数据备份检查。
+
+    ⚠️ 为什么需要（实测结论）
+      平台有一批**不可重建**的数据，此前**完全没有备份**：
+        · price_alerts.json       用户设的价位提醒（丢了要重设）
+        · group_qa_answered.json  问答去重（丢了会重复回复）
+        · kol_opinions.db         大V言论库（可重同步但耗时）
+        · trade365 meetings/review 量化推荐与复盘历史（不可重建）
+      原设计依赖 `sync.py push` 推 GitHub，但实测**服务器没有 git 凭据**
+      （无 credential.helper、无 ~/.git-credentials）→ 推送必然失败。
+      故改用本地快照 backup_data.sh（每日 23:30），本检查断言它在正常工作。
+
+      （非服务器环境优雅跳过，不误报）
+    """
+    print("\n[10/16] 数据备份")
+    root = "/opt/kol-backups"
+    if not os.path.isdir("/opt/kol-skills-platform/data"):
+        _ok("备份检查 —— 已跳过（非服务器环境）")
+        return
+
+    if not os.path.isdir(root):
+        _bad("无备份目录", "%s 不存在（关键数据无保护）" % root)
+        return
+    snaps = sorted(d for d in os.listdir(root)
+                   if os.path.isdir(os.path.join(root, d)))
+    if not snaps:
+        _bad("无任何备份快照", "backup_data.sh 可能未运行")
+        return
+
+    latest = os.path.join(root, snaps[-1])
+    try:
+        files = []
+        for dp, _dn, fn in os.walk(latest):
+            files += [os.path.join(dp, f) for f in fn]
+        if not files:
+            _bad("最近快照为空", latest)
+        else:
+            _ok("备份快照存在", "%s（%d 个文件）" % (snaps[-1], len(files)))
+    except Exception as e:
+        _bad("快照读取失败", str(e)[:80])
+        return
+
+    # 关键文件必须都在
+    must = ["price_alerts.json", "group_qa_answered.json", "kol_opinions.db",
+            "meetings.json", "review.json"]
+    names = {os.path.basename(f) for f in files}
+    lack = [m for m in must if m not in names]
+    if lack:
+        _bad("快照缺关键文件", ", ".join(lack))
+    else:
+        _ok("关键数据均已备份", "5 类")
+
+    # 备份是否新鲜（超 3 天说明 cron 没跑）
+    try:
+        import datetime as _dt
+        d = _dt.datetime.strptime(snaps[-1][:10], "%Y-%m-%d")
+        days = (_dt.datetime.now() - d).days
+        if days > 3:
+            _bad("备份已过期 %d 天" % days, "检查 cron: backup_data.sh 是否在跑")
+        else:
+            _ok("备份新鲜", "%s（%d 天前）" % (snaps[-1][:10], days))
+    except Exception:
+        pass
+
+    # cron 是否注册
+    try:
+        import subprocess as _sp
+        r = _sp.run(["crontab", "-l"], capture_output=True, text=True, timeout=15)
+        if "backup_data.sh" in (r.stdout or ""):
+            _ok("已注册定时备份")
+        else:
+            _bad("未注册定时备份", "建议每日 cron 调 backup_data.sh")
+    except Exception:
+        _ok("定时备份检查 —— 已跳过（无 crontab）")
+
+
 def check_planner():
     """规划链路配置：防「选错技能」与「静默失效」。
 
@@ -990,7 +1067,7 @@ def check_planner():
       · **失败可见** —— 规划失败最常见原因是 Kimi 组织级 3 RPM 限流；
         若静默返回空技能列表，日志里看不出发生过什么。
     """
-    print("\n[12/15] 规划链路")
+    print("\n[12/16] 规划链路")
     try:
         sa = importlib.import_module("skill_agent")
     except Exception as e:
@@ -1110,9 +1187,10 @@ def main():
     check_undefined_symbols()
     check_deploy_scripts()
     check_log_rotation()
+    check_backup()
     check_planner()
     if args.quick:
-        print("\n[5/15] 真实取数 —— 已跳过（--quick）")
+        print("\n[5/16] 真实取数 —— 已跳过（--quick）")
     else:
         check_live()
 
