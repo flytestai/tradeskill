@@ -96,7 +96,7 @@ CORE_MODULES = [
 
 
 def check_imports():
-    print("\n[1/12] 模块导入")
+    print("\n[1/13] 模块导入")
     bad = []
     for m in CORE_MODULES:
         if not os.path.isfile(os.path.join(SCRIPTS, m + ".py")):
@@ -117,7 +117,7 @@ def check_imports():
 # ---------------------------------------------------------------------------
 
 def check_contract():
-    print("\n[2/12] 接口契约")
+    print("\n[2/13] 接口契约")
     try:
         cf = importlib.import_module("context_format")
         sa = importlib.import_module("skill_agent")
@@ -181,7 +181,7 @@ def check_contract():
 # ---------------------------------------------------------------------------
 
 def check_format_consistency():
-    print("\n[3/12] 格式化口径一致性")
+    print("\n[3/13] 格式化口径一致性")
     try:
         sa = importlib.import_module("skill_agent")
         sr = importlib.import_module("skill_router")
@@ -224,7 +224,7 @@ def check_format_consistency():
 # ---------------------------------------------------------------------------
 
 def check_config():
-    print("\n[4/12] 配置读取")
+    print("\n[4/13] 配置读取")
     try:
         cf = importlib.import_module("context_format")
     except Exception as e:
@@ -253,7 +253,7 @@ def check_config():
 # ---------------------------------------------------------------------------
 
 def check_live():
-    print("\n[5/12] 真实取数（联网）")
+    print("\n[5/13] 真实取数（联网）")
     try:
         sa = importlib.import_module("skill_agent")
         sr = importlib.import_module("skill_router")
@@ -301,7 +301,7 @@ def check_state_files():
       · 水位文件被截断 → 返回空 → 机器人**重新拉取全部历史并重复回复**
       · 去重文件被截断 → 返回 {} → **重复回复所有历史问题**
     """
-    print("\n[6/12] 状态文件安全性")
+    print("\n[6/13] 状态文件安全性")
     try:
         sj = importlib.import_module("safe_json")
     except Exception as e:
@@ -341,8 +341,8 @@ def check_state_files():
         if not _os.path.isfile(path):
             continue
         try:
-            txt = io.open(path, encoding="utf-8").read() if False else open(
-                path, encoding="utf-8").read()
+            with open(path, encoding="utf-8") as _f:
+                txt = _f.read()
         except Exception:
             continue
         missing = [n for n in needs if n not in txt]
@@ -362,7 +362,7 @@ def check_send_channel():
       2. 幂等键只在 lark-cli 回退通道传，而容器内 lark-cli 不可用、
          永远走纯 Python 通道 → **生产环境幂等保护实际失效**。
     """
-    print("\n[7/12] 发送通道")
+    print("\n[7/13] 发送通道")
     import re as _re
     import os as _os
 
@@ -469,7 +469,7 @@ def check_http_errors():
       · 每个 404 都打印完整 traceback，日志被扫描流量刷满，
         真实故障的堆栈反而被淹没
     """
-    print("\n[8/12] HTTP 错误语义")
+    print("\n[8/13] HTTP 错误语义")
     import os as _os
 
     p = _os.path.join(SCRIPTS, "api", "rest_app.py")
@@ -531,7 +531,7 @@ def check_timeout_budget():
     而每层自己都「没超时」，排查时极难定位。
     故此处断言各常量之间存在正确的大小关系。
     """
-    print("\n[9/12] 超时预算有界性")
+    print("\n[9/13] 超时预算有界性")
     # ⚠️ services 位于 scripts/api/ 包内，而 preflight 在 scripts/ 下运行，
     #    sys.path 里没有 scripts/ —— 需要显式补上，否则 ModuleNotFoundError
     #    （实测：宿主机自检因此误报失败，并正确拦下了部署）。
@@ -600,7 +600,7 @@ def check_group_isolation():
     本检查断言：标题随目标群自适应（荔枝群/复盘群/未知群各不相同），
     且 send_to_group 支持显式主题覆盖。
     """
-    print("\n[10/12] 群隔离")
+    print("\n[10/13] 群隔离")
     import os as _os
     try:
         gr = importlib.import_module("group_reply")
@@ -664,7 +664,7 @@ def check_levels():
 
       故这里逐项断言「容易漂移的配置点」，而不是只看脚本能否跑通。
     """
-    print("\n[11/12] 关键位刷新配置")
+    print("\n[11/13] 关键位刷新配置")
 
     p = os.path.join(SCRIPTS, "level_refresh.py")
     if not os.path.isfile(p):
@@ -773,6 +773,70 @@ def check_levels():
         _ok("定时刷新检查 —— 已跳过（本环境无 crontab）")
 
 
+def check_undefined_symbols():
+    """静态扫描：模块里「用了但没定义/没导入」的符号。
+
+    ⚠️ 为什么需要（本项为此而生）
+      我修时区问题时把 `datetime.now()` 改成 `_bj_now()`，
+      **却漏了函数定义** —— 结果 auth_keepalive.py 与 kol_compare.py
+      一跑就 NameError。
+
+      这类错误 `py_compile` **抓不到**（语法完全合法），
+      只有真正执行到那一行才暴露。而 auth_keepalive 是维持飞书
+      refresh token 7 天滑动窗口的关键，它一崩窗口就不顺延，
+      最终会**需要人工扫码重新授权**。
+
+      本检查用 AST 找出「加载时引用、但模块内无定义也无导入」的名字，
+      把这类问题拦在部署前。
+    """
+    print("\n[7/13] 未定义符号（静态）")
+    import ast as _ast
+
+    # 这些是内置/环境自动注入的常见名字，不检查
+    _ALLOW = {"__name__", "__file__", "__doc__", "__builtins__", "self", "cls",
+              "args", "kwargs", "e", "exc", "i", "j", "k", "v", "x", "_", "__"}
+    bad = []
+    for fn in sorted(os.listdir(SCRIPTS)):
+        if not fn.endswith(".py") or fn.startswith("_"):
+            continue
+        fp = os.path.join(SCRIPTS, fn)
+        try:
+            with open(fp, encoding="utf-8") as f:
+                tree = _ast.parse(f.read())
+        except Exception:
+            continue
+        defined = set(dir(__builtins__)) | _ALLOW
+        for node in _ast.walk(tree):
+            if isinstance(node, (_ast.Import, _ast.ImportFrom)):
+                for a in node.names:
+                    defined.add((a.asname or a.name).split(".")[0])
+            elif isinstance(node, (_ast.FunctionDef, _ast.AsyncFunctionDef,
+                                   _ast.ClassDef)):
+                defined.add(node.name)
+                for a in getattr(node, "args", _ast.arguments([], [], None, [], [], None, [])).args:
+                    defined.add(a.arg)
+            elif isinstance(node, _ast.Name) and isinstance(node.ctx, _ast.Store):
+                defined.add(node.id)
+            elif isinstance(node, _ast.ExceptHandler) and node.name:
+                defined.add(node.name)
+            elif isinstance(node, (_ast.arg,)):
+                defined.add(node.arg)
+            elif isinstance(node, _ast.comprehension):
+                for t in _ast.walk(node.target):
+                    if isinstance(t, _ast.Name):
+                        defined.add(t.id)
+        for node in _ast.walk(tree):
+            if isinstance(node, _ast.Name) and isinstance(node.ctx, _ast.Load):
+                if node.id not in defined:
+                    bad.append("%s:%d %s" % (fn, node.lineno, node.id))
+    if bad:
+        # 只报「疑似漏定义」的前几条，避免噪声
+        for b in sorted(set(bad))[:5]:
+            _bad("疑似未定义符号", b)
+    else:
+        _ok("无未定义符号（全模块静态扫描）")
+
+
 def check_planner():
     """规划链路配置：防「选错技能」与「静默失效」。
 
@@ -792,7 +856,7 @@ def check_planner():
       · **失败可见** —— 规划失败最常见原因是 Kimi 组织级 3 RPM 限流；
         若静默返回空技能列表，日志里看不出发生过什么。
     """
-    print("\n[12/12] 规划链路")
+    print("\n[12/13] 规划链路")
     try:
         sa = importlib.import_module("skill_agent")
     except Exception as e:
@@ -909,9 +973,10 @@ def main():
     check_timeout_budget()
     check_group_isolation()
     check_levels()
+    check_undefined_symbols()
     check_planner()
     if args.quick:
-        print("\n[5/12] 真实取数 —— 已跳过（--quick）")
+        print("\n[5/13] 真实取数 —— 已跳过（--quick）")
     else:
         check_live()
 
