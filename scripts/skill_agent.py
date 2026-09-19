@@ -750,7 +750,22 @@ CONTEXT_EXTRA_PER_ROUND = _cfg_int("CONTEXT_EXTRA_PER_ROUND", 4)
 #     故 30s 对 k3 有充足余量；即便超时也有规则路由兜底，不会零数据。
 #     并且规则路由已作为兜底先行执行（见 qa_analyzer.build_context），
 #     故这里超时的代价只是「少一些增强数据」，不会再出现「零数据」。
-PLAN_TIMEOUT = _cfg_int("PLAN_TIMEOUT", 30)
+# ⚠️ 默认值 30 → 50（2026-09-20，为适配推理模型 glm-5.3）
+#
+#   历史沿革：
+#     · 原注释「实测 k2.6 约 5s，k3 约 21s，故 30s 对 k3 有充足余量」
+#       是针对 Kimi 的测量。
+#     · 2026-09-20 切换到阿里百炼 glm-5.3 后重新实测：
+#         规划稳态 11.6~14.7s，**冷启动 25.2s**
+#       → 30s 余量过小（冷启动占 84%），一旦超时会**静默回落规则路由**
+#         （用户看不出问题，但 AI 规划实际失效）。
+#     · 故默认提到 50s。
+#
+#   ★ 上限约束：**必须 < qa_analyzer.AI_ENHANCE_BUDGET（默认 55s）**。
+#     该预算是「规划 + 多轮补取」的总时长，PLAN_TIMEOUT 只是其中一段。
+#     若 PLAN_TIMEOUT ≥ 该预算，外层会先超时、内层白等，反而更糟 ——
+#     故不能直接设成 60s 或更大。
+PLAN_TIMEOUT = _cfg_int("PLAN_TIMEOUT", 50)
 #: 多轮补取时交给模型的「已取数据」节选长度（字符）
 COLLECTED_BRIEF = _cfg_int("CONTEXT_COLLECTED_BRIEF", 6000)
 
