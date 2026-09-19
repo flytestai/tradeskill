@@ -57,9 +57,29 @@ except Exception:
 
 #: 各供应商的默认端点与模型
 PRESETS = {
-    "kimi":   {"base": "https://api.moonshot.cn/v1", "model": "kimi-k3"},
+    "kimi":     {"base": "https://api.moonshot.cn/v1", "model": "kimi-k3"},
     "moonshot": {"base": "https://api.moonshot.cn/v1", "model": "kimi-k3"},
-    "openai": {"base": "https://api.openai.com/v1", "model": "gpt-4o-mini"},
+    "openai":   {"base": "https://api.openai.com/v1", "model": "gpt-4o-mini"},
+    # 阿里云百炼 DashScope（OpenAI 兼容模式）—— 2026-09-19 新增
+    #
+    # 为什么切换：Kimi 账号因余额不足被停用
+    #   （HTTP 429 / type=exceeded_current_quota_error / cash_balance 为负）。
+    #
+    # 实测对比（同一业务问句「上证3911 / 创业板3540，B反还是C杀」）：
+    #     qwen-plus       2.9s  带 MACD/KDJ 指标分析   ← 默认选它
+    #     qwen-flash      1.0s  带年线/通道分析
+    #     qwen3.8-max     6.5s  逻辑辩证
+    #     qwen3.7-max    11.9s  最专业
+    #     kimi-k3（旧）17.7~21.5s ← 换百炼后群问答明显更快
+    #
+    # 该端点实测可列出 255 个模型（Qwen3/DeepSeek/GLM 等第三方）；
+    # 本 preset 只固定默认模型，换模型改 LLM_MODEL 即可，无需改代码。
+    "bailian":   {"base": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+                  "model": "qwen-plus"},
+    "dashscope": {"base": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+                  "model": "qwen-plus"},
+    "aliyun":    {"base": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+                  "model": "qwen-plus"},
 }
 
 
@@ -126,16 +146,33 @@ def is_configured() -> bool:
 #    k3 反而更快，故规划默认改用 k3。
 #    规划单次超时由 skill_agent.PLAN_TIMEOUT 控制（默认 30s）；
 #    且规则路由已先行兜底，规划超时不会导致「零数据」。
-MODEL_BY_PURPOSE = {
-    "plan": os.environ.get("LLM_MODEL_PLAN", "kimi-k3"),
-    "summarize": os.environ.get("LLM_MODEL_SUMMARIZE", ""),   # 空=用默认 LLM_MODEL
-    "chat": "",
-}
+def _env(key: str) -> str:
+    """读取环境变量（优先进程环境，其次 .env/local_config）。"""
+    return (os.environ.get(key) or service_env(key, "") or "").strip()
 
 
 def model_for(purpose: str = "") -> str:
-    """按用途返回模型名（未配置则回退默认模型）。"""
-    m = MODEL_BY_PURPOSE.get(purpose or "", "")
+    """按用途返回模型名（未配置则回退默认模型）。
+
+    ⚠️ 这里**不能**用模块级常量硬编码模型名（2026-09-19 实测踩坑）
+    ------------------------------------------------------------------
+    原实现是模块级：
+        MODEL_BY_PURPOSE = {"plan": os.environ.get("LLM_MODEL_PLAN", "kimi-k3")}
+    于是切到阿里百炼后：
+        provider = bailian
+        base_url = https://dashscope.aliyuncs.com/...   ✅ 已跟随
+        model    = kimi-k3                              ❌ 仍指向 Kimi 的模型
+    → 会用 Kimi 的模型名去请求百炼，必然失败；而且失败原因
+      （模型不存在）与配置看起来"没问题"形成矛盾，极难排查。
+
+    根因：模块级常量在 import 时求值一次，且**默认值写死了某个供应商的模型**。
+    修复：改为运行时求值（函数内读取），默认值留空 → 回退到 provider 的默认模型。
+    这样「换供应商」只需改 LLM_PROVIDER / LLM_BASE_URL / LLM_API_KEY 三个变量，
+    模型名自动跟随；只有需要**按用途指定不同模型**时才设 LLM_MODEL_PLAN 等。
+    """
+    m = _env("LLM_MODEL_" + (purpose or "").upper()) if purpose else ""
+    if not m:
+        m = _env("LLM_MODEL")
     return m or model()
 
 
@@ -191,11 +228,29 @@ def chat(prompt: str, system: str = "", history: list = None,
         except urllib.error.HTTPError as e:
             detail = e.read().decode("utf-8", "replace")[:300]
             last_err = "HTTP %s: %s" % (e.code, detail)
-            # ⚠️ 429 必须重试：Moonshot 组织级限流在生产中很常见
-            #   （群问答每 2 分钟一轮，每轮「规划+汇总」两次调用，
-            #    并发或密集调用会触发 "Organization Rate limit exceeded"）。
-            #   退避时间取 3s / 8s / 16s，给足配额恢复时间。
+            # ⚠️ 429 承载两种【语义完全不同】的情况，必须区分（2026-09-19 实测）
+            # ------------------------------------------------------------------
+            # 【A】余额不足 / 账号停用 —— 重试永远无效，且会掩盖真实原因
+            #     实测 Moonshot：type=exceeded_current_quota_error
+            #       "account ... is suspended due to insufficient balance"
+            #     实测百炼同款语义亦可能以 429 返回（Arrearage / quota 类）。
+            #     → 直接抛出，文案里点明"欠费/停用，需充值"，让人一眼看懂。
+            #
+            # 【B】速率限制 —— 瞬时，重试有效
+            #     Moonshot 组织级限流在生产中很常见（群问答每 2 分钟一轮，
+            #     每轮「规划+汇总」两次调用）。退避 3s / 8s / 16s。
+            #
+            # 若不做区分，【A】会被当作【B】反复重试后报"调用失败"，
+            # 运维看到只会以为"限流了，等等就好" —— 而账户其实早已停用。
             if e.code == 429:
+                low = detail.lower()
+                quota_kw = ("insufficient balance", "exceeded_current_quota",
+                            "arrearage", "suspended", "quota exceeded",
+                            "insufficient_quota", "billing")
+                if any(k in low for k in quota_kw):
+                    raise LLMError(
+                        "LLM 账户欠费/额度用尽（非限流，重试无效，需充值或换 Key）: %s"
+                        % detail[:200])
                 if attempt < retries:
                     time.sleep(3.0 * (2 ** attempt))
                 continue
