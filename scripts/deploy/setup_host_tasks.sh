@@ -55,10 +55,8 @@ cd "$DEPLOY_DIR" || exit 1
 
 # 加载配置（.env 优先，回退 data/local_config.env）
 #
-# ⚠️ 必须剥离 CRLF 后再 source：配置文件若在 Windows 上编辑过会带 
-，
-#    source 时报 `$'
-': command not found`，且变量值尾部多出 
+# ⚠️ 必须剥离 CRLF 后再 source：配置文件若在 Windows 上编辑过会带 ，
+#    source 时报 `$'': command not found`，且变量值尾部多出 
 
 #    （实测导致 chat_id 长度 36 而非 35，飞书 API 报 invalid receive_id）。
 _load_env() {
@@ -66,8 +64,7 @@ _load_env() {
     [ -f "$f" ] || return 0
     local tmp
     tmp="$(mktemp)"
-    tr -d '
-' < "$f" > "$tmp"
+    tr -d '' < "$f" > "$tmp"
     set -a
     # shellcheck disable=SC1090
     . "$tmp"
