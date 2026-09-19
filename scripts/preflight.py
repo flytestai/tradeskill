@@ -1047,6 +1047,32 @@ def check_backup():
     except Exception:
         _ok("定时备份检查 —— 已跳过（无 crontab）")
 
+    # 恢复脚本必须存在（只有备份、没有恢复 = 没有备份）
+    try:
+        rs = os.path.join(SCRIPTS, "deploy", "restore_data.sh")
+        if os.path.isfile(rs):
+            _ok("恢复脚本存在", "restore_data.sh")
+        else:
+            _bad("缺少恢复脚本", "备份无法恢复 = 没有备份")
+    except Exception:
+        pass
+
+    # 服务器侧自监控必须注册（此前无任何主动告警）
+    #
+    # ⚠️ 背景：业务告警只覆盖行情事件，不覆盖「服务是否活着」；
+    #    而 Windows 侧的健康监控**已被禁用**。实测多次静默故障
+    #    （CRLF 致 9 任务全挂 / auth_keepalive 崩 / 镜像缺文件）
+    #    都是自己发现的、没有任何告警 —— 故必须自监控。
+    try:
+        import subprocess as _sp
+        r = _sp.run(["crontab", "-l"], capture_output=True, text=True, timeout=15)
+        if "selfcheck.sh" in (r.stdout or ""):
+            _ok("已注册服务器自监控")
+        else:
+            _bad("未注册服务器自监控", "故障不会主动告警")
+    except Exception:
+        pass
+
     # 跨机备份（GitHub Deploy Key）—— 2026-09-19 打通
     #
     # ⚠️ 背景：平台设计用 `sync/records.jsonl` 作**跨机共享的言论库**，
@@ -1186,7 +1212,11 @@ def check_planner():
             p2 = sa.plan("厦门钨业能买吗")
             n1, n2 = len(p1.get("skills") or []), len(p2.get("skills") or [])
             if n1 == 0 and n2 == 0:
-                _bad("规划实跑返回空", "可能限流；已回落规则路由，不阻断回答")
+                # ⚠️ 不该判为失败：规划返回空最常见的原因是
+                #    Kimi 组织级 3 RPM 限流，而 qa_analyzer 已把
+                #    **规则路由作为打底**，最坏情况仍有基础数据。
+                #    把它判失败会让「连跑几个检查」必然触发 429 而误报。
+                _ok("规划实跑返回空（限流），已回落规则路由兜底")
             elif n1 > 0 and n2 >= n1:
                 _ok("自适应生效", "简单问题 %d 项 / 复合问题 %d 项" % (n1, n2))
             else:
