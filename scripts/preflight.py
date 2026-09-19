@@ -96,7 +96,7 @@ CORE_MODULES = [
 
 
 def check_imports():
-    print("\n[1/13] 模块导入")
+    print("\n[1/14] 模块导入")
     bad = []
     for m in CORE_MODULES:
         if not os.path.isfile(os.path.join(SCRIPTS, m + ".py")):
@@ -117,7 +117,7 @@ def check_imports():
 # ---------------------------------------------------------------------------
 
 def check_contract():
-    print("\n[2/13] 接口契约")
+    print("\n[2/14] 接口契约")
     try:
         cf = importlib.import_module("context_format")
         sa = importlib.import_module("skill_agent")
@@ -181,7 +181,7 @@ def check_contract():
 # ---------------------------------------------------------------------------
 
 def check_format_consistency():
-    print("\n[3/13] 格式化口径一致性")
+    print("\n[3/14] 格式化口径一致性")
     try:
         sa = importlib.import_module("skill_agent")
         sr = importlib.import_module("skill_router")
@@ -224,7 +224,7 @@ def check_format_consistency():
 # ---------------------------------------------------------------------------
 
 def check_config():
-    print("\n[4/13] 配置读取")
+    print("\n[4/14] 配置读取")
     try:
         cf = importlib.import_module("context_format")
     except Exception as e:
@@ -253,7 +253,7 @@ def check_config():
 # ---------------------------------------------------------------------------
 
 def check_live():
-    print("\n[5/13] 真实取数（联网）")
+    print("\n[5/14] 真实取数（联网）")
     try:
         sa = importlib.import_module("skill_agent")
         sr = importlib.import_module("skill_router")
@@ -301,7 +301,7 @@ def check_state_files():
       · 水位文件被截断 → 返回空 → 机器人**重新拉取全部历史并重复回复**
       · 去重文件被截断 → 返回 {} → **重复回复所有历史问题**
     """
-    print("\n[6/13] 状态文件安全性")
+    print("\n[6/14] 状态文件安全性")
     try:
         sj = importlib.import_module("safe_json")
     except Exception as e:
@@ -362,7 +362,7 @@ def check_send_channel():
       2. 幂等键只在 lark-cli 回退通道传，而容器内 lark-cli 不可用、
          永远走纯 Python 通道 → **生产环境幂等保护实际失效**。
     """
-    print("\n[7/13] 发送通道")
+    print("\n[7/14] 发送通道")
     import re as _re
     import os as _os
 
@@ -469,7 +469,7 @@ def check_http_errors():
       · 每个 404 都打印完整 traceback，日志被扫描流量刷满，
         真实故障的堆栈反而被淹没
     """
-    print("\n[8/13] HTTP 错误语义")
+    print("\n[8/14] HTTP 错误语义")
     import os as _os
 
     p = _os.path.join(SCRIPTS, "api", "rest_app.py")
@@ -531,7 +531,7 @@ def check_timeout_budget():
     而每层自己都「没超时」，排查时极难定位。
     故此处断言各常量之间存在正确的大小关系。
     """
-    print("\n[9/13] 超时预算有界性")
+    print("\n[9/14] 超时预算有界性")
     # ⚠️ services 位于 scripts/api/ 包内，而 preflight 在 scripts/ 下运行，
     #    sys.path 里没有 scripts/ —— 需要显式补上，否则 ModuleNotFoundError
     #    （实测：宿主机自检因此误报失败，并正确拦下了部署）。
@@ -600,7 +600,7 @@ def check_group_isolation():
     本检查断言：标题随目标群自适应（荔枝群/复盘群/未知群各不相同），
     且 send_to_group 支持显式主题覆盖。
     """
-    print("\n[10/13] 群隔离")
+    print("\n[10/14] 群隔离")
     import os as _os
     try:
         gr = importlib.import_module("group_reply")
@@ -664,7 +664,7 @@ def check_levels():
 
       故这里逐项断言「容易漂移的配置点」，而不是只看脚本能否跑通。
     """
-    print("\n[11/13] 关键位刷新配置")
+    print("\n[11/14] 关键位刷新配置")
 
     p = os.path.join(SCRIPTS, "level_refresh.py")
     if not os.path.isfile(p):
@@ -789,7 +789,7 @@ def check_undefined_symbols():
       本检查用 AST 找出「加载时引用、但模块内无定义也无导入」的名字，
       把这类问题拦在部署前。
     """
-    print("\n[7/13] 未定义符号（静态）")
+    print("\n[7/14] 未定义符号（静态）")
     import ast as _ast
 
     # 这些是内置/环境自动注入的常见名字，不检查
@@ -837,6 +837,74 @@ def check_undefined_symbols():
         _ok("无未定义符号（全模块静态扫描）")
 
 
+def check_deploy_scripts():
+    """部署脚本的语法与行尾检查（防「生成出来的脚本跑不了」）。
+
+    ⚠️ 为什么需要（本项为此而生，且是实测踩到的大坑）
+      `setup_host_tasks.sh` 曾是 **CRLF 行尾**，而它在 heredoc 里生成
+      `_run_task.sh` 时会把 CRLF 原样写入 —— 于是生成的脚本里
+      出现**真实的  字符**，其中 `tr -d '<CR>'` 更是把命令拆成两行、
+      引号无法闭合 → 整个脚本 `syntax error`。
+
+      后果：**9 个 cron 任务全部失败**（premarket / position-monitor /
+      monitor-alerts / auth-keepalive / react-cleanup…），
+      且因为 cron 丢弃输出，**没有任何报错可见** ——
+      直到手工用 cron 的真实路径跑一遍才发现。
+
+      故本检查：
+        1. 所有 .sh 必须是 LF 行尾（.gitattributes 明确要求 *.sh eol=lf）
+        2. 所有 .sh 必须通过 `bash -n` 语法检查
+    """
+    print("\n[8/14] 部署脚本")
+    import glob as _glob
+    import subprocess as _sp
+
+    shs = sorted(_glob.glob(os.path.join(SCRIPTS, "*.sh")) +
+                 _glob.glob(os.path.join(SCRIPTS, "deploy", "*.sh")))
+    if not shs:
+        _ok("无部署脚本需要检查")
+        return
+
+    crlf, syn = [], []
+    for f in shs:
+        try:
+            b = open(f, "rb").read()
+        except Exception:
+            continue
+        if b"\r\n" in b:
+            crlf.append(os.path.basename(f))
+        try:
+            r = _sp.run(["bash", "-n", f], capture_output=True, text=True, timeout=20)
+            if r.returncode != 0:
+                _last = (r.stderr or "").strip().splitlines()
+                syn.append("%s: %s" % (os.path.basename(f),
+                                       (_last[-1] if _last else "")[:70]))
+        except Exception:
+            pass
+
+    if crlf:
+        _bad("部署脚本含 CRLF 行尾", ", ".join(crlf[:5]) +
+             "（.gitattributes 要求 *.sh eol=lf；CRLF 会让生成的脚本含真实 \r）")
+    else:
+        _ok("部署脚本均为 LF 行尾", "%d 个" % len(shs))
+
+    if syn:
+        for x in syn[:4]:
+            _bad("部署脚本语法错误", x)
+    else:
+        _ok("部署脚本语法检查通过", "bash -n")
+
+    # 关键：cron 实际用的运行器必须存在且可执行
+    runner = os.path.join(SCRIPTS, "deploy", "_run_task.sh")
+    if os.path.isfile(runner):
+        if os.access(runner, os.X_OK):
+            _ok("_run_task.sh 存在且可执行")
+        else:
+            _bad("_run_task.sh 不可执行", "cron 会失败")
+    else:
+        _bad("缺少 _run_task.sh", "cron 的 9 个任务都会失败")
+
+
 def check_planner():
     """规划链路配置：防「选错技能」与「静默失效」。
 
@@ -856,7 +924,7 @@ def check_planner():
       · **失败可见** —— 规划失败最常见原因是 Kimi 组织级 3 RPM 限流；
         若静默返回空技能列表，日志里看不出发生过什么。
     """
-    print("\n[12/13] 规划链路")
+    print("\n[12/14] 规划链路")
     try:
         sa = importlib.import_module("skill_agent")
     except Exception as e:
@@ -974,9 +1042,10 @@ def main():
     check_group_isolation()
     check_levels()
     check_undefined_symbols()
+    check_deploy_scripts()
     check_planner()
     if args.quick:
-        print("\n[5/13] 真实取数 —— 已跳过（--quick）")
+        print("\n[5/14] 真实取数 —— 已跳过（--quick）")
     else:
         check_live()
 
