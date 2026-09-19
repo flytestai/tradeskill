@@ -1756,7 +1756,7 @@ def send(msg, dry_run=False, tag="summary"):
                 args = [native, "im", "+messages-send", "--user-id", user_id,
                         "--as", "bot", "--idempotency-key", idem,
                         "--markdown", msg, "--json"]
-            r = subprocess.run(args, capture_output=True, text=True, timeout=45, cwd=SKILL_DIR)
+            r = subprocess.run(args, capture_output=True, text=True, timeout=45, cwd=SKILL_DIR, encoding='utf-8', errors='replace')
             try:
                 data = json.loads(r.stdout or "{}")
             except json.JSONDecodeError:
@@ -1774,7 +1774,7 @@ def send(msg, dry_run=False, tag="summary"):
             f.write(msg)
         try:
             r = subprocess.run([BASH, NOTIFY, "@" + tmp_rel],
-                               capture_output=True, text=True, timeout=30, cwd=SKILL_DIR)
+                               capture_output=True, text=True, timeout=30, cwd=SKILL_DIR, encoding='utf-8', errors='replace')
             if r.returncode != 0:
                 print("[WARN] 汇总发送失败: %s" % ((r.stderr or r.stdout or "").strip()[:200]))
                 return False

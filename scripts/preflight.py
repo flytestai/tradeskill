@@ -761,7 +761,7 @@ def check_levels():
     # 7) 定时刷新是否已注册（有 cron 才算真正自动化）
     try:
         import subprocess as _sp
-        r = _sp.run(["crontab", "-l"], capture_output=True, text=True, timeout=15)
+        r = _sp.run(["crontab", "-l"], capture_output=True, text=True, timeout=15, encoding='utf-8', errors='replace')
         cron = (r.stdout or "")
         if "level_refresh" in cron or "_run_level_refresh" in cron:
             _ok("已注册定时刷新")
@@ -875,7 +875,7 @@ def check_deploy_scripts():
         if b"\r\n" in b:
             crlf.append(os.path.basename(f))
         try:
-            r = _sp.run(["bash", "-n", f], capture_output=True, text=True, timeout=20)
+            r = _sp.run(["bash", "-n", f], capture_output=True, text=True, timeout=20, encoding='utf-8', errors='replace')
             if r.returncode != 0:
                 _last = (r.stderr or "").strip().splitlines()
                 syn.append("%s: %s" % (os.path.basename(f),
@@ -952,7 +952,7 @@ def check_log_rotation():
     _ok("logrotate 配置存在", cfg)
 
     try:
-        r = _sp.run(["logrotate", "-d", cfg], capture_output=True, text=True, timeout=30)
+        r = _sp.run(["logrotate", "-d", cfg], capture_output=True, text=True, timeout=30, encoding='utf-8', errors='replace')
         if r.returncode == 0:
             _ok("logrotate 配置可解析")
         else:
@@ -963,7 +963,7 @@ def check_log_rotation():
     # timer / cron 是否在跑
     try:
         r = _sp.run(["systemctl", "is-active", "logrotate.timer"],
-                    capture_output=True, text=True, timeout=15)
+                    capture_output=True, text=True, timeout=15, encoding='utf-8', errors='replace')
         if r.stdout.strip() == "active":
             _ok("logrotate.timer 运行中")
         else:
@@ -1045,7 +1045,7 @@ def check_backup():
     # cron 是否注册
     try:
         import subprocess as _sp
-        r = _sp.run(["crontab", "-l"], capture_output=True, text=True, timeout=15)
+        r = _sp.run(["crontab", "-l"], capture_output=True, text=True, timeout=15, encoding='utf-8', errors='replace')
         if "backup_data.sh" in (r.stdout or ""):
             _ok("已注册定时备份")
         else:
@@ -1071,7 +1071,7 @@ def check_backup():
     #    都是自己发现的、没有任何告警 —— 故必须自监控。
     try:
         import subprocess as _sp
-        r = _sp.run(["crontab", "-l"], capture_output=True, text=True, timeout=15)
+        r = _sp.run(["crontab", "-l"], capture_output=True, text=True, timeout=15, encoding='utf-8', errors='replace')
         if "selfcheck.sh" in (r.stdout or ""):
             _ok("已注册服务器自监控")
         else:
@@ -1087,7 +1087,7 @@ def check_backup():
     #    （cron 丢弃输出），不定期检查会再次悄悄断掉。
     try:
         import subprocess as _sp
-        r = _sp.run(["crontab", "-l"], capture_output=True, text=True, timeout=15)
+        r = _sp.run(["crontab", "-l"], capture_output=True, text=True, timeout=15, encoding='utf-8', errors='replace')
         if "push_sync.sh" in (r.stdout or ""):
             _ok("已注册 GitHub 备份推送")
         else:
@@ -1099,7 +1099,7 @@ def check_backup():
         import subprocess as _sp
         # 直接用 ssh -T 验证 deploy key 是否仍有效
         r = _sp.run(["ssh", "-T", "-o", "BatchMode=yes", "-o", "ConnectTimeout=15",
-                     "git@github-kol"], capture_output=True, text=True, timeout=30)
+                     "git@github-kol"], capture_output=True, text=True, timeout=30, encoding='utf-8', errors='replace')
         out = (r.stdout or "") + (r.stderr or "")
         if "Hi " in out or "successfully authenticated" in out:
             _ok("GitHub Deploy Key 有效")

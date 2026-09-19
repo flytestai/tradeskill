@@ -49,7 +49,7 @@ def run(cmd, cwd=None, timeout=60):
     try:
         r = subprocess.run(cmd, shell=True, cwd=cwd or SKILL_DIR,
                            capture_output=True, text=True, timeout=timeout,
-                           env=env)
+                           env=env, encoding='utf-8', errors='replace')
         return r.returncode == 0, (r.stdout or "") + (r.stderr or "")
     except subprocess.TimeoutExpired:
         return False, "command timeout after %ss: %s" % (timeout, cmd)
