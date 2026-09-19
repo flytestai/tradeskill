@@ -59,3 +59,7 @@ data/level_asof.txt
 
 # 状态文件损坏留证（safe_json 自动生成）
 data/*.corrupt-*
+
+# 关键位自动刷新的波浪缓存
+_data/wave_*.json
+data/_wave_*.json
