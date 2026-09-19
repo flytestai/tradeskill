@@ -33,32 +33,41 @@ CREATE INDEX IF NOT EXISTS idx_pred_kol ON predictions(kol_name);
 CREATE INDEX IF NOT EXISTS idx_pred_verdict ON predictions(verdict);
 """
 
-def connect():
+def connect(readonly: bool = False):
     """连接数据库。
 
-    ⚠️ 自动降级（2026-09-19 服务器实测新增）
-    ----------------------------------------
-    本模块既可写（--add/--verify）也可纯读（--list/--report）。
-    MCP 容器把 data 目录挂成**只读**，此时：
-      · 读写连接在建 journal 时抛
-        `sqlite3.OperationalError: unable to open database file`
-      · `PRAGMA journal_mode=WAL` 同样需要写权限，也会失败
-    → 导致 predict_track 的**只读**用例（预测列表/准确率报告）在 MCP 侧
-      也一并失效。
+    ⚠️ 为什么不能"写失败就静默降级为只读"（2026-09-19 修订）
+    --------------------------------------------------------
+    我先前的版本是：读写连接失败时自动回退到只读 URI。
+    这个"贴心"的降级**破坏了写入语义**，并产生误导性报错：
 
-    故：先按读写尝试；失败则回退为只读 URI（mode=ro&immutable=1）。
-    只读连接下写操作由 SQLite 自行拒绝，语义清晰，不会静默写坏数据。
+        --add 流程：init() 建表（只读下失败，被降级吞掉）
+                 → INSERT 落到只读连接
+                 → 报 "attempt to write a readonly database"
+        而真实原因是「容器把 data 挂成只读」—— 报错完全指不到真因。
+
+    MCP 容器的 data 是**只读**挂载（设计如此：MCP 只做查询，写入走 REST，
+    见 rest_app 的 POST /api/v1/kol/predictions，REST 容器为读写挂载）。
+    所以：
+
+      · **只读用例**（--list / --report）→ 显式传 readonly=True，
+        直接用只读 URI，在只读挂载下也能正常工作。
+      · **写入用例**（--add / --verify）→ 用普通读写连接；
+        若环境不允许写，就让 SQLite 抛出**真实的**错误，
+        由调用方据此提示"应改用 REST 接口"，而不是被降级掩盖。
+
+    :param readonly: True 时以 mode=ro&immutable=1 打开（纯查询用）
     """
-    try:
-        conn = sqlite3.connect(DB_PATH, timeout=10)
-        conn.execute("PRAGMA journal_mode=WAL")
-        conn.execute("PRAGMA busy_timeout=5000")
-        return conn
-    except sqlite3.OperationalError:
+    if readonly:
         p = str(DB_PATH).replace("\\", "/")
         if not p.startswith("/"):
             p = "/" + p
         return sqlite3.connect("file:%s?mode=ro&immutable=1" % p, uri=True)
+
+    conn = sqlite3.connect(DB_PATH, timeout=10)
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA busy_timeout=5000")
+    return conn
 
 def init():
     conn = connect()
@@ -112,9 +121,33 @@ def verify_prediction(args):
     print(f"[OK] 预测 #{args.id} 验证结果: {verdict}" + (f" (误差{error_pct:.2f}%)" if error_pct else ""))
     conn.close()
 
+def _ensure_readable(conn) -> bool:
+    """只读连接下检查 predictions 表是否存在（不存在则给出可操作提示）。
+
+    只读路径**不能**调用 init() —— 它执行 CREATE TABLE/INDEX，需要写权限，
+    在 MCP 容器的只读挂载下会抛 "unable to open database file"，
+    把「环境不允许写」误报成「表不存在」。
+    这里改为直接查 sqlite_master（只读即可）。
+    """
+    try:
+        row = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='predictions'"
+        ).fetchone()
+    except Exception:
+        return False
+    if not row:
+        print("[ERROR] predictions 表不存在（该库尚未初始化）。")
+        print("[HINT]  预测数据需通过 REST 接口写入：POST /api/v1/kol/predictions")
+        print("       （MCP 侧为只读挂载，设计上不承担写入）")
+        return False
+    return True
+
+
 def report(args):
-    init()
-    conn = connect()
+    conn = connect(readonly=True)
+    if not _ensure_readable(conn):
+        conn.close()
+        return
     cur = conn.cursor()
     where = "WHERE kol_name=?" if args.kol else "WHERE 1=1"
     params = (args.kol,) if args.kol else ()
@@ -160,8 +193,10 @@ def report(args):
     conn.close()
 
 def list_all(args):
-    init()
-    conn = connect()
+    conn = connect(readonly=True)
+    if not _ensure_readable(conn):
+        conn.close()
+        return
     cur = conn.cursor()
     cur.execute("SELECT id, kol_name, record_date, prediction, verdict FROM predictions ORDER BY id DESC")
     for r in cur.fetchall():
