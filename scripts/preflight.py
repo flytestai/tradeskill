@@ -497,6 +497,12 @@ def check_timeout_budget():
     故此处断言各常量之间存在正确的大小关系。
     """
     print("\n[9/9] 超时预算有界性")
+    # ⚠️ services 位于 scripts/api/ 包内，而 preflight 在 scripts/ 下运行，
+    #    sys.path 里没有 scripts/ —— 需要显式补上，否则 ModuleNotFoundError
+    #    （实测：宿主机自检因此误报失败，并正确拦下了部署）。
+    _api = os.path.join(SCRIPTS, "api")
+    if _api not in sys.path:
+        sys.path.insert(0, _api)
     try:
         sa = importlib.import_module("skill_agent")
         qa = importlib.import_module("qa_analyzer")
