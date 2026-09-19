@@ -61,7 +61,7 @@ CORE_MODULES = [
 
 
 def check_imports():
-    print("\n[1/7] 模块导入")
+    print("\n[1/8] 模块导入")
     bad = []
     for m in CORE_MODULES:
         if not os.path.isfile(os.path.join(SCRIPTS, m + ".py")):
@@ -82,7 +82,7 @@ def check_imports():
 # ---------------------------------------------------------------------------
 
 def check_contract():
-    print("\n[2/7] 接口契约")
+    print("\n[2/8] 接口契约")
     try:
         cf = importlib.import_module("context_format")
         sa = importlib.import_module("skill_agent")
@@ -146,7 +146,7 @@ def check_contract():
 # ---------------------------------------------------------------------------
 
 def check_format_consistency():
-    print("\n[3/7] 格式化口径一致性")
+    print("\n[3/8] 格式化口径一致性")
     try:
         sa = importlib.import_module("skill_agent")
         sr = importlib.import_module("skill_router")
@@ -189,7 +189,7 @@ def check_format_consistency():
 # ---------------------------------------------------------------------------
 
 def check_config():
-    print("\n[4/7] 配置读取")
+    print("\n[4/8] 配置读取")
     try:
         cf = importlib.import_module("context_format")
     except Exception as e:
@@ -218,7 +218,7 @@ def check_config():
 # ---------------------------------------------------------------------------
 
 def check_live():
-    print("\n[5/7] 真实取数（联网）")
+    print("\n[5/8] 真实取数（联网）")
     try:
         sa = importlib.import_module("skill_agent")
         sr = importlib.import_module("skill_router")
@@ -266,7 +266,7 @@ def check_state_files():
       · 水位文件被截断 → 返回空 → 机器人**重新拉取全部历史并重复回复**
       · 去重文件被截断 → 返回 {} → **重复回复所有历史问题**
     """
-    print("\n[6/7] 状态文件安全性")
+    print("\n[6/8] 状态文件安全性")
     try:
         sj = importlib.import_module("safe_json")
     except Exception as e:
@@ -327,7 +327,7 @@ def check_send_channel():
       2. 幂等键只在 lark-cli 回退通道传，而容器内 lark-cli 不可用、
          永远走纯 Python 通道 → **生产环境幂等保护实际失效**。
     """
-    print("\n[7/7] 发送通道")
+    print("\n[7/8] 发送通道")
     import re as _re
     import os as _os
 
@@ -424,6 +424,53 @@ def check_send_channel():
         _bad("发送通道实跑检查失败", str(e)[:100])
 
 
+def check_http_errors():
+    """HTTP 错误必须如实返回，不能被全局兜底吞成 500。
+
+    实测踩坑：rest_app 的 `@app.errorhandler(Exception)` 会把 werkzeug 的
+    NotFound / MethodNotAllowed 一并捕获，于是：
+      · 访问不存在的路径（扫描器探 /.env 等）返回 **500 而非 404**
+        —— 外部监控会把正常的路由未命中误判为服务故障
+      · 每个 404 都打印完整 traceback，日志被扫描流量刷满，
+        真实故障的堆栈反而被淹没
+    """
+    print("\n[8/8] HTTP 错误语义")
+    import os as _os
+
+    p = _os.path.join(SCRIPTS, "api", "rest_app.py")
+    if not _os.path.isfile(p):
+        _bad("未找到 api/rest_app.py")
+        return
+    src = open(p, encoding="utf-8").read()
+
+    if "from werkzeug.exceptions import HTTPException" in src and             "isinstance(e, HTTPException)" in src:
+        _ok("全局兜底会放行 HTTPException（404 不再变 500）")
+    else:
+        _bad("全局兜底未放行 HTTPException", "404 会被报成 500")
+
+    # 实跑：用 Flask 测试客户端验证状态码
+    try:
+        import importlib as _il
+        os.environ.setdefault("PLATFORM_API_KEYS", "")
+        ra = _il.import_module("api.rest_app")
+        c = ra.app.test_client()
+        codes = {}
+        for path in ("/.env", "/nonexistent-xyz"):
+            codes[path] = c.get(path).status_code
+        if all(v == 404 for v in codes.values()):
+            _ok("未知路径返回 404", ", ".join("%s→%s" % (k, v) for k, v in codes.items()))
+        else:
+            _bad("未知路径状态码异常",
+                 ", ".join("%s→%s" % (k, v) for k, v in codes.items()))
+        hz = c.get("/healthz").status_code
+        if hz == 200:
+            _ok("/healthz 正常", "200")
+        else:
+            _bad("/healthz 异常", str(hz))
+    except Exception as e:
+        _bad("HTTP 状态实跑检查失败", "%s: %s" % (type(e).__name__, str(e)[:90]))
+
+
 def main():
     ap = argparse.ArgumentParser(description="部署前自检")
     ap.add_argument("--quick", action="store_true", help="跳过联网取数")
@@ -439,8 +486,9 @@ def main():
     check_config()
     check_state_files()
     check_send_channel()
+    check_http_errors()
     if args.quick:
-        print("\n[5/7] 真实取数 —— 已跳过（--quick）")
+        print("\n[5/8] 真实取数 —— 已跳过（--quick）")
     else:
         check_live()
 

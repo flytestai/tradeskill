@@ -75,6 +75,22 @@ def _svc_err(e):
 
 @app.errorhandler(Exception)
 def _any_err(e):
+    """全局兜底。
+
+    ⚠️ 必须先把 HTTPException 放行（实测踩坑）：
+      Flask 的 `errorhandler(Exception)` 会捕获**所有**异常，包括
+      werkzeug 的 NotFound / MethodNotAllowed 等 HTTPException。
+      原实现把它们一律当成 500，导致：
+        · 访问不存在的路径（如扫描器探 /.env）返回 **500 而非 404**
+          —— 外部监控会把正常的路由未命中误判为服务故障
+        · 每个 404 都打印完整 traceback，日志被扫描流量刷满，
+          真实故障的堆栈反而被淹没
+      故：HTTPException 按其自身状态码原样返回，只有真正的未预期异常才记 500。
+    """
+    from werkzeug.exceptions import HTTPException
+    if isinstance(e, HTTPException):
+        code = e.code or 500
+        return fail(str(e.description or e.name), code, "http")
     traceback.print_exc()
     return fail("内部错误: %s" % str(e)[:300], 500, "internal")
 
