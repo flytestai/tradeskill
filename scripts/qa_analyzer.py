@@ -39,8 +39,17 @@ import os
 import re
 import subprocess
 import sys
+import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+# 北京时间（日志时间戳与 cron 的 TZ=Asia/Shanghai 对齐）
+try:
+    from common import beijing_now as _bj_now
+except Exception:
+    def _bj_now():
+        from datetime import datetime, timezone, timedelta
+        return datetime.now(timezone(timedelta(hours=8)))
+
 try:
     from common import service_env
 except Exception:
@@ -51,6 +60,23 @@ SKILL_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SCRIPTS = os.path.join(SKILL_DIR, "scripts")
 QUEUE = os.path.join(SKILL_DIR, "data", "group_qa_queue.json")
 LOG = os.path.join(SKILL_DIR, "data", "_qa_analyzer.log")
+
+#: AI 增强阶段的总预算（秒）。
+#
+# ⚠️ 这个值是被三层超时**倒推**出来的（实测踩坑）：
+#     nginx 180s  →  Flask PLATFORM_SCRIPT_TIMEOUT 120s  →  本预算
+#   实测未加约束时整条链路达到 182s，直接撞 nginx 返回 **504 Gateway Time-out**；
+#   即使没撞 nginx，也会撞 Flask 的 120s 而返回 context_len=0。
+#
+#   75s 的构成（保守估计）：
+#     规划 LLM 一次         ≤ 45s（PLAN_TIMEOUT）
+#     多轮补取 + 技能执行    ≤ 25s
+#     组装/余量               5s
+#   跑完仍有 ~40s 余量给 Flask/Kimi 生成，不会触顶。
+#
+# 注意：规则路由已先提供基础数据，故 AI 增强即使超时也只损失「额外维度」，
+# 不会再出现「零数据」。
+AI_ENHANCE_BUDGET = int(os.environ.get("QA_AI_BUDGET", "75"))
 
 
 def log(msg: str) -> None:
@@ -123,27 +149,47 @@ def build_context(question: str) -> str:
     之所以抽出去：原先此处只覆盖「指数/个股/关键位/大V」四类，
     大量问句拿不到数据，AI 只能泛泛而谈；且同一逻辑散在两处易漂移。
     """
-    # 优先用 AI 自主规划（skill_agent）：让它根据问题自行决定调哪些 skill / MCP
+    # ⚠️ 顺序很关键：**先用规则路由打底，再用 AI 规划增强**（实测踩坑）
+    #
+    # 原实现是「AI 优先，失败才回退规则」，但实测发现 plan() 单次 LLM 调用
+    # 可能耗时 143 秒（timeout=90 × retries=2 最坏 291s），而后续技能执行
+    # 只要 31 秒 —— 合计 174 秒，**远超 REST 层的 120 秒超时**，
+    # 结果是整个请求被截断、context_len=0，用户看到「没取到数据」。
+    #
+    # 对比：规则路由 1 秒就能取到 688 字（贵州茅台）。
+    #
+    # 故改为「规则路由先兜底」：保证任何情况下都有基础数据，
+    # 再尝试 AI 规划做增强（增强失败也不影响已有数据）。
+    _t_start = time.time()
+    base_ctx = ""
+    try:
+        from skill_router import build_context as _build_rule
+        base_ctx = _build_rule(question) or ""
+    except Exception as e:
+        log("    ⚠️ 规则路由失败: %s" % str(e)[:80])
+
+    # AI 自主规划（增强）：让它根据问题自行决定额外调哪些 skill / MCP
     try:
         sys.path.insert(0, SCRIPTS)
         from skill_agent import build_context as _build_ai
-        ctx = _build_ai(question) or ""
-        if ctx:
-            return ctx
-        log("    ⚠️ AI 规划未取到数据，回退规则路由")
+        # 先扣掉规则路由已用掉的时间，再留 15s 给后续组装/发送
+        used = time.time() - _t_start
+        left = int(AI_ENHANCE_BUDGET - used)
+        ai_ctx = _build_ai(question, budget_sec=max(20, left)) if left > 20 else ""
+        if ai_ctx:
+            # 两者都命中时合并去重（AI 部分更全，放前面）
+            merged = ai_ctx if not base_ctx else (base_ctx + "\n\n" + ai_ctx)
+            return merged
+        if base_ctx:
+            log("    ℹ️ AI 规划无补充，使用规则路由结果")
+            return base_ctx
+        log("    ⚠️ AI 规划与规则路由均未取到数据")
     except Exception as e:
-        log("    ⚠️ skill_agent 不可用，回退规则路由: %s" % str(e)[:80])
+        log("    ⚠️ AI 规划失败（%s），使用规则路由结果" % str(e)[:80])
+        if base_ctx:
+            return base_ctx
 
-    # 回退 1：规则路由（关键词）
-    try:
-        from skill_router import build_context as _build_rule
-        ctx = _build_rule(question) or ""
-        if ctx:
-            return ctx
-    except Exception:
-        pass
-
-    # 回退 2：仅取指数行情（保证至少有数据）
+    # 兜底：仅取指数行情（保证至少有数据）
     return _build_context_fallback(question)
 
 

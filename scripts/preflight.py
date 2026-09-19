@@ -449,6 +449,17 @@ def check_http_errors():
         _bad("全局兜底未放行 HTTPException", "404 会被报成 500")
 
     # 实跑：用 Flask 测试客户端验证状态码
+    #
+    # ⚠️ 仅在有 flask 的环境执行。实测：REST 运行在**容器**里（flask 3.1.3），
+    #    而宿主机的 .venv-host **没有 flask** —— 若在宿主机把「import 不到 flask」
+    #    判为失败，会导致自检在宿主机侧永远不通过（误报）。
+    #    故：flask 不可用时跳过实跑，仅保留上面的静态源码检查。
+    try:
+        import flask  # noqa: F401
+    except Exception:
+        _ok("HTTP 状态实跑检查 —— 已跳过（本环境无 flask，REST 运行在容器内）")
+        return
+
     try:
         import importlib as _il
         os.environ.setdefault("PLATFORM_API_KEYS", "")
