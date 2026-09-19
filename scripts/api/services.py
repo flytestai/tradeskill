@@ -390,7 +390,7 @@ def qa_queue_status() -> dict:
 def capabilities() -> list:
     """返回平台对外能力清单（name / desc / scopes）。"""
     return [
-        {"name": "kol_list", "desc": "列出已收录的大V及记录数", "scopes": ["kol:read"]},
+        {"name": "kol_list", "desc": "列出已收录的大V及记录数 [probe-20260919]", "scopes": ["kol:read"]},
         {"name": "kol_records", "desc": "查询大V言论（近N天/全部/VIP）", "scopes": ["kol:read"]},
         {"name": "kol_summary", "desc": "大V数据概览（总量/VIP/最新仓位/关联资产）", "scopes": ["kol:read"]},
         {"name": "kol_accuracy", "desc": "预测准确率报告", "scopes": ["kol:read"]},
