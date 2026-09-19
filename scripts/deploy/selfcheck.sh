@@ -17,6 +17,8 @@
 #   3. trade365：backend 容器/进程 + :8000 是否监听
 #   4. 关键文件：队列/去重/关键位 是否可解析（损坏即告警）
 #   5. 磁盘：使用率是否 > 90%
+#   6. 定时任务：是否停摆 / 是否因时区错位而在错误时刻执行（本轮新增）
+#   7. LLM：主动拨测 Kimi，识别"账号欠费停用"这类无症状故障（本轮新增）
 #
 # 告警策略
 #   · 复用 alert_once.sh：**同一故障只告警一次**，恢复后才重置
@@ -170,6 +172,60 @@ if [ -f "$_host_log" ]; then
         fi
     fi
 fi
+
+# ---------------------------------------------------------------------------
+# ---- 7. LLM（Kimi）可用性（本轮新增，针对一起"无症状"的生产故障）----------
+#
+# ⚠️ 为什么必须加（2026-09-19 实测发现）
+#   实测发现 Kimi 账号**因余额不足被停用**：
+#     HTTP 429 "account ... is suspended due to insufficient balance,
+#               type: exceeded_current_quota_error"
+#
+#   而它在系统里**完全没有症状**：
+#     · 队列 0 条（没人提问 → 没触发调用）
+#     · 日志里那条 429 是**组织级 3 RPM 限流**（type/文案完全不同），
+#       跟"余额停用"是两回事 —— 看日志根本发现不了
+#     · 且平台**只有 kimi 一个供应商，没有备用**
+#   → 一旦有人提问，会静默失败；而没有任何东西会告警。
+#
+#   本项主动拨测一次（开销极小），并区分两类 429：
+#     · insufficient balance / quota  → 需要充值（严重，需人工）
+#     · 限流（max organization ...）  → 瞬时，自愈，不告警
+# ---------------------------------------------------------------------------
+_llm_out="$(cd "$KOL_DIR" && set -a && . ./.env 2>/dev/null && set +a && \
+    timeout 90 "$PY" - <<'PYEOF' 2>/dev/null
+import sys
+sys.path.insert(0, "scripts")
+try:
+    import llm_client
+except Exception as e:
+    print("IMPORT_FAIL", str(e)[:80]); sys.exit(0)
+try:
+    if not llm_client.is_configured():
+        print("NOT_CONFIGURED"); sys.exit(0)
+except Exception as e:
+    print("CHECK_FAIL", str(e)[:80]); sys.exit(0)
+try:
+    llm_client.chat("ok", max_tokens_=5, retries=0)
+    print("OK")
+except Exception as e:
+    print("CALL_FAIL", str(e)[:300])
+PYEOF
+)"
+
+case "$_llm_out" in
+    OK) ;;
+    NOT_CONFIGURED)
+        _add "LLM 未配置（群问答将全部失败）" ;;
+    "")
+        _add "LLM 拨测无输出（可能超时）" ;;
+    *insufficient\ balance*|*exceeded_current_quota*|*suspended*)
+        _add "🔴 LLM 账号被停用/欠费 —— 群问答已失效，需充值或更换账号" ;;
+    *max\ organization*|*rate*limit*|*429*)
+        ;;   # 限流属瞬时，不告警（历史上多为组织级 3 RPM）
+    *)
+        _add "LLM 调用异常: $(printf '%s' "$_llm_out" | cut -c1-120)" ;;
+esac
 
 # ---- 输出 ------------------------------------------------------------------
 if [ -n "$problems" ]; then

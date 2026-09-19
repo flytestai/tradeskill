@@ -69,3 +69,4 @@ data/level_targets.json
 
 # 个人归档（与本项目无关的临时分析脚本）
 archive/adhoc/
+_sshlib.py
