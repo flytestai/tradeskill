@@ -157,11 +157,33 @@ cp -a /etc/fail2ban/filter.d/sshd-closed.conf "$DEST_SYS/fail2ban-sshd-closed.co
 # certbot 的 renewal 配置也一并备份：它是自动续期的依据，
 # 丢了会导致"证书还在但再也不会自动续"。
 if [ -d /etc/letsencrypt ]; then
-    cp -a /etc/letsencrypt "$DEST_SYS/letsencrypt" 2>/dev/null || true
-    chmod -R go-rwx "$DEST_SYS/letsencrypt" 2>/dev/null || true
+    # ⚠️ 必须用 tar，不能用 cp -a（2026-09-19 实测踩坑）
+    #   /etc/letsencrypt/live/<域名>/*.pem 全部是**符号链接**，指向
+    #   ../../archive/<域名>/xxxN.pem。
+    #   `cp -a` 会保留符号链接 → 备份里只存下链接，有两个问题：
+    #     · 链接是相对路径，依赖目录结构；一旦换机/移动就失效
+    #     · 真实私钥内容**没有**被复制，等于没备份
+    #   且 `chmod -R` **不跟随符号链接**，
+    #   实测备份里 privkey.pem 显示 777（链接自身权限，无意义），
+    #   既不安全又误导。
+    #
+    #   `tar` 默认**解引用**（存真实文件内容），恢复时是普通文件，
+    #   权限也随内容一并可控。这才是正确的备份方式。
+    ( cd /etc && tar czf "$DEST_SYS/letsencrypt.tar.gz" letsencrypt 2>/dev/null ) || true
+    if [ -f "$DEST_SYS/letsencrypt.tar.gz" ]; then
+        chmod 600 "$DEST_SYS/letsencrypt.tar.gz"
+        # 校验归档可读且确含私钥（避免"备份了但内容不对"）
+        if tar tzf "$DEST_SYS/letsencrypt.tar.gz" 2>/dev/null | grep -q 'archive/.*privkey'; then
+            certok="含私钥 ✅"
+        else
+            certok="⚠️ 未检出私钥"
+        fi
+    else
+        certok="⚠️ 归档创建失败"
+    fi
 fi
-certbot_certs=$(ls -1 /etc/letsencrypt/live 2>/dev/null | wc -l)
-echo "  SSL 证书: $certbot_certs 个域名已备份（含私钥，权限已收紧）"
+certbot_certs=$(ls -1 /etc/letsencrypt/live 2>/dev/null | grep -v README | wc -l)
+echo "  SSL 证书: $certbot_certs 个域名（tar 归档 ${certok:-未备份}）"
 
 # 记录当时的时区与时间，便于恢复后核对
 {
