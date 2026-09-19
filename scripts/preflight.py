@@ -61,7 +61,7 @@ CORE_MODULES = [
 
 
 def check_imports():
-    print("\n[1/9] 模块导入")
+    print("\n[1/10] 模块导入")
     bad = []
     for m in CORE_MODULES:
         if not os.path.isfile(os.path.join(SCRIPTS, m + ".py")):
@@ -82,7 +82,7 @@ def check_imports():
 # ---------------------------------------------------------------------------
 
 def check_contract():
-    print("\n[2/9] 接口契约")
+    print("\n[2/10] 接口契约")
     try:
         cf = importlib.import_module("context_format")
         sa = importlib.import_module("skill_agent")
@@ -146,7 +146,7 @@ def check_contract():
 # ---------------------------------------------------------------------------
 
 def check_format_consistency():
-    print("\n[3/9] 格式化口径一致性")
+    print("\n[3/10] 格式化口径一致性")
     try:
         sa = importlib.import_module("skill_agent")
         sr = importlib.import_module("skill_router")
@@ -189,7 +189,7 @@ def check_format_consistency():
 # ---------------------------------------------------------------------------
 
 def check_config():
-    print("\n[4/9] 配置读取")
+    print("\n[4/10] 配置读取")
     try:
         cf = importlib.import_module("context_format")
     except Exception as e:
@@ -218,7 +218,7 @@ def check_config():
 # ---------------------------------------------------------------------------
 
 def check_live():
-    print("\n[5/9] 真实取数（联网）")
+    print("\n[5/10] 真实取数（联网）")
     try:
         sa = importlib.import_module("skill_agent")
         sr = importlib.import_module("skill_router")
@@ -266,7 +266,7 @@ def check_state_files():
       · 水位文件被截断 → 返回空 → 机器人**重新拉取全部历史并重复回复**
       · 去重文件被截断 → 返回 {} → **重复回复所有历史问题**
     """
-    print("\n[6/9] 状态文件安全性")
+    print("\n[6/10] 状态文件安全性")
     try:
         sj = importlib.import_module("safe_json")
     except Exception as e:
@@ -327,7 +327,7 @@ def check_send_channel():
       2. 幂等键只在 lark-cli 回退通道传，而容器内 lark-cli 不可用、
          永远走纯 Python 通道 → **生产环境幂等保护实际失效**。
     """
-    print("\n[7/9] 发送通道")
+    print("\n[7/10] 发送通道")
     import re as _re
     import os as _os
 
@@ -434,7 +434,7 @@ def check_http_errors():
       · 每个 404 都打印完整 traceback，日志被扫描流量刷满，
         真实故障的堆栈反而被淹没
     """
-    print("\n[8/9] HTTP 错误语义")
+    print("\n[8/10] HTTP 错误语义")
     import os as _os
 
     p = _os.path.join(SCRIPTS, "api", "rest_app.py")
@@ -496,7 +496,7 @@ def check_timeout_budget():
     而每层自己都「没超时」，排查时极难定位。
     故此处断言各常量之间存在正确的大小关系。
     """
-    print("\n[9/9] 超时预算有界性")
+    print("\n[9/10] 超时预算有界性")
     # ⚠️ services 位于 scripts/api/ 包内，而 preflight 在 scripts/ 下运行，
     #    sys.path 里没有 scripts/ —— 需要显式补上，否则 ModuleNotFoundError
     #    （实测：宿主机自检因此误报失败，并正确拦下了部署）。
@@ -555,6 +555,63 @@ def check_timeout_budget():
         _bad("无法校验动态收紧", str(e)[:80])
 
 
+def check_group_isolation():
+    """群隔离：发往不同群的卡片，标题必须跟着群走。
+
+    实测踩坑：group_reply 的卡片标题曾**硬编码为「荔枝群问答」**，
+    于是复盘群用户提问、回复发在复盘群时，卡片却写着「荔枝群问答」
+    —— 用户直接理解为「荔枝群的消息跑到复盘群来了」，即典型的串群现象。
+
+    本检查断言：标题随目标群自适应（荔枝群/复盘群/未知群各不相同），
+    且 send_to_group 支持显式主题覆盖。
+    """
+    print("\n[10/10] 群隔离")
+    import os as _os
+    try:
+        gr = importlib.import_module("group_reply")
+    except Exception as e:
+        _bad("无法加载 group_reply", str(e)[:100])
+        return
+
+    titler = getattr(gr, "_title_for_chat", None)
+    if titler is None:
+        _bad("缺少 _title_for_chat（标题未按群自适应）")
+        return
+
+    v_litchi = titler("***REMOVED***")
+    v_review = titler("***REMOVED***")
+    v_unknown = titler("oc_unknown_xyz")
+
+    if v_litchi != v_review:
+        _ok("标题按群自适应", "荔枝群=%s / 复盘群=%s" % (v_litchi, v_review))
+    else:
+        _bad("两个群的标题相同", "%s —— 会造成「张冠李戴」" % v_litchi)
+
+    if v_unknown and v_unknown != v_litchi:
+        _ok("未知群退化为中性标题", v_unknown)
+    else:
+        _bad("未知群标题未退化", str(v_unknown))
+
+    # send_to_group 必须支持显式 title 覆盖
+    import inspect as _insp
+    try:
+        sig = _insp.signature(gr.send_to_group)
+        if "title" in sig.parameters:
+            _ok("send_to_group 支持显式标题覆盖")
+        else:
+            _bad("send_to_group 不支持 title 覆盖")
+    except Exception:
+        pass
+
+    # 清理自检产生的临时卡片（不发真实消息，仅静态断言）
+    _p = _os.path.join(SCRIPTS, "group_reply.py")
+    src = open(_p, encoding="utf-8").read()
+    if 'title="荔枝群问答"' in src:
+        _bad("group_reply 仍存在硬编码标题", 'title="荔枝群问答"')
+    else:
+        _ok("无硬编码群标题")
+
+
 def main():
     ap = argparse.ArgumentParser(description="部署前自检")
     ap.add_argument("--quick", action="store_true", help="跳过联网取数")
@@ -572,8 +629,9 @@ def main():
     check_send_channel()
     check_http_errors()
     check_timeout_budget()
+    check_group_isolation()
     if args.quick:
-        print("\n[5/9] 真实取数 —— 已跳过（--quick）")
+        print("\n[5/10] 真实取数 —— 已跳过（--quick）")
     else:
         check_live()
 
