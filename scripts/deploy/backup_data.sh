@@ -81,6 +81,16 @@ TS="$(date +%F)"
 DEST="$BACKUP_ROOT/$TS"
 mkdir -p "$DEST/kol" "$DEST/trade365"
 
+# ⚠️ 权限收紧（2026-09-19 第十轮发现）
+#   备份目录此前是 755（任何本地用户可遍历）。而里面包含：
+#     · authorized_keys   （可推导出可登录账号）
+#     · local_config.env  （飞书 chat_id / open_id）
+#     · 新增：SSL 私钥 privkey.pem
+#   这些都是敏感材料，目录必须不可被其他用户读取/遍历。
+#   注意：cp -a 会保留源文件权限，故此处需**递归**收紧。
+chmod 700 "$BACKUP_ROOT" 2>/dev/null || true
+chmod 700 "$DEST" 2>/dev/null || true
+
 fail=0
 
 # ---- kol 关键数据 -----------------------------------------------------------
@@ -134,6 +144,25 @@ cp -a /etc/ssh/sshd_config "$DEST_SYS/sshd_config" 2>/dev/null || true
 cp -a /root/.ssh/authorized_keys "$DEST_SYS/authorized_keys" 2>/dev/null || true
 cp -a /etc/nginx/sites-available/skill-platform "$DEST_SYS/nginx-skill-platform.conf" 2>/dev/null || true
 cp -a /etc/fail2ban/jail.local "$DEST_SYS/fail2ban-jail.local" 2>/dev/null || true
+cp -a /etc/fail2ban/filter.d/sshd-closed.conf "$DEST_SYS/fail2ban-sshd-closed.conf" 2>/dev/null || true
+
+# SSL 证书 + certbot 续期记录（2026-09-19 第十轮补充）
+#
+# 为什么需要：证书丢了，HTTPS 立刻中断；而重新签发受 Let's Encrypt 速率
+# 限制，且需要域名校验（可能需临时改 DNS/放行 80 端口）。
+# 备份证书可让恢复时直接还原、避免重新签发。
+#
+# 注意：这**包含私钥**（privkey.pem），属敏感材料 ——
+# 故本目录权限应与 .env 同等级（600），且不要外传。
+# certbot 的 renewal 配置也一并备份：它是自动续期的依据，
+# 丢了会导致"证书还在但再也不会自动续"。
+if [ -d /etc/letsencrypt ]; then
+    cp -a /etc/letsencrypt "$DEST_SYS/letsencrypt" 2>/dev/null || true
+    chmod -R go-rwx "$DEST_SYS/letsencrypt" 2>/dev/null || true
+fi
+certbot_certs=$(ls -1 /etc/letsencrypt/live 2>/dev/null | wc -l)
+echo "  SSL 证书: $certbot_certs 个域名已备份（含私钥，权限已收紧）"
+
 # 记录当时的时区与时间，便于恢复后核对
 {
   echo "# 备份时刻的宿主状态（用于恢复后核对）"
