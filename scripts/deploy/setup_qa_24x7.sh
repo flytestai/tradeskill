@@ -103,14 +103,17 @@ rc1=$?
 #   用户 @ 一次被回两条。现由 trade365 bot 作为该群唯一轮询器，
 #   非交易命令再桥接回 kol 问答（scripts/qa_oneshot.py）。
 # "$PY" scripts/sync_litchi_auto.py --group review  >/dev/null 2>&1
-rc2=$?
+#
+# ⚠️ rc2 必须显式置 0：上一行是注释，`rc2=$?` 会捕获「注释前最后一条命令」的
+#    退出码（即 rc1），导致错误日志里出现「拉取复盘=1」这种假告警。
+rc2=0
 # ---- ③ 处理队列（Kimi 分析 → 回复到群）----
 "$PY" scripts/qa_analyzer.py >/dev/null 2>&1
 rc3=$?
 
 # 只在异常时记日志（正常静默，避免日志膨胀）
 if [ $rc1 -ne 0 ] || [ $rc2 -ne 0 ] || [ $rc3 -ne 0 ]; then
-    echo "$(date '+%F %T') 拉取荔枝=$rc1 拉取复盘=$rc2 处理=$rc3" >> "$ERRLOG"
+    echo "$(date '+%F %T') 拉取荔枝=$rc1 处理=$rc3" >> "$ERRLOG"
 fi
 exit 0
 EOF
