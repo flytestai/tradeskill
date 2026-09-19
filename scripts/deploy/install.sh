@@ -174,6 +174,31 @@ systemctl daemon-reload
 systemctl enable --now kol-platform kol-platform-mcp
 
 # ---------------------------------------------------------------------------
+# 6b. 日志轮转
+#
+# 为什么需要（实测结论）
+#   平台日志此前**完全没有轮转**：_host_task.log / _qa_analyzer.log 等都是
+#   >> 追加写入，而 supervisor.py 里那个 rotate_logs_if_needed() 只服务
+#   **Windows 侧**的 supervisor —— Linux 上跑的是 _run_task.sh，不经过它。
+#   实测 _backend.log 约 60MB/年、_host_task.log 约 18MB/年，不轮转会永久累积。
+#   系统其它服务（nginx 等）都用 logrotate，故这里与之一致。
+# ---------------------------------------------------------------------------
+log "安装 logrotate 配置"
+LR_SRC="$TARGET_DIR/scripts/deploy/logrotate-kol-platform"
+if [ -f "$LR_SRC" ]; then
+    # 路径里的部署目录按实际位置替换（默认即 /opt/kol-skills-platform）
+    sed "s|/opt/kol-skills-platform|$TARGET_DIR|g" "$LR_SRC" > /etc/logrotate.d/kol-platform
+    # 干跑验证（配置有语法错时 logrotate 会报出来）
+    if logrotate -d /etc/logrotate.d/kol-platform >/dev/null 2>&1; then
+        log "logrotate 配置已安装并验证 ✅"
+    else
+        warn "logrotate 配置校验失败，请检查 /etc/logrotate.d/kol-platform"
+    fi
+else
+    warn "缺少 logrotate 配置模板，跳过"
+fi
+
+# ---------------------------------------------------------------------------
 # 7. 自检
 # ---------------------------------------------------------------------------
 log "等待服务就绪..."

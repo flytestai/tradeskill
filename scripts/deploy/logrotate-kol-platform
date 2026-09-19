@@ -1,0 +1,34 @@
+# kol-skills-platform 日志轮转
+#
+# 放在 /etc/logrotate.d/ 下，由系统 logrotate.timer 每日调用。
+#
+# 为什么需要（实测结论）
+#   平台日志此前**完全没有轮转**：
+#     · _host_task.log / _qa_analyzer.log / _level_refresh.log 都是 >> 追加
+#     · _run_task.sh 无轮转逻辑
+#     · supervisor.py 里虽有 rotate_logs_if_needed()，但那是 **Windows 侧**的
+#       supervisor 在用，Linux 上跑的是 _run_task.sh，不经过它
+#   实测增长：_backend.log 已达 156K / 2325 行（约 60MB/年），
+#             _host_task.log 约 18MB/年 —— 不轮转会永久累积。
+#   系统其它服务（nginx 等）都用 logrotate，故这里与之一致。
+#
+# 用法：
+#   sudo cp scripts/deploy/logrotate-kol-platform /etc/logrotate.d/kol-platform
+#   sudo logrotate -d /etc/logrotate.d/kol-platform     # 干跑验证
+#   sudo logrotate -f /etc/logrotate.d/kol-platform     # 立即轮转一次
+
+/opt/kol-skills-platform/data/*.log
+/opt/trade365-bot/data/*.log
+/opt/trade365/data/*.log {
+    daily
+    missingok
+    # 保留 14 天（与 nginx 的 rotate 14 一致）
+    rotate 14
+    compress
+    delaycompress
+    notifempty
+    # ⚠️ 不用 create：这些日志由脚本以 >> 追加写入，
+    #    不需要预创建文件；且 create 会改变属主影响写入。
+    copytruncate
+    su root root
+}
