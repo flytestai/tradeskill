@@ -68,15 +68,17 @@ LOG = os.path.join(SKILL_DIR, "data", "_qa_analyzer.log")
 #   实测未加约束时整条链路达到 182s，直接撞 nginx 返回 **504 Gateway Time-out**；
 #   即使没撞 nginx，也会撞 Flask 的 120s 而返回 context_len=0。
 #
-#   75s 的构成（保守估计）：
-#     规划 LLM 一次         ≤ 45s（PLAN_TIMEOUT）
-#     多轮补取 + 技能执行    ≤ 25s
-#     组装/余量               5s
-#   跑完仍有 ~40s 余量给 Flask/Kimi 生成，不会触顶。
+#   55s 的构成（**分阶段实测**，非估算）：
+#       规则路由     3.1s
+#       AI 规划     20.5s（kimi-k3，14 个技能）
+#       技能执行    ~15s（十几项 × 1~3s）
+#       ---- 小计  ~39s，留 ~16s 余量
+#   再加上 Kimi 生成 35.4s ≈ 合计 75s，距 Flask 上限 120s 有 45s 安全边际。
+#   （实测未限制时为 116s，仅剩 4s 余量，极易因技能条数波动而触顶。）
 #
 # 注意：规则路由已先提供基础数据，故 AI 增强即使超时也只损失「额外维度」，
 # 不会再出现「零数据」。
-AI_ENHANCE_BUDGET = int(os.environ.get("QA_AI_BUDGET", "75"))
+AI_ENHANCE_BUDGET = int(os.environ.get("QA_AI_BUDGET", "55"))
 
 
 def log(msg: str) -> None:
