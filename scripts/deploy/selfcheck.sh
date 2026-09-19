@@ -249,7 +249,11 @@ fi
 if [ "$JSON" = "1" ]; then
     echo '{"ok":true,"problems":""}'
 else
-    echo "[$(date '+%F %T')] ✅ 自检正常（容器/REST/trade365/状态文件/磁盘）"
+    # ⚠️ 文案必须与**实际执行的检查项**一致。
+    #    此前固定写「容器/REST/trade365/状态文件/磁盘」，而本轮已扩到 7 项 ——
+    #    文案不更新就会出现"报告说查了,其实没查"的误导，
+    #    这正是本会话反复出现的那类问题（检查项自述 ≠ 实际）。
+    echo "[$(date '+%F %T')] ✅ 自检正常（容器 / REST / trade365 / 状态文件 / 磁盘 / 定时任务 / LLM）"
 fi
 # 恢复正常 → 重置告警状态，下次故障会重新告警
 bash "$KOL_DIR/scripts/alert_once.sh" "selfcheck" "ok" "" >/dev/null 2>&1 || true
