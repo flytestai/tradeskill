@@ -140,6 +140,47 @@ _INDEX_WORDS = ("上证指数", "深证成指", "创业板指", "创业板", "�
                 "科创板", "沪深300", "北证50", "大盘", "指数")
 
 
+def _merge_contexts(base_ctx, ai_ctx):
+    """合并「规则路由」与「AI 规划」的上下文，**按数据块去重**。
+
+    ⚠️ 为什么不能直接拼接（实测踩坑）
+      两条路径会调用**同一批技能** —— 例如问指数时，
+      规则路由用 `hithink-zhishu-query`，AI 规划也可能选它，
+      于是同一份指数数据在上下文里**出现两次**：
+        · 白白多一次 HTTP 请求
+        · 模型读到重复内容，浪费 token，且可能误以为有两份独立数据
+
+      两者标记格式不同（`【指数·上证指数】` vs `【hithink-zhishu-query】`），
+      所以不能靠标题判断重复，只能**比对块内的数字**。
+
+    做法：AI 规划按问题精准选能力，作为主上下文；
+    规则路由的块只有在「带来了 AI 没有的数字」时才追加。
+    """
+    import re as _re
+    if not base_ctx:
+        return ai_ctx
+    if not ai_ctx:
+        return base_ctx
+    try:
+        ai_nums = set(_re.findall(r"[0-9]+\.?[0-9]*", ai_ctx))
+        if not ai_nums:
+            return ai_ctx
+        keep = []
+        for blk in _re.split(r"(?=【)", base_ctx):
+            if not blk.strip():
+                continue
+            bn = set(_re.findall(r"[0-9]+\.?[0-9]*", blk))
+            # 该块的数字若已被 AI 覆盖 ≥80%，视为重复数据，丢弃
+            if bn and len(bn & ai_nums) / float(len(bn)) >= 0.8:
+                continue
+            keep.append(blk)
+        if not keep:
+            return ai_ctx
+        return ai_ctx + "\n\n" + "\n".join(keep)
+    except Exception:
+        return ai_ctx
+
+
 def build_context(question: str) -> str:
     """按问题意图调用蜜蜂多技能，聚合出结构化上下文。
 
@@ -179,9 +220,8 @@ def build_context(question: str) -> str:
         left = int(AI_ENHANCE_BUDGET - used)
         ai_ctx = _build_ai(question, budget_sec=max(20, left)) if left > 20 else ""
         if ai_ctx:
-            # 两者都命中时合并去重（AI 部分更全，放前面）
-            merged = ai_ctx if not base_ctx else (base_ctx + "\n\n" + ai_ctx)
-            return merged
+            # 两者都命中时按数据块合并去重（详见 _merge_contexts）
+            return _merge_contexts(base_ctx, ai_ctx)
         if base_ctx:
             log("    ℹ️ AI 规划无补充，使用规则路由结果")
             return base_ctx
