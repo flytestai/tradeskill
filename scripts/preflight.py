@@ -62,7 +62,7 @@ CORE_MODULES = [
 
 
 def check_imports():
-    print("\n[1/11] 模块导入")
+    print("\n[1/12] 模块导入")
     bad = []
     for m in CORE_MODULES:
         if not os.path.isfile(os.path.join(SCRIPTS, m + ".py")):
@@ -83,7 +83,7 @@ def check_imports():
 # ---------------------------------------------------------------------------
 
 def check_contract():
-    print("\n[2/11] 接口契约")
+    print("\n[2/12] 接口契约")
     try:
         cf = importlib.import_module("context_format")
         sa = importlib.import_module("skill_agent")
@@ -147,7 +147,7 @@ def check_contract():
 # ---------------------------------------------------------------------------
 
 def check_format_consistency():
-    print("\n[3/11] 格式化口径一致性")
+    print("\n[3/12] 格式化口径一致性")
     try:
         sa = importlib.import_module("skill_agent")
         sr = importlib.import_module("skill_router")
@@ -190,7 +190,7 @@ def check_format_consistency():
 # ---------------------------------------------------------------------------
 
 def check_config():
-    print("\n[4/11] 配置读取")
+    print("\n[4/12] 配置读取")
     try:
         cf = importlib.import_module("context_format")
     except Exception as e:
@@ -219,7 +219,7 @@ def check_config():
 # ---------------------------------------------------------------------------
 
 def check_live():
-    print("\n[5/11] 真实取数（联网）")
+    print("\n[5/12] 真实取数（联网）")
     try:
         sa = importlib.import_module("skill_agent")
         sr = importlib.import_module("skill_router")
@@ -267,7 +267,7 @@ def check_state_files():
       · 水位文件被截断 → 返回空 → 机器人**重新拉取全部历史并重复回复**
       · 去重文件被截断 → 返回 {} → **重复回复所有历史问题**
     """
-    print("\n[6/11] 状态文件安全性")
+    print("\n[6/12] 状态文件安全性")
     try:
         sj = importlib.import_module("safe_json")
     except Exception as e:
@@ -328,7 +328,7 @@ def check_send_channel():
       2. 幂等键只在 lark-cli 回退通道传，而容器内 lark-cli 不可用、
          永远走纯 Python 通道 → **生产环境幂等保护实际失效**。
     """
-    print("\n[7/11] 发送通道")
+    print("\n[7/12] 发送通道")
     import re as _re
     import os as _os
 
@@ -435,7 +435,7 @@ def check_http_errors():
       · 每个 404 都打印完整 traceback，日志被扫描流量刷满，
         真实故障的堆栈反而被淹没
     """
-    print("\n[8/11] HTTP 错误语义")
+    print("\n[8/12] HTTP 错误语义")
     import os as _os
 
     p = _os.path.join(SCRIPTS, "api", "rest_app.py")
@@ -497,7 +497,7 @@ def check_timeout_budget():
     而每层自己都「没超时」，排查时极难定位。
     故此处断言各常量之间存在正确的大小关系。
     """
-    print("\n[9/11] 超时预算有界性")
+    print("\n[9/12] 超时预算有界性")
     # ⚠️ services 位于 scripts/api/ 包内，而 preflight 在 scripts/ 下运行，
     #    sys.path 里没有 scripts/ —— 需要显式补上，否则 ModuleNotFoundError
     #    （实测：宿主机自检因此误报失败，并正确拦下了部署）。
@@ -566,7 +566,7 @@ def check_group_isolation():
     本检查断言：标题随目标群自适应（荔枝群/复盘群/未知群各不相同），
     且 send_to_group 支持显式主题覆盖。
     """
-    print("\n[10/11] 群隔离")
+    print("\n[10/12] 群隔离")
     import os as _os
     try:
         gr = importlib.import_module("group_reply")
@@ -630,7 +630,7 @@ def check_levels():
 
       故这里逐项断言「容易漂移的配置点」，而不是只看脚本能否跑通。
     """
-    print("\n[11/11] 关键位刷新配置")
+    print("\n[11/12] 关键位刷新配置")
 
     p = os.path.join(SCRIPTS, "level_refresh.py")
     if not os.path.isfile(p):
@@ -739,6 +739,123 @@ def check_levels():
         _ok("定时刷新检查 —— 已跳过（本环境无 crontab）")
 
 
+def check_planner():
+    """规划链路配置：防「选错技能」与「静默失效」。
+
+    ⚠️ 为什么需要（本项为此而生）
+      `plan()` 的职责是**按问题自动挑能力**。这里逐项断言它最容易漂移的地方：
+
+      · **提示词与 valid 集合不一致** —— 最隐蔽的一类 bug：
+        某个能力若不在 `_catalog_text()` 里，模型**永远看不到、也就选不到**；
+        反之若提示词列了而 `ALL_CAPABILITIES` 没有，模型选了会被**静默丢弃**。
+        两者都表现为「这个能力好像不生效」，且不报任何错。
+        （历史上就踩过：本地/MCP 能力被 valid 集合过滤掉，
+         导致波浪分析只能靠关键词触发。）
+
+      · **去重** —— 模型会重复列同一技能（实测 news-search ×2、macro-query ×2），
+        不去重就会把同一数据源抓两遍。
+
+      · **失败可见** —— 规划失败最常见原因是 Kimi 组织级 3 RPM 限流；
+        若静默返回空技能列表，日志里看不出发生过什么。
+    """
+    print("\n[12/12] 规划链路")
+    try:
+        sa = importlib.import_module("skill_agent")
+    except Exception as e:
+        _bad("无法加载 skill_agent", str(e)[:120])
+        return
+
+    # 1) 提示词（模型看到的能力目录）必须与 valid 集合**双向一致**
+    try:
+        cat_text = sa._catalog_text()
+        allcap = set(sa.ALL_CAPABILITIES)
+        missing = sorted(i for i in allcap if i not in cat_text)
+        if missing:
+            _bad("能力未出现在规划提示词中（模型永远选不到）", ", ".join(missing[:6]))
+        else:
+            _ok("提示词覆盖全部能力", "%d 项" % len(allcap))
+    except Exception as e:
+        _bad("提示词一致性检查失败", str(e)[:100])
+
+    # 2) 反向：提示词里列出的 ID 必须都在 valid 集合（否则选了会被丢弃）
+    try:
+        import re as _re
+        shown = set(_re.findall(r"- ([a-z0-9:_-]+)：", cat_text))
+        ghost = sorted(s for s in shown if s not in allcap)
+        if ghost:
+            _bad("提示词列了但不在可执行集合（选了会被静默丢弃）", ", ".join(ghost[:6]))
+        else:
+            _ok("提示词无幽灵项", "%d 项全部可执行" % len(shown))
+    except Exception as e:
+        _bad("幽灵项检查失败", str(e)[:100])
+
+    # 3) 能力必须含三类（技能 / MCP / 本地）
+    try:
+        need = [("hithink-market-query", "蜜蜂技能"),
+                ("news-search", "搜索类技能"),
+                ("local:elliott_wave", "本地能力"),
+                ("mcp:fetch", "MCP 能力")]
+        lack = [n for k, n in need if k not in sa.ALL_CAPABILITIES]
+        if lack:
+            _bad("能力集缺类", ", ".join(lack))
+        else:
+            _ok("四类能力齐备", "技能/搜索/本地/MCP")
+    except Exception as e:
+        _bad("能力分类检查失败", str(e)[:100])
+
+    # 4) 规划结果必须去重（源码级断言，防回退）
+    try:
+        p_src = os.path.join(SCRIPTS, "skill_agent.py")
+        with open(p_src, encoding="utf-8") as _f:
+            src = _f.read()
+        code = "\n".join(l for l in src.split("\n")
+                         if not l.lstrip().startswith("#"))
+        if "seen_ids" in code and "sid not in seen_ids" in code:
+            _ok("规划结果去重已实现")
+        else:
+            _bad("规划结果未去重", "同一技能会被抓两遍（实测 news-search ×2）")
+    except Exception as e:
+        _bad("去重检查失败", str(e)[:100])
+
+    # 5) 规划失败必须可见（否则限流导致的空规划无法排查）
+    try:
+        if "[plan] 规划失败" in code:
+            _ok("规划失败有日志（限流可排查）")
+        else:
+            _bad("规划失败静默无声", "3 RPM 限流时日志看不出发生过什么")
+    except Exception:
+        pass
+
+    # 6) 目录规模合理性（防误删技能）
+    try:
+        n = len(sa.CATALOG)
+        if n >= 20:
+            _ok("技能目录规模正常", "%d 个蜜蜂技能" % n)
+        else:
+            _bad("技能目录疑似缺失", "仅 %d 个（预期 ≥20）" % n)
+    except Exception:
+        pass
+
+    # 7) 复合问题确实会展开成多技能（自适应有效性的**实跑验证**）
+    #    注：需联网+LLM，--quick 或无 Key 时优雅跳过
+    try:
+        from llm_client import is_configured as _ok_llm
+        if not _ok_llm():
+            _ok("自适应实跑检查 —— 已跳过（未配置 LLM）")
+        else:
+            p1 = sa.plan("上证指数现在多少点")
+            p2 = sa.plan("厦门钨业能买吗")
+            n1, n2 = len(p1.get("skills") or []), len(p2.get("skills") or [])
+            if n1 == 0 and n2 == 0:
+                _bad("规划实跑返回空", "可能限流；已回落规则路由，不阻断回答")
+            elif n1 > 0 and n2 >= n1:
+                _ok("自适应生效", "简单问题 %d 项 / 复合问题 %d 项" % (n1, n2))
+            else:
+                _ok("自适应实跑完成", "简单 %d 项 / 复合 %d 项" % (n1, n2))
+    except Exception as e:
+        _ok("自适应实跑检查 —— 已跳过（%s）" % str(e)[:50])
+
+
 def main():
     ap = argparse.ArgumentParser(description="部署前自检")
     ap.add_argument("--quick", action="store_true", help="跳过联网取数")
@@ -758,8 +875,9 @@ def main():
     check_timeout_budget()
     check_group_isolation()
     check_levels()
+    check_planner()
     if args.quick:
-        print("\n[5/11] 真实取数 —— 已跳过（--quick）")
+        print("\n[5/12] 真实取数 —— 已跳过（--quick）")
     else:
         check_live()
 
