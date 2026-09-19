@@ -83,10 +83,57 @@ def resolve(headers) -> dict:
     key = extract_key(headers)
     if not key:
         raise AuthError("缺少 API Key（请通过 X-API-Key 或 Authorization: Bearer 提供）")
+    return resolve_key(key)
+
+
+def resolve_key(key: str) -> dict:
+    """按 Key 字符串校验（供 MCP 中间件等非 Flask 场景复用）。"""
+    if not _KEYS:
+        return {"tenant": config.DEFAULT_TENANT, "scopes": {"*"}, "authenticated": False}
+    key = (key or "").strip()
+    if not key:
+        raise AuthError("缺少 API Key（请通过 X-API-Key 或 Authorization: Bearer 提供）")
     info = _KEYS.get(key)
     if not info:
         raise AuthError("API Key 无效")
     return {"tenant": info["tenant"], "scopes": info["scopes"], "authenticated": True}
+
+
+# ---------------------------------------------------------------------------
+# 本机/内网来源判定 —— 供 MCP 端点做「分级鉴权」
+#
+# 背景（2026-09-19 实测）
+# ----------------------
+# 公网 https://skill.flytest.com.cn/mcp 此前**完全不校验凭据**：
+#   无 Key / 伪造 X-API-Key / 伪造 Bearer  → 全部 200。
+# 而同一容器的 REST（/api/v1/kol/list）无 Key 返回 401。
+#
+# 约束：蜜蜂网关等既有客户端目前在 MCP 上**不发送任何凭据**，
+#       若直接强制鉴权会把现有调用方一起打死（同一类事故 2026-09-19 刚发生过）。
+#
+# 故采用分级策略（见 mcp_server.RequireAuthMiddleware）：
+#   · 来源是回环/内网 → 记录但不拦截（Nginx 反代来自 127.0.0.1，属此类）
+#   · 来源是公网     → 必须带有效 Key，否则 401
+# 这样「公网裸奔」被堵住，而本机直连、内网调用不受影响。
+# ---------------------------------------------------------------------------
+
+#: 私有网段前缀（IPv4）
+_PRIVATE_PREFIXES = ("10.", "192.168.", "172.16.", "172.17.", "172.18.", "172.19.",
+                     "172.20.", "172.21.", "172.22.", "172.23.", "172.24.", "172.25.",
+                     "172.26.", "172.27.", "172.28.", "172.29.", "172.30.", "172.31.")
+_LOOPBACK = {"127.0.0.1", "::1", "localhost", ""}
+
+
+def is_local_client(ip: str) -> bool:
+    """判断来源是否为回环/私网地址（用于区分「经反代的公网请求」与「内网直连」）。"""
+    ip = (ip or "").strip()
+    if ip in _LOOPBACK:
+        return True
+    if ip.startswith("::ffff:"):        # IPv4-mapped IPv6
+        ip = ip[7:]
+    if ip in _LOOPBACK:
+        return True
+    return ip.startswith(_PRIVATE_PREFIXES)
 
 
 def has_scope(ctx: dict, scope: str) -> bool:

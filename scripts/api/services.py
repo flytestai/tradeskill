@@ -33,7 +33,27 @@ SCRIPTS = os.path.join(SKILL_DIR, "scripts")
 
 
 class ServiceError(Exception):
-    """业务调用失败。"""
+    """业务调用失败。
+
+    ⚠️ 为什么必须把真实异常包成 ServiceError（而不是让它裸奔）
+    ----------------------------------------------------------
+    MCP 2.x 的 SDK（mcp/server/mcpserver/tools/base.py）对**未预料的异常**
+    会做脱敏处理：
+
+        except Exception as exc:
+            raise UnexpectedToolError(f"Error executing tool {self.name}") from exc
+
+    即：只有 `ToolError` 子类（含本类继承的 MCPServerError 体系）的文案
+    才会原样回给客户端；其余异常一律被替换成
+    `Error executing tool <name>`，真相只留在服务端日志里。
+
+    实测血案（2026-09-19）：服务器上 18 个 MCP 工具**全部**返回
+    这句同构文案，客户端完全无从判断是「脚本缺失」「依赖没装」
+    还是「权限问题」——故障因此静默了数小时。
+
+    所以：MCP 层一律把业务异常转成 ServiceError（见 api/mcp_server.py
+    的 `_guard`），让真实原因能到达客户端。
+    """
 
 
 # --------------------------------------------------------------------------
@@ -387,3 +407,81 @@ def capabilities() -> list:
         {"name": "llm_status", "desc": "LLM 配置状态", "scopes": ["system:read"]},
         {"name": "qa_queue_status", "desc": "群问答队列状态", "scopes": ["kol:read"]},
     ]
+
+
+# --------------------------------------------------------------------------
+# 自诊断（供 MCP 启动自检与 /healthz?deep=1 使用）
+# --------------------------------------------------------------------------
+
+def selfcheck() -> dict:
+    """逐项体检：解释器 / 脚本目录 / 数据库 / 关键脚本可执行性。
+
+    存在的理由：2026-09-19 的 MCP 全量故障里，**没有任何一处**能看出
+    「容器里到底缺了什么」。这个函数把「工具能不能跑」拆成可判定的几项，
+    并在 MCP 启动时打印，使同类故障下次能一眼定位。
+    """
+    import shutil
+
+    checks = {}
+
+    # 1) 解释器
+    py = config.python_exe()
+    checks["python"] = {"exe": py, "exists": bool(py and os.path.exists(py)),
+                        "version": sys.version.split()[0]}
+
+    # 2) 关键脚本是否都在
+    needed = ["db_query.py", "db_save.py", "level_monitor.py", "market_summary.py"]
+    checks["scripts"] = {
+        "dir": SCRIPTS,
+        "dir_exists": os.path.isdir(SCRIPTS),
+        "missing": [n for n in needed if not os.path.exists(os.path.join(SCRIPTS, n))],
+        "count": len(os.listdir(SCRIPTS)) if os.path.isdir(SCRIPTS) else 0,
+    }
+
+    # 3) 数据库可读（含关键表是否都在）
+    #    ⚠️ 表名以 db_init.py 为准：kol_records / predictions / analysis_reports。
+    #    此前误写成 kol_opinions（库文件名），导致自检恒定报红 —— 自检本身
+    #    也会说谎，所以这里连"表是否存在"一起查。
+    dbp = config.db_path()
+    # ⚠️ rows 必须在这里初始化：数据库打不开时会走 except 分支，
+    #    而下方 checks["database"] 无条件引用 rows —— 漏了就会
+    #    UnboundLocalError，把「原来是数据库坏了」变成「自检自己崩了」。
+    db_ok, db_err, tables, missing_tables, rows = False, "", [], [], 0
+    needed_tables = ["kol_records", "predictions"]
+    try:
+        import sqlite3
+        con = sqlite3.connect("file:%s?mode=ro" % dbp, uri=True)
+        tables = [r[0] for r in con.execute(
+            "select name from sqlite_master where type='table'")]
+        missing_tables = [t for t in needed_tables if t not in tables]
+        # 记录数取 kol_records（若缺失则为 0，不抛）
+        rows = 0
+        if "kol_records" in tables:
+            rows = con.execute("select count(*) from kol_records").fetchone()[0]
+        con.close()
+        db_ok = not missing_tables
+    except Exception as e:
+        db_err = "%s: %s" % (type(e).__name__, e)
+    checks["database"] = {"path": dbp, "readable": db_ok, "error": db_err,
+                          "tables": tables, "missing_tables": missing_tables,
+                          "records": rows}
+
+    # 4) 依赖（importlib.util 不随 importlib 自动加载，须显式导入）
+    import importlib.util
+
+    def _has(mod):
+        try:
+            return importlib.util.find_spec(mod) is not None
+        except Exception:
+            return False
+
+    checks["deps"] = {
+        "requests": _has("requests"),
+        "flask": _has("flask") or shutil.which("flask") is not None,
+        "mcp": _has("mcp"),
+    }
+
+    checks["ok"] = bool(
+        checks["python"]["exists"] and checks["scripts"]["dir_exists"]
+        and not checks["scripts"]["missing"] and db_ok)
+    return checks
