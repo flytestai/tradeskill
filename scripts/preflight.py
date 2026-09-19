@@ -1047,6 +1047,36 @@ def check_backup():
     except Exception:
         _ok("定时备份检查 —— 已跳过（无 crontab）")
 
+    # 跨机备份（GitHub Deploy Key）—— 2026-09-19 打通
+    #
+    # ⚠️ 背景：平台设计用 `sync/records.jsonl` 作**跨机共享的言论库**，
+    #    原本要走 GitHub，但服务器**没有 git 凭据**，push 必然失败、且从未被调度。
+    #    修好 Deploy Key 后，这里断言它**仍然可用** —— 凭据失效是静默的
+    #    （cron 丢弃输出），不定期检查会再次悄悄断掉。
+    try:
+        import subprocess as _sp
+        r = _sp.run(["crontab", "-l"], capture_output=True, text=True, timeout=15)
+        if "push_sync.sh" in (r.stdout or ""):
+            _ok("已注册 GitHub 备份推送")
+        else:
+            _bad("未注册 GitHub 备份推送", "跨机言论库同步不会发生")
+    except Exception:
+        pass
+
+    try:
+        import subprocess as _sp
+        # 直接用 ssh -T 验证 deploy key 是否仍有效
+        r = _sp.run(["ssh", "-T", "-o", "BatchMode=yes", "-o", "ConnectTimeout=15",
+                     "git@github-kol"], capture_output=True, text=True, timeout=30)
+        out = (r.stdout or "") + (r.stderr or "")
+        if "Hi " in out or "successfully authenticated" in out:
+            _ok("GitHub Deploy Key 有效")
+        else:
+            _bad("GitHub Deploy Key 认证失败",
+                 "跨机备份已断；检查 ~/.ssh/github_deploy 与仓库 Deploy Keys")
+    except Exception as e:
+        _ok("Deploy Key 检查 —— 已跳过（%s）" % str(e)[:40])
+
 
 def check_planner():
     """规划链路配置：防「选错技能」与「静默失效」。
