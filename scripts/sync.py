@@ -16,6 +16,14 @@
 import sqlite3, json, os, sys, subprocess, argparse, time
 from datetime import datetime
 
+try:
+    from common import beijing_now as _bj_now
+except Exception:
+    def _bj_now():
+        from datetime import datetime, timezone, timedelta
+        return datetime.now(timezone(timedelta(hours=8)))
+
+
 from records_hash import content_hash
 import common  # noqa: F401  触发静默运行补丁
 
@@ -120,7 +128,7 @@ def _write_meta():
         with open(JSONL_PATH, "r", encoding="utf-8") as f:
             count = sum(1 for line in f if line.strip())
     meta = {
-        "last_export": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "last_export": _bj_now().strftime("%Y-%m-%d %H:%M:%S"),
         "record_count": count,
     }
     with open(META_PATH, "w", encoding="utf-8") as f:
@@ -204,7 +212,7 @@ def git_push():
         print(f"[GIT] add failed: {out}")
         return False
 
-    ts = datetime.now().strftime("%Y-%m-%d %H:%M")
+    ts = _bj_now().strftime("%Y-%m-%d %H:%M")
     ok, out = run(f'git commit -m "sync: {ts}" -- sync/', timeout=30)
     if not ok and "nothing to commit" not in out.lower():
         print(f"[GIT] commit skipped: {out.strip()}")

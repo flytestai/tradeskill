@@ -23,6 +23,14 @@ import argparse
 import json
 import time
 from datetime import datetime, timedelta
+
+try:
+    from common import beijing_now as _bj_now
+except Exception:
+    def _bj_now():
+        from datetime import datetime, timezone, timedelta
+        return datetime.now(timezone(timedelta(hours=8)))
+
 import common  # noqa: F401  触发静默运行补丁
 
 
@@ -108,7 +116,7 @@ def query_positions(conn, kol_name: str = '', days: int = 0) -> list:
     """Get only records that have position tracking data, ordered by time."""
     if kol_name:
         if days > 0:
-            cutoff = (datetime.now() - timedelta(days=days)).strftime('%Y-%m-%d')
+            cutoff = (_bj_now() - timedelta(days=days)).strftime('%Y-%m-%d')
             rows = conn.execute(
                 "SELECT * FROM kol_records WHERE kol_name = ? AND position_size IS NOT NULL AND record_date >= ? ORDER BY record_date ASC",
                 (kol_name, cutoff)
@@ -243,7 +251,7 @@ def main():
     # Calculate default date_from based on --days (unless --all or explicit --from)
     default_date_from = ''
     if not args.all and not args.date_from and not args.id and not args.search:
-        default_date_from = (datetime.now() - timedelta(days=args.days)).strftime('%Y-%m-%d')
+        default_date_from = (_bj_now() - timedelta(days=args.days)).strftime('%Y-%m-%d')
 
     try:
         if args.summary:

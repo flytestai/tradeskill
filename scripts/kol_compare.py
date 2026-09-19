@@ -74,7 +74,7 @@ def compare(args):
         cur.execute("SELECT DISTINCT kol_name FROM kol_records")
         kols = [r[0] for r in cur.fetchall()]
 
-    print(f"\n  🆚 多KOL对比分析 ({datetime.now().strftime('%Y-%m-%d %H:%M')})")
+    print("\n  🆚 多KOL对比分析 (%s)" % _bj_now().strftime('%Y-%m-%d %H:%M'))
     print(f"  {'='*70}")
 
     summaries = []

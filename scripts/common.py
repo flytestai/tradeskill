@@ -373,20 +373,39 @@ def send_card(markdown, chat_id=None, user_id=None, title="通知", subtitle="",
     card = build_card(markdown, title, subtitle, template)
 
     # ---- 通道 1：纯 Python（容器内首选）----
+    #
+    # ⚠️ 这里的变量必须先初始化（实测踩坑）：
+    #    原先只在 except 分支里给 _py_err 赋值，且 except 子句直接引用
+    #    在 try 内 import 的 FeishuError —— 一旦 import 本身失败
+    #    （依赖缺失/文件损坏），会抛 UnboundLocalError，
+    #    把「发送通道不可用」这个可诊断的错误，变成一个看不懂的崩溃。
+    #    而 send_card 是群回复的唯一出口，这里崩了就完全发不出消息。
+    _py_err = "通道未执行"
+    _FeishuError = None
+    _fs_send = _fs_ok = None
     try:
         sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-        from feishu_client import send as _fs_send, is_configured as _fs_ok, FeishuError
-        if _fs_ok():
-            rid = chat_id or user_id
-            rtype = "chat_id" if chat_id else "open_id"
-            _fs_send(rid, json.dumps(card, ensure_ascii=False),
-                     msg_type="interactive", receive_id_type=rtype)
-            return True, ""
-    except FeishuError as exc:
-        # 飞书 API 明确报错：记录但不立即返回，继续尝试 lark-cli
-        _py_err = str(exc)[:200]
+        from feishu_client import (
+            send as _fs_send, is_configured as _fs_ok, FeishuError as _FeishuError,
+        )
     except Exception as exc:
-        _py_err = "%s: %s" % (type(exc).__name__, str(exc)[:160])
+        _py_err = "feishu_client 不可用: %s: %s" % (type(exc).__name__, str(exc)[:120])
+
+    if _fs_ok is not None:
+        try:
+            if _fs_ok():
+                rid = chat_id or user_id
+                rtype = "chat_id" if chat_id else "open_id"
+                # 把幂等键透传到纯 Python 通道 —— 否则容器内（lark-cli 不可用）
+                # 的幂等保护会完全失效（详见 feishu_client.send 的说明）
+                _fs_send(rid, json.dumps(card, ensure_ascii=False),
+                         msg_type="interactive", receive_id_type=rtype,
+                         uuid=idem_key or "")
+                return True, ""
+            _py_err = "feishu_client 未配置（缺少凭证）"
+        except Exception as exc:
+            # FeishuError 与其它异常一视同仁：记录后继续尝试 lark-cli
+            _py_err = str(exc)[:200]
 
     # ---- 通道 2：回退 lark-cli（宿主机）----
     native = _native_lark_cli()
