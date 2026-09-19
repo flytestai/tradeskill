@@ -251,15 +251,20 @@ SYSTEM_FINANCE = (
 )
 
 
-def analyze_question(question: str, context: str = "") -> str:
-    """群问答场景：结合平台多源数据回答问题。"""
+def analyze_question(question: str, context: str = "", timeout: int = None) -> str:
+    """群问答场景：结合平台多源数据回答问题。
+
+    :param timeout: 覆盖默认 LLM_TIMEOUT。调用方（services.llm_ask）按
+        「整体预算 − 已用时间」传入更紧的值，保证链路总耗时不超过上层超时。
+    """
+    kw = {"timeout": int(timeout)} if timeout else {}
     if context:
         prompt = ("【平台检索数据】\n%s\n\n【用户问题】\n%s\n\n"
                   "请基于上面的数据回答；数据不足的部分请直接说明。" % (context, question))
     else:
         prompt = ("【用户问题】\n%s\n\n注意：本次未取到平台数据，"
                   "请明确告知用户这一限制，不要凭记忆编造行情数字。" % question)
-    return chat(prompt, system=SYSTEM_FINANCE)
+    return chat(prompt, system=SYSTEM_FINANCE, **kw)
 
 
 def summarize(content: str, instruction: str = "") -> str:
