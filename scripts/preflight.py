@@ -36,6 +36,40 @@ sys.path.insert(0, SCRIPTS)
 PASS, FAIL = [], []
 
 
+def _load_env_files():
+    """把平台配置文件读进 os.environ（**不覆盖已存在的环境变量**）。
+
+    ⚠️ 为什么必须做（实测踩坑）
+      平台的配置分两处：
+        · 服务器：`<skill>/.env`（cron 的 _run_qa.sh 会 source 它）
+        · 本地/其他：`data/local_config.env`
+      preflight 直接在终端跑时**两处都不加载**，于是：
+        `is_configured()` 返回 False → 自检里「自适应实跑」被跳过。
+      而那一项恰恰是最关键的验证（实跑证明按问题自适应真的生效），
+      结果**在生产环境反被跳过**，等于没查。
+      故这里统一加载，让所有检查都拿到完整配置。
+    """
+    for rel in (".env", os.path.join("data", "local_config.env")):
+        fp = os.path.join(SKILL_DIR, rel)
+        if not os.path.isfile(fp):
+            continue
+        try:
+            with open(fp, encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip().lstrip("﻿")
+                    if not line or line.startswith("#") or "=" not in line:
+                        continue
+                    k, _, v = line.partition("=")
+                    k, v = k.strip(), v.strip()
+                    if k and k not in os.environ:      # 不覆盖外部已设的
+                        os.environ[k] = v
+        except Exception:
+            pass
+
+
+_load_env_files()
+
+
 def _ok(name, detail=""):
     PASS.append((name, detail))
     print("  ✅ %s%s" % (name, ("  — " + detail) if detail else ""))
