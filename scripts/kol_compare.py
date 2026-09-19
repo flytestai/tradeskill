@@ -22,8 +22,32 @@ except Exception:
 SKILL_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DB_PATH = os.path.join(SKILL_DIR, "data", "kol_opinions.db")
 
+
+# ---------------------------------------------------------------------------
+# SQLite 只读连接（2026-09-19 服务器实测新增）
+#
+# MCP 容器把 data 目录挂成**只读**，而 sqlite3.connect() 默认以读写模式
+# 打开、需要创建 journal，在只读文件系统上直接抛
+#   sqlite3.OperationalError: unable to open database file
+# 导致所有依赖数据库的能力在 MCP 侧全部失效。
+#
+# 本模块是**纯读**用途（只执行 SELECT），故一律以只读 URI 打开：
+#   connect('file:...?mode=ro&immutable=1', uri=True)
+# 读写挂载下同样有效，行为不变；只读挂载下则可正常工作。
+# ---------------------------------------------------------------------------
+def _ro_uri(path: str) -> str:
+    p = str(path).replace("\\", "/")
+    if not p.startswith("/"):
+        p = "/" + p
+    return "file:%s?mode=ro&immutable=1" % p
+
+
+def connect_ro(path: str):
+    import sqlite3
+    return sqlite3.connect(_ro_uri(path), uri=True)
+
 def connect():
-    conn = sqlite3.connect(DB_PATH, timeout=10)
+    conn = connect_ro(DB_PATH)   # 只读打开：兼容 MCP 侧只读挂载
     conn.execute("PRAGMA journal_mode=WAL")
     return conn
 
