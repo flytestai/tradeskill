@@ -63,3 +63,6 @@ data/*.corrupt-*
 # 关键位自动刷新的波浪缓存
 _data/wave_*.json
 data/_wave_*.json
+
+# 关键位数据（由 level_refresh.py 每日自动刷新，属运行时产物）
+data/level_targets.json
