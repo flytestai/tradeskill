@@ -113,6 +113,38 @@ for f in meetings.json review.json watchlist.json holdings.json \
     [ -f "$src" ] && cp -a "$src" "$DEST/trade365/" || true
 done
 
+# ---- 系统级配置 -------------------------------------------------------------
+#
+# ⚠️ 为什么必须备份（2026-09-19 第七轮审计发现）
+#   此前备份只覆盖"业务数据"，**不含任何系统配置**。而系统配置同样会丢、
+#   且丢了自己很难重建：
+#     · /etc/localtime + /etc/timezone  —— 本轮就改过它（原为 US/Eastern，
+#       导致所有定时任务晚 12 小时）。若机器重装而没记下原设定，
+#       时区错位问题会再次静默复发。
+#     · root crontab  —— 15 条定时任务是整个平台的心跳，丢了两天内无人知。
+#     · sshd 配置 + authorized_keys  —— SSH 加固后若丢失，可能再也登不进。
+#     · Nginx 站点配置  —— 公网入口（含 MCP/REST 反代与鉴权协作）。
+#   数据备份得以恢复，靠的正是这些配置还在。
+DEST_SYS="$DEST/system"
+mkdir -p "$DEST_SYS"
+cp -a /etc/localtime "$DEST_SYS/localtime" 2>/dev/null || true
+cp -a /etc/timezone "$DEST_SYS/timezone" 2>/dev/null || true
+crontab -l > "$DEST_SYS/root.crontab" 2>/dev/null || true
+cp -a /etc/ssh/sshd_config "$DEST_SYS/sshd_config" 2>/dev/null || true
+cp -a /root/.ssh/authorized_keys "$DEST_SYS/authorized_keys" 2>/dev/null || true
+cp -a /etc/nginx/sites-available/skill-platform "$DEST_SYS/nginx-skill-platform.conf" 2>/dev/null || true
+cp -a /etc/fail2ban/jail.local "$DEST_SYS/fail2ban-jail.local" 2>/dev/null || true
+# 记录当时的时区与时间，便于恢复后核对
+{
+  echo "# 备份时刻的宿主状态（用于恢复后核对）"
+  echo "timezone: $(cat /etc/timezone 2>/dev/null)"
+  echo "date:     $(date '+%F %T %Z')"
+  echo "hostname: $(hostname)"
+} > "$DEST_SYS/_meta.txt" 2>/dev/null || true
+
+sysfiles=$(ls -1 "$DEST_SYS" 2>/dev/null | wc -l)
+echo "  系统配置: $sysfiles 个文件 -> $DEST_SYS"
+
 # ---- 轮转：只保留最近 N 天 --------------------------------------------------
 if [ -d "$BACKUP_ROOT" ]; then
     # 排除 _pre-restore-*（恢复前安全副本，单独保留，不参与快照轮转）
