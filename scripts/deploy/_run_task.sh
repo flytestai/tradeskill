@@ -167,7 +167,9 @@ fi
 #      2) 并发调用 LLM → 触发限流 429
 #    抢不到锁直接退出（下一轮再来），不排队、不等待。
 if [ "$WANT_LOCK" = "1" ]; then
-    exec 9>"$DEPLOY_DIR/data/_task_runner.lock"
+    # 按任务名独立锁：不同任务互不阻塞（如每分钟的 price-alerts 不会被最长 167s 的 qa-poll 卡住），
+    # 仅对「同名任务」防重入（这是高频任务必需的那层保护）。
+    exec 9>"$DEPLOY_DIR/data/_task_runner_${NAME}.lock"
     flock -n 9 || exit 0
 fi
 

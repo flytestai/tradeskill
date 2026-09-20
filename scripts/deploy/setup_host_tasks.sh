@@ -130,6 +130,12 @@ emit "0 16 * * 1-5"    "sync-afterclose" trading  ""       "scripts/sync_feishu_
 emit "*/5 9-15 * * 1-5"  "position-monitor" trading "--lock" "scripts/position_monitor.py" "--notify"
 emit "*/10 9-15 * * 1-5" "monitor-alerts"   trading "--lock" "scripts/monitor_alerts.py"
 
+# ---- 盘中高频链路（交易日 9-16 每分钟；脚本内部有交易日守卫）----
+# price-alerts：价格提醒检查（--trading 挡节假日，check 内部再按订阅过滤）
+# feishu-intraday-poll：wu2198 盘中观点同步 + VIP 推送
+emit "*/1 9-16 * * 1-5" "price-alerts"         trading "--lock" "scripts/price_alerts.py" "check"
+emit "*/1 9-16 * * 1-5" "feishu-intraday-poll" trading "--lock" "scripts/sync_feishu_auto.py"
+
 # ---- 全天周期（无交易日语义 → always）----
 # 敲键盘表情清理 / 授权保活 / 自监控 / trade365 自愈，周末与节假日都必须照跑
 emit "*/5 * * * *"   "react-cleanup"     always  ""       "scripts/react.py" "cleanup"
@@ -155,6 +161,10 @@ emit "45 23 * * *"   "github-sync"       always  "--bash" "scripts/deploy/push_s
 #      因而没有任何日志、校验与退出码回收（"看起来在跑"最危险）
 #    · 备份逻辑无法脱离 crontab 单独验证
 emit "0 3 * * *"     "full-backup"       always  "--bash" "scripts/deploy/full_backup.sh"
+
+# ---- 年度维护（12 月 1/15 提醒：下一年休市日需录入 data/holidays.txt）----
+emit "0 10 1 12 *"   "holidays-remind"   always  "--bash" "scripts/deploy/holidays_remind.sh"
+emit "0 10 15 12 *"  "holidays-remind"   always  "--bash" "scripts/deploy/holidays_remind.sh"
 
 # ---- 群问答（24×7，**不守卫**：周末与节假日也要回复）----
 # ⚠️ 为什么 --qa：
