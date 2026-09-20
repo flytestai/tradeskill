@@ -81,23 +81,23 @@ def save_state(d: dict) -> None:
 
 def notify(title: str, body: str) -> bool:
     """用平台的飞书通道发通知（复用现有实现，不另造轮子）。"""
-    # 复用平台的 alert_once.sh —— 它天生适合这个场景：
+    # 复用平台的 alert_once_private.sh —— 它天生适合这个场景：
     #   · 只在「状态变化」时发提醒（有货→提醒；缺货→只重置状态）
     #   · 同一状态不重复提醒，恢复后自动重置
     # 故去重逻辑不必自己实现，交给已有且经过验证的组件。
-    script = "/opt/kol-skills-platform/scripts/alert_once.sh"
+    script = "/opt/kol-skills-platform/scripts/alert_once_private.sh"
     if not os.path.isfile(script):
-        log("  ⚠️ 未找到 alert_once.sh（通知已写入日志）")
+        log("  ⚠️ 未找到 alert_once_private.sh（通知已写入日志）")
         return False
     try:
         r = subprocess.run(["bash", script, "a1_capacity", "below", body],
                            capture_output=True, text=True, timeout=90)
         if r.returncode == 0:
-            log("  已通过 alert_once.sh 发送通知（同状态自动去重）")
+            log("  已通过 alert_once_private.sh 发送通知（同状态自动去重）")
             return True
-        log("  alert_once.sh 返回 %s: %s" % (r.returncode, (r.stderr or r.stdout or "")[:150]))
+        log("  alert_once_private.sh 返回 %s: %s" % (r.returncode, (r.stderr or r.stdout or "")[:150]))
     except Exception as e:
-        log("  alert_once.sh 调用异常: %s" % e)
+        log("  alert_once_private.sh 调用异常: %s" % e)
     return False
 
 

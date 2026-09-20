@@ -21,7 +21,7 @@
 #   7. LLM：主动拨测 Kimi，识别"账号欠费停用"这类无症状故障（本轮新增）
 #
 # 告警策略
-#   · 复用 alert_once.sh：**同一故障只告警一次**，恢复后才重置
+#   · 复用 alert_once_private.sh：**同一故障只告警一次**，恢复后才重置
 #     （避免每 5 分钟轰炸一次）
 #   · 用 notify_feishu.sh（bot 身份私信），bot token 无 7 天限制
 #
@@ -66,7 +66,7 @@ _add() { problems="${problems}${problems:+, }$1"; }
 #   新架构：systemd 托管 kol-platform（REST 8020）+ trade365（8000）+ nginx/docker/cron
 #   检查方式随之由 `docker inspect` 改为 `systemctl is-active`。
 #   （新服务器基于 Ubuntu 22.04，kol 平台跑在 systemd 下，见服务器重建报告）
-for svc in kol-platform nginx docker cron; do
+for svc in kol-platform kol-platform-mcp trade365 nginx docker cron; do
     st="$(systemctl is-active "$svc" 2>/dev/null)"
     [ "$st" = "active" ] || _add "$svc=$st"
 done
@@ -108,8 +108,8 @@ case "$hz" in
 esac
 
 # ---- 3. trade365 -----------------------------------------------------------
-t365="$(_probe_http 'http://127.0.0.1:8000/api/overview' 25 3)"
-[ "$t365" = "200" ] || _add "trade365=$t365（已重试3次）"
+t365="$(_probe_http 'http://127.0.0.1:8000/api/overview' 40 5)"
+[ "$t365" = "200" ] || _add "trade365=$t365（已重试5次）"
 
 # ---- 4. 关键状态文件可解析 ---------------------------------------------------
 for f in group_qa_queue.json group_qa_answered.json level_targets.json \
@@ -241,7 +241,7 @@ if [ -n "$problems" ]; then
     fi
     if [ "$QUIET" != "1" ]; then
         # 同一故障只告警一次（内容变化才重新告警 → 恢复后自然重置）
-        bash "$KOL_DIR/scripts/alert_once.sh" "selfcheck" "$problems" \
+        bash "$KOL_DIR/scripts/alert_once_private.sh" "selfcheck" "$problems" \
             "🚨 **【服务器自检异常】**
 $problems
 
@@ -261,5 +261,5 @@ else
     echo "[$(date '+%F %T')] ✅ 自检正常（容器 / REST / trade365 / 状态文件 / 磁盘 / 定时任务 / LLM）"
 fi
 # 恢复正常 → 重置告警状态，下次故障会重新告警
-bash "$KOL_DIR/scripts/alert_once.sh" "selfcheck" "ok" "" >/dev/null 2>&1 || true
+bash "$KOL_DIR/scripts/alert_once_private.sh" "selfcheck" "ok" "" >/dev/null 2>&1 || true
 exit 0

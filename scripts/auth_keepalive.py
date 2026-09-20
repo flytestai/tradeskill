@@ -201,8 +201,8 @@ def alert(msg: str, once_key: str = ""):
     if not os.path.exists(script):
         log("告警脚本缺失: %s" % script)
         return
-    # 去重：同一触发键只提醒一次（alert_once.sh 支持状态重置）
-    once = os.path.join(SKILL_DIR, "scripts", "alert_once.sh")
+    # 去重：同一触发键只提醒一次（alert_once_private.sh 支持状态重置）
+    once = os.path.join(SKILL_DIR, "scripts", "alert_once_private.sh")
     if once_key and os.path.exists(once):
         cmd = ["bash", _posix_path(once), once_key, "below", msg]
     else:
