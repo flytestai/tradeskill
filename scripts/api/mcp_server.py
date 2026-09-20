@@ -294,10 +294,49 @@ def run_http(mcp, host: str, port: int) -> int:
     if hasattr(mcp, "streamable_http_app"):
         try:
             import uvicorn
-            # 注意：host 需传给 streamable_http_app ——
-            # 传 127.0.0.1 时会自动开启 DNS rebinding 保护并要求 Host 匹配；
-            # 对外服务必须传真实绑定地址，否则反代会被 421 拒绝。
-            app = mcp.streamable_http_app(host=host)
+
+            # -----------------------------------------------------------------
+            # DNS-rebinding 保护的白名单（2026-09-20 实测踩坑）
+            #
+            # SDK 在 `host=127.0.0.1` 时会**自动开启** DNS-rebinding 保护，
+            # 并把 allowed_hosts 默认为 ["127.0.0.1:*", "localhost:*", "[::1]:*"]
+            # （见 mcp/server/mcpserver/server.py）。于是经 Nginx 反代时，
+            # Host 头是真实域名 → 不匹配白名单 → SDK 直接返回：
+            #       421 Invalid Host header
+            # 这是**最后一层**「部署看起来成功、端点却用不了」的坑：
+            # 端口在听、本机 curl 200、日志正常，只有走真实域名才暴露。
+            #
+            # 故显式给出白名单（可用 PLATFORM_MCP_ALLOWED_HOSTS 覆盖，
+            # 逗号分隔），并保留 localhost 系列以便本机/preflight 直连。
+            #
+            # ⚠️ 为什么不干脆关掉保护：
+            #    保护本身对「浏览器场景」有价值（防恶意页面把域名 rebind 到
+            #    内网地址后调用本端点）。这里白名单是我们自己的域名，
+            #    保留保护属于纵深防御，代价只是多一行配置。
+            # ⚠️ allowed_origins 刻意留空：Origin 只有浏览器会发，
+            #    非浏览器 MCP 客户端（Claude Code SDK / 蜜蜂 connector）不发
+            #    Origin → `_validate_origin` 对「缺失」直接放行。若将来要用
+            #    浏览器型客户端，需在此补 allowed_origins。
+            # -----------------------------------------------------------------
+            _default_hosts = ["127.0.0.1:*", "localhost:*", "[::1]:*",
+                              "skill.flytest.com.cn", "www.flytest.com.cn",
+                              "ai.flytest.com.cn"]
+            _env_hosts = (os.environ.get("PLATFORM_MCP_ALLOWED_HOSTS") or "").strip()
+            _allowed = [h.strip() for h in _env_hosts.split(",") if h.strip()] \
+                if _env_hosts else _default_hosts
+            _ts = None
+            try:
+                from mcp.server.transport_security import TransportSecuritySettings
+                _ts = TransportSecuritySettings(
+                    enable_dns_rebinding_protection=True, allowed_hosts=_allowed)
+            except Exception as e:
+                print("[mcp][warn] 无法构造 TransportSecuritySettings（%s），"
+                      "沿用 SDK 默认白名单（反代域名会被 421 拒绝）" % e,
+                      file=sys.stderr)
+
+            print("[mcp] 允许的 Host：%s" % ", ".join(_allowed))
+            app = mcp.streamable_http_app(streamable_http_path=path,
+                                          transport_security=_ts)
             app.add_middleware(RequireAuthMiddleware, mode=mode)
             if not config.API_KEYS:
                 print("[mcp][auth] ⚠️ 未配置 PLATFORM_API_KEYS —— "
