@@ -98,9 +98,19 @@ EOF
 
 install_codex() {
   if command -v codex >/dev/null 2>&1; then
-    codex mcp add kol-platform --transport http --url "$ENDPOINT" --header "X-API-Key: $API_KEY" \
-      && echo "✅ Codex      : 已注册（~/.codex/config.toml）" \
-      || echo "⚠️ Codex      : codex mcp add 失败，请手动配置"
+    if codex mcp add kol-platform --url "$ENDPOINT" --bearer-token-env-var KOL_API_KEY 2>/dev/null; then
+      echo "✅ Codex      : 已注册（~/.codex/config.toml，Bearer 认证）"
+      local rc
+      for rc in "$HOME/.bashrc" "$HOME/.zshrc" "$HOME/.zprofile"; do
+        if [[ -f "$rc" ]] && ! grep -q "KOL_API_KEY" "$rc" 2>/dev/null; then
+          echo "export KOL_API_KEY=\"$API_KEY\"" >> "$rc"
+          echo "   → 已把 KOL_API_KEY 写入 $rc"
+        fi
+      done
+      echo "   💡 Codex 走 Bearer 认证：启动前确保已 export KOL_API_KEY（已自动写入上面的 rc 文件）"
+    else
+      echo "⚠️ Codex      : codex mcp add 失败，请手动配置 ~/.codex/config.toml"
+    fi
   else
     echo "⏭️  Codex      : 未检测到 codex 命令，跳过（安装后见 README 手动配置）"
   fi
@@ -108,9 +118,11 @@ install_codex() {
 
 install_claude() {
   if command -v claude >/dev/null 2>&1; then
-    claude mcp add kol-platform --transport http --url "$ENDPOINT" --header "X-API-Key: $API_KEY" \
-      && echo "✅ Claude Code: 已注册（全局）" \
-      || echo "⚠️ Claude Code: claude mcp add 失败，请手动配置"
+    if claude mcp add --scope user --transport http kol-platform "$ENDPOINT" --header "X-API-Key: $API_KEY" 2>/dev/null; then
+      echo "✅ Claude Code: 已注册（全局 ~/.claude.json）"
+    else
+      echo "⚠️ Claude Code: claude mcp add 失败，请手动配置"
+    fi
   else
     echo "⏭️  Claude Code: 未检测到 claude 命令，跳过（安装后见 README 手动配置）"
   fi

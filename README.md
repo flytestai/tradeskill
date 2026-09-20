@@ -57,9 +57,9 @@ bash install.sh kol-xxx
 |------|----------|-----------|
 | Bee | `~/.bee-pc-agent/mcp.json`（Windows 为 `C:\Users\<用户>\.bee-pc-agent\mcp.json`） | `config/bee.mcp.json` |
 | Claude Code / Cursor | 项目根 `.mcp.json` 或全局 `~/.claude.json` | `config/claude-code.mcp.json` |
-| Codex | `~/.codex/config.toml` | `config/codex.mcp.json` |
+| Codex | `~/.codex/config.toml` | `config/codex.config.toml`（走 Bearer 认证，需另设 `export KOL_API_KEY=<key>`） |
 | WorkBuddy | `~/.workbuddy/connectors/kol-platform/mcp.json` | `config/workbuddy.mcp.json` |
-| Hermes | `~/.hermes/config.yaml` | `config/hermes.mcp.json` |
+| Hermes | `~/.hermes/config.yaml` | `config/hermes.config.yaml` |
 
 > 记得把配置里的 `<你的API Key>` 换成真实密钥。
 

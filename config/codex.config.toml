@@ -1,0 +1,7 @@
+# 追加到 ~/.codex/config.toml 文件末尾
+# Codex 的 streamable-http MCP 用 Bearer 认证：从环境变量 KOL_API_KEY 读取令牌
+# 并在你的 shell 配置里设置： export KOL_API_KEY="<你的API Key>"
+
+[mcp_servers.kol-platform]
+url = "https://skill.flytest.com.cn/mcp"
+bearer_token_env_var = "KOL_API_KEY"
