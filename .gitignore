@@ -48,7 +48,7 @@ data/_run_health_monitor.cmd
 .env.runtime
 vendor/
 data.hostbak-*/
-scripts/deploy/_run_*.sh
+scripts/deploy/_run_qa.sh
 
 # 波浪上下文临时产物与缓存
 data/_elliott_ctx_*.md
@@ -70,3 +70,21 @@ data/level_targets.json
 # 个人归档（与本项目无关的临时分析脚本）
 archive/adhoc/
 _sshlib.py
+
+# ---- 凭据 / 服务器档案（2026-09-20 补充，防误提交）----
+# 提交前盘查未跟踪文件时发现：SERVER-INFO.txt 含 root 账号与 API Key、
+# oci_action.py 会读取 OCI PEM 私钥并执行实例操作（SOFTRESET）——
+# 均不在忽略列表内，一旦 `git add -A` 就会推上公开仓库。
+SERVER-INFO.txt
+*.pem
+*.key
+_sshlib.py
+scripts/deploy/oci_action.py
+
+# ---- 运行时产物与临时备份（2026-09-20 补充）----
+# 提交前 `git add -A` 会把它们一起卷进来，实测清单里确实有：
+logs/
+data/sync_errors.log.1
+data/sync_errors.log.*
+scripts/deploy/*.bak-*
+scripts/deploy/_a1_watch_state.json

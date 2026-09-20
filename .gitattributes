@@ -30,6 +30,13 @@
 Dockerfile   text eol=lf
 *.conf       text eol=lf
 
+# logrotate 配置：**必须 LF**。logrotate 解析器不容忍 CR ——
+# 带 CRLF 时会在第一条指令处报
+#   "lines must begin with a keyword or a filename"
+# 而 logrotate.timer 丢弃 stderr → 「配置在、timer 在跑、但从未轮转」完全静默。
+# 该配置没有扩展名（logs.d 约定），故按文件名单独声明。
+logrotate-kol-platform        text eol=lf
+
 # --- Windows 专用：保持 CRLF ---
 *.ps1        text eol=crlf
 *.cmd        text eol=crlf
