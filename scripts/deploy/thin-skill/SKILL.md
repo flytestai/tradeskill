@@ -82,7 +82,7 @@ python scripts/query.py "盘前播报"
 MCP 端点: https://skill.flytest.com.cn/mcp      传输: streamable-http
 ```
 
-暴露 14 个 tools：`kol_list` / `kol_records` / `kol_summary` / `kol_accuracy` /
+暴露 19 个 tools（2026-09-20 线上实测）：`kol_list` / `kol_records` / `kol_summary` / `kol_accuracy` /
 `kol_predictions` / `kol_add_prediction` / `kol_compare` / `kol_backtest` /
 `levels` / `market_summary` / `quote` / `bee_health` / `alert_status` / `capabilities`
 

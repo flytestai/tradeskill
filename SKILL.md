@@ -95,20 +95,24 @@ SELECT * FROM kol_records WHERE kol_name='大V名称' AND content LIKE '%仅TA�
 
 本技能实现「大V言论采集 → 持久化 → 多维数据验证 → HTML 报告 → ETF 建议」的完整闭环。
 
-## 运行架构（后端服务 + 蜜蜂 AI，省 token）
+## 运行架构（Linux 服务器后端 + 蜜蜂 AI，省 token）
 
-**所有轮询/监控/行情数据走后端脚本（`scripts/supervisor.py`，零 token）**，**只有需要大模型理解和生成的地方才走蜜蜂 AI**。
+> 2026-09-20 起生产环境部署于 Linux 服务器（Ubuntu 22.04，systemd + cron 托管）。
+> 旧版 Windows `supervisor.py` 常驻循环已退役，仅保留在仓库供本地开发参考。
 
-- 后端常驻 `supervisor.py` 托管：
-  - 3 个 30 秒循环：`sync_feishu_auto.py --loop`（wu2198 同步+VIP 推送）、`sync_litchi_auto.py --loop`（荔枝群 @机器人 轮询入队）、`price_alerts.py --loop`（价格提醒）。
-  - 定时脚本：`position_monitor.py`、`monitor_alerts.py`、`react.py cleanup`。
+**所有轮询/监控/行情数据走后端脚本（Linux 服务器 cron + `_run_task.sh`，零 token）**，**只有需要大模型理解和生成的地方才走蜜蜂 AI**。
+
+- Linux 服务器托管（`scripts/deploy/setup_host_tasks.sh` 统一注册，全部带 `# kol-platform-task` 标记 + 文件锁锁防重复）：
+  - 盘中循环类（cron 高频触发，等价旧 30 秒 loop）：`price_alerts.py check`（交易日 9-16 点**每分钟**）、`sync_litchi_auto.py`（**每分钟**）、`sync_feishu_auto.py`（交易日 9-16 点**每分钟**，盘中 VIP 推送）。
+  - 定时脚本：`position_monitor.py`（5 分钟）、`monitor_alerts.py`（10 分钟）、`react.py cleanup`（5 分钟）。
   - 每日定点任务：交易日 08:45 盘前播报、午间/收盘汇总（`market_summary.py`）、14:55 / 16:00 `sync_feishu_auto.py` 兜底同步。
+  - 群问答：`qa-poll`（每 2 分钟）消费 `data/group_qa_queue.json` 队列。
 - 行情/成交额/主力资金由 `market_summary.py` 直连数据 API 拉取，盘前播报额外读取纳斯达克100行情和估值数据，**不需要经过蜜蜂**。
 - 蜜蜂 AI 只保留两类：
-  1. 「荔枝群问答队列处理」：分三档时段轮询（盘中 10 分钟、盘前盘后/周末 30 分钟、凌晨 0-8 点不跑），队列空则秒退。
+  1. 「荔枝群问答队列处理」：`qa-poll` 每次处理队列（队列空则秒退）。
   2. 午间/收盘「观点一句话」：交易日 11:28 / 15:00 各一次，生成一句话观点写入文件，供后端汇总读取。
 
-启动/自愈：`supervisor_watchdog.py`（Windows 计划任务每 5 分钟自愈 + 登录自启）。手动启动后端：`python scripts/supervisor_watchdog.py`。
+对外接口：REST（systemd `kol-platform.service`，127.0.0.1:8020）+ MCP（`kol-platform-mcp.service`，127.0.0.1:8021），nginx 反代 HTTPS。崩溃自愈：systemd `Restart=always`。自检：`selfcheck.sh` 每 10 分钟。
 
 ## 数据库
 
@@ -379,8 +383,8 @@ python <skill-dir>/scripts/sync.py compact
 
 `scripts/sync_feishu_auto.py` 通过 lark-cli（OAuth 用户授权）从飞书群增量拉取 wu2198 发言：
 
-- **盘中高频轮询**：交易日盘中每 **30 秒** 拉取一次（由后端 `supervisor.py` 常驻托管 `--loop` 循环，文件锁防重复）
-- **循环自愈**：`supervisor.py` 检测循环退出后自动重启（带退避）；`supervisor_watchdog.py` 每 5 分钟检查 supervisor 心跳、停摆自动重启
+- **盘中高频轮询**：交易日 9-16 点由 Linux 服务器 cron **每分钟**触发一次同步（`_run_task.sh --lock` 文件锁防重复；非盘中窗口自动跳过）
+- **循环自愈**：cron 每分钟自动拉起（天然自愈）；服务级由 systemd `Restart=always` 兜底；`selfcheck.sh` 每 10 分钟巡检告警
 - **盘中时间**：交易日 9:00-11:30 / 13:00-15:00（**9:00-9:30 也算盘中**），另在盘后 16:00 兜底一次，其余时间自动跳过
 - **节假日**：法定休市日自动跳过；节假日列表在 `data/holidays.txt`（每行一个日期，每年年初更新），脚本内另有硬编码兜底
 - **增量拉取**：只记住「最后一次拉取的群消息时间」（水位，存于 `sync/feishu_sync_state.json`，随 GitHub 同步，多设备共享一致水位），仅拉取该时间之后的新消息
@@ -490,7 +494,7 @@ python scripts/price_alerts.py --loop --interval 30
 ```
 
 ### 运行机制
-- **检查**：由后端 `supervisor.py` 盘中拉起 `--loop` 循环，循环内每 30 秒查一次价，命中即群发提醒并标记已触发。
+- **检查**：Linux 服务器 cron 于交易日 9-16 点**每分钟**触发 `check` 一次（`_run_task.sh --trading --lock`），命中即群发提醒并标记已触发。
 - **条件**：`below`=跌破（价 ≤ 触发价）、`above`=突破/涨到（价 ≥ 触发价）、`range`=进入区间（下界 ≤ 价 ≤ 上界）。
 - **存储**：`data/price_alerts.json`（gitignored）；循环锁 `data/_price_alerts_loop.lock`。
 - **输入通道**：`scripts/sync_litchi_auto.py` 拉取群里「用户 @机器人」的文本（含 sender 名称与 open_id，用于反馈与 @设置人），入队后由蜜蜂问答任务解析并调用 `add`；价格提醒触发结果通过私信发送，不再发群。
@@ -501,7 +505,7 @@ python scripts/price_alerts.py --loop --interval 30
 
 ### 触发与输入
 
-- 捕获节奏：由 `scripts/sync_litchi_auto.py --loop --interval 30` 脚本**每 30 秒按水位增量拉取**荔枝群消息（与 wu2198 五号群同步同构）；由后端 `supervisor.py` 常驻托管（文件锁防重复）。
+- 捕获节奏：由 `scripts/sync_litchi_auto.py --loop --interval 30` 脚本**每 30 秒按水位增量拉取**荔枝群消息（与 wu2198 五号群同步同构）；由 Linux 服务器 cron **每分钟**触发（`_run_task.sh --lock` 文件锁防重复）。
 - 脚本只保留「普通用户 @机器人」的文本消息，跳过机器人自己、测试消息、已回答过的问题；给每条新 @消息加「敲键盘(Typing)」表情后，写入待处理队列 `data/group_qa_queue.json`。
 - 蜜蜂侧由「荔枝群问答队列处理」任务分三档时段轮询队列（盘中 10 分钟、盘前盘后/周末 30 分钟、凌晨 0-8 点不跑）：队列为空则直接结束；有待处理项才解析并回复。
 - 队列项字段：`message_id / sender / sender_id / text / create_time`；管理脚本 `scripts/qa_queue.py`（`peek` / `done <message_id>` / `clear`）。
