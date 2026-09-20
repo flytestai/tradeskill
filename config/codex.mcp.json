@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "kol-platform": {
+      "type": "http",
+      "url": "https://skill.flytest.com.cn/mcp",
+      "headers": {
+        "X-API-Key": "<你的API Key>"
+      }
+    }
+  }
+}

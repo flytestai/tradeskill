@@ -1,0 +1,10 @@
+{
+  "kol-platform": {
+    "type": "streamableHttp",
+    "url": "https://skill.flytest.com.cn/mcp",
+    "timeout": 30000,
+    "headers": {
+      "X-API-Key": "<你的API Key>"
+    }
+  }
+}
