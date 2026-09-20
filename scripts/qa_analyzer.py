@@ -267,17 +267,71 @@ def _build_context_fallback(question: str) -> str:
 # 处理单条
 # --------------------------------------------------------------------------
 
+def _send_reply(item: dict, answer: str) -> tuple:
+    """把回答正文发回提问所在群（@提问人 + 免责声明 + 去重由 group_reply 负责）。
+
+    返回 (成功, 说明)。
+    """
+    mid = item.get("message_id") or ""
+    sender = item.get("sender") or ""
+    sender_id = item.get("sender_id") or ""
+    question = (item.get("text") or "").strip()
+    chat_id = (item.get("chat_id") or "").strip()
+
+    args = ["scripts/group_reply.py",
+            "--sender", sender, "--question", question,
+            "--text", answer]
+    if sender_id:
+        args += ["--sender-id", sender_id]
+    if mid:
+        args += ["--message-id", mid]
+    if not chat_id:
+        # 无来源群信息 → 拒绝发送，避免回错群（宁可留队列下轮重试）
+        return False, "队列项缺少 chat_id，拒绝发送以免回错群"
+    args += ["--chat-id", chat_id]
+    try:
+        out = run_script(args, timeout=180)
+    except Exception as e:
+        return False, "发送异常: %s" % str(e)[:150]
+    if "[ERROR]" in out or "失败" in out[:200]:
+        return False, "发送失败: %s" % out[:150]
+    return True, "已发送"
+
+
 def process(item: dict, dry_run: bool = False) -> tuple:
     """处理一条问答。返回 (成功, 说明)。"""
     mid = item.get("message_id") or ""
     sender = item.get("sender") or ""
     sender_id = item.get("sender_id") or ""
     question = (item.get("text") or "").strip()
+    chat_id = (item.get("chat_id") or "").strip()
 
     if not question:
         return True, "空问题，跳过"      # 空问题视为已处理，避免卡队列
 
     log("  处理：%s | %s" % (sender or "?", question[:60]))
+
+    # 0) 设置类指令直通：持仓监控 / 一次性价格提醒 / 关键位。
+    #    群里 @机器人「设置…」时**不走 AI 分析**（build_context + Kimi），
+    #    而是按固定格式确定性解析直接设置；格式不对解析不了时，再交给 AI
+    #    把自然语言转成脚本（price_alerts / level_monitor / position_monitor）
+    #    的设置格式去执行。详见 scripts/setup_command.py。
+    try:
+        from setup_command import handle_setup
+        handled, reply = handle_setup(question, sender=sender, sender_id=sender_id,
+                                      chat_id=chat_id, dry_run=dry_run)
+    except Exception as e:
+        handled, reply = False, ""
+        log("    ⚠️ 设置指令处理异常: %s" % str(e)[:120])
+    if handled:
+        log("    设置指令回复: %s" % (reply or "").replace("\n", " ")[:80])
+        if dry_run:
+            log("    [dry-run] 不发送")
+            return True, "dry-run"
+        ok, detail = _send_reply(item, reply)
+        if not ok:
+            return False, detail
+        return True, "已处理设置指令"
 
     # 1) 取上下文
     try:
@@ -313,25 +367,7 @@ def process(item: dict, dry_run: bool = False) -> tuple:
     # ⚠️ 必须传 --chat-id：group_reply 默认发到 VIP_PUSH_CHAT_ID（荔枝群）。
     #    现同时监控「荔枝种植交流群」与「每日复盘群」，若不传此参数，
     #    复盘群的提问会被**回复到荔枝群**（已实测踩坑）。
-    chat_id = (item.get("chat_id") or "").strip()
-    try:
-        args = ["scripts/group_reply.py",
-                "--sender", sender, "--question", question,
-                "--text", answer]
-        if sender_id:
-            args += ["--sender-id", sender_id]
-        if mid:
-            args += ["--message-id", mid]
-        if not chat_id:
-            # 无来源群信息 → 拒绝发送，避免回错群（宁可留队列下轮重试）
-            return False, "队列项缺少 chat_id，拒绝发送以免回错群"
-        args += ["--chat-id", chat_id]
-        out = run_script(args, timeout=180)
-        if "[ERROR]" in out or "失败" in out[:200]:
-            return False, "发送失败: %s" % out[:150]
-        return True, "已发送"
-    except Exception as e:
-        return False, "发送异常: %s" % str(e)[:150]
+    return _send_reply(item, answer)
 
 
 def main() -> int:
