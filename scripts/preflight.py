@@ -33,7 +33,7 @@ SCRIPTS = os.path.dirname(os.path.abspath(__file__))
 SKILL_DIR = os.path.dirname(SCRIPTS)
 sys.path.insert(0, SCRIPTS)
 
-PASS, FAIL = [], []
+PASS, FAIL, WARNS = [], [], []
 
 
 def _load_env_files():
@@ -41,7 +41,7 @@ def _load_env_files():
 
     ⚠️ 为什么必须做（实测踩坑）
       平台的配置分两处：
-        · 服务器：`<skill>/.env`（cron 的 _run_qa.sh 会 source 它）
+        · 服务器：`<skill>/.env`（cron 的 _run_task.sh 会 source 它）
         · 本地/其他：`data/local_config.env`
       preflight 直接在终端跑时**两处都不加载**，于是：
         `is_configured()` 返回 False → 自检里「自适应实跑」被跳过。
@@ -78,6 +78,21 @@ def _ok(name, detail=""):
 def _bad(name, detail=""):
     FAIL.append((name, detail))
     print("  ❌ %s%s" % (name, ("  — " + detail) if detail else ""))
+
+
+def _warn(name, detail=""):
+    """已知敞口 / 待办：**不计入失败**，但在输出里醒目呈现。
+
+    ⚠️ 为什么需要这个中间级别（2026-09-20 新增）
+      有些状态是「**刻意保留的过渡态**」，不是缺陷 —— 例如
+      `PLATFORM_MCP_AUTH_MODE=warn`：在客户端还没能带上 API Key 之前，
+      切 enforce 会立刻 401 打断服务；保持 warn 是当前唯一可行选择。
+      若把它判为 ❌，preflight 会**长期常红** ——
+      而一个长期红的检查等于没有检查：真出问题时没人再看它。
+      故这类情况用 ⚠️ 呈现（每次运行都提醒，但不影响退出码）。
+    """
+    WARNS.append((name, detail))
+    print("  ⚠️  %s%s" % (name, ("  — " + detail) if detail else ""))
 
 
 # ---------------------------------------------------------------------------
@@ -901,12 +916,14 @@ def check_deploy_scripts():
     else:
         _ok("部署脚本语法检查通过", "bash -n")
 
-    # 关键：cron 实际用的运行器必须存在且可执行
+    # 关键：cron 实际用的运行器必须存在、可执行、**且在 cron 里被引用**
     #
-    # ⚠️ 但只在「服务器部署环境」检查 —— _run_task.sh 是
-    #    setup_host_tasks.sh 在**服务器上生成**的产物，
-    #    本地开发环境（Windows）本就不该有它。
-    #    故用「是否已安装到 /opt/kol-skills-platform」来判定环境。
+    # ⚠️ 历史（2026-09-20 更新）：_run_task.sh 以前是 setup_host_tasks.sh
+    #    在服务器上**内联生成**的产物，故这里只能断言「文件在不在」。
+    #    合并为单一 runner 后，它改为**随仓库分发的正式文件**，
+    #    于是可以顺带断言更本质的一件事：**cron 真的在调它**。
+    #    「runner 健在但 cron 没引用」= 所有定时任务静默停摆，这是比
+    #    「文件缺失」更隐蔽、也更常见的故障形态（换服务器、crontab 被清）。
     runner = os.path.join(SCRIPTS, "deploy", "_run_task.sh")
     _is_server = os.path.isdir("/opt/kol-skills-platform/data")
     if os.path.isfile(runner):
@@ -915,9 +932,213 @@ def check_deploy_scripts():
         else:
             _bad("_run_task.sh 不可执行", "cron 会失败")
     elif not _is_server:
-        _ok("_run_task.sh 检查 —— 已跳过（本地环境，该文件由服务器生成）")
+        _ok("_run_task.sh 检查 —— 已跳过（本地开发环境）")
     else:
-        _bad("缺少 _run_task.sh", "cron 的 9 个任务都会失败")
+        _bad("缺少 _run_task.sh", "全部 16 条定时任务都会失败")
+
+    if _is_server:
+        # 1) 单一 runner 形态：**不允许**再出现历史的 _run_qa.sh
+        #    （两个 runner 并存 = 两条链路抢同一队列 → 用户被重复回复）
+        legacy = os.path.join(SCRIPTS, "deploy", "_run_qa.sh")
+        if os.path.isfile(legacy):
+            _bad("仍存在历史 runner _run_qa.sh",
+                 "已合并为单一 _run_task.sh；两 runner 并存会让 QA 被重复消费")
+        else:
+            _ok("单一 runner 形态（无历史 _run_qa.sh）")
+
+        # 1b) 代码是否比 git HEAD **旧**（「rebuild 用旧包覆盖」的静默事故）
+        #
+        # ⚠️ 为什么必须查（2026-09-20 实测发现）
+        #   服务器重建时用恢复包铺了一遍代码，其中若干文件是**旧版本**，
+        #   比 git HEAD 少了几十行。实测踩到的：
+        #     scripts/qa_analyzer.py   AI_ENHANCE_BUDGET 默认 70 → 变回 55
+        #     scripts/skill_agent.py   PLAN_TIMEOUT       默认 60 → 变回 30
+        #   这两个是「为适配推理模型 glm-5.3 而放宽超时」的修复。
+        #   当时生产**恰好没出事**，只因为 .env 里显式覆盖了这两个值 ——
+        #   换句话说：**代码默认值已经错了，全靠一层配置兜着**。
+        #   一旦 .env 丢失或被重建，规划链路会退回超时静默降级（用户无感）。
+        #
+        #   这类「磁盘比 HEAD 旧」的漂移无法从文件本身看出（内容语法都对），
+        #   必须与 git 对比才暴露 —— 故在此断言。
+        try:
+            import subprocess as _spgit
+            _r = _spgit.run(["git", "rev-parse", "--show-toplevel"],
+                            capture_output=True, text=True, timeout=15,
+                            encoding='utf-8', errors='replace',
+                            cwd=os.path.dirname(SCRIPTS))
+            if _r.returncode == 0:
+                # 只看**已跟踪且内容不同**的文件；忽略纯权限变更（mode）
+                _r2 = _spgit.run(["git", "diff", "--numstat", "--", "."],
+                                 capture_output=True, text=True, timeout=30,
+                                 encoding='utf-8', errors='replace',
+                                 cwd=os.path.dirname(SCRIPTS))
+                # ⚠️ 判据只认「**净丢失** HEAD 内容」（dele > add）。
+                #    为什么不用「任何 diff 都报」：正当的改动也有 diff
+                #    （例如 health_monitor.py 把旧 IP 203.0.113.20 更新为
+                #      203.0.113.10，+1/-1），全报会让这项长期常红 ——
+                #    而常红的检查等于没有检查。
+                #    「磁盘比 HEAD 少内容」才是恢复包覆盖的典型签名：
+                #      qa_analyzer.py  +1/-8    （超时预算被改回旧值）
+                #      skill_agent.py  +1/-23   （同理，连注释一起丢）
+                #      selfcheck.sh    +0/-5    （纯丢失）
+                #    而 health_monitor.py 是 +1/-1，不满足 dele > add，不报。
+                _stale, _changed = [], []
+                for _ln in (_r2.stdout or "").splitlines():
+                    parts = _ln.split("\t")
+                    if len(parts) < 3:
+                        continue
+                    add, dele, path = parts[0], parts[1], parts[2]
+                    if add == "0" and dele == "0":     # 纯权限变更（mode）
+                        continue
+                    if add == "-" or dele == "-":      # 二进制
+                        continue
+                    if not path.endswith((".py", ".sh")):
+                        continue
+                    if int(dele) > int(add):
+                        _stale.append("%s (+%s/-%s)" % (path, add, dele))
+                    else:
+                        _changed.append(path)
+                if _stale:
+                    # ⚠️ 用 ⚠️（待办）而非 ❌（失败）—— 这个启发式**无法区分**
+                    #    「被旧恢复包回滚覆盖」（事故）与「刻意精简/重构」（正常）。
+                    #    实测例子：setup_qa_24x7.sh +54/-116 是把独立 runner 合并进
+                    #    统一 runner 时**有意**删掉的 116 行。
+                    #    若判失败，这项会长期常红 —— 而常红的检查等于没有检查，
+                    #    真出事时反而没人看。故每次运行提示、交人复核，不计失败。
+                    _warn("有 %d 个脚本比 git HEAD 少了内容，请确认是有意精简" % len(_stale),
+                          "疑似场景：旧恢复包覆盖（事故）／刻意重构（正常）。"
+                          "待复核：%s —— ⚠️ **不要**直接 git checkout 覆盖，"
+                          "有的文件磁盘版反而更新（如 health_monitor.py 的服务器 IP）"
+                          % "; ".join(_stale[:4]))
+                elif _changed:
+                    _ok("脚本与 git HEAD 的差异均为「净增内容」",
+                        "%d 个改动待提交" % len(_changed))
+                else:
+                    _ok("脚本与 git HEAD 一致（无恢复包覆盖痕迹）")
+            else:
+                _ok("git 漂移检查 —— 已跳过（非 git 仓库）")
+        except Exception as _e:
+            _ok("git 漂移检查 —— 已跳过（%s）" % str(_e)[:40])
+
+        # 1c) 无扩展名的配置文件必须 LF（.gitattributes 覆盖不到的那类）
+        #
+        # ⚠️ 背景：logrotate 配置的 CRLF 正是本次故障根因，而
+        #    `.gitattributes` 只能按**扩展名**匹配；`logrotate-kol-platform`
+        #    这类无扩展名文件只能靠按文件名硬编码，新增同类文件不会自动受保护。
+        #    故这里直接扫 `scripts/deploy/` 下所有**无扩展名**的配置文件。
+        try:
+            import glob as _g4
+            _noext = [f for f in _g4.glob(os.path.join(SCRIPTS, "deploy", "*"))
+                      if os.path.isfile(f) and "." not in os.path.basename(f)]
+            _cr = [os.path.basename(f) for f in _noext
+                   if b"\r\n" in open(f, "rb").read()]
+            if _cr:
+                _bad("无扩展名配置文件含 CRLF", ", ".join(_cr) +
+                     " —— .gitattributes 覆盖不到这类文件，"
+                     "部署前必须转 LF（logrotate 曾因此整份配置解析失败）")
+            else:
+                _ok("无扩展名配置均为 LF", "%d 个" % len(_noext))
+        except Exception:
+            pass
+
+        # 2) cron 必须真的在调这个 runner（防「文件在、没人调」）
+        #
+        # ⚠️ 前提：必须以**任务属主**（ubuntu）身份运行本脚本。
+        #    `crontab -l` 列出的是**当前用户**的 crontab，而本平台所有定时任务
+        #    都注册在 ubuntu 名下、root 没有任何 crontab。实测：用
+        #    `sudo python3 scripts/preflight.py` 跑时，这一整段会全部报红
+        #    （未注册备份/自监控/群问答…），看起来像「定时任务全丢了」，
+        #    其实是**查错了用户的 crontab**。故这里先把身份提示打出来。
+        try:
+            import subprocess as _sp2
+            _who = ""
+            try:
+                _who = _sp2.run(["id", "-un"], capture_output=True, text=True,
+                                timeout=10, encoding='utf-8',
+                                errors='replace').stdout.strip()
+            except Exception:
+                pass
+            if _who == "root":
+                _bad("preflight 以 root 身份运行（crontab 检查会误报）",
+                     "本平台任务注册在 ubuntu 用户下；请用 ubuntu 身份运行本脚本，"
+                     "否则会看到大量「未注册」假告警")
+            r2 = _sp2.run(["crontab", "-l"], capture_output=True, text=True,
+                          timeout=15, encoding='utf-8', errors='replace')
+            cron = r2.stdout or ""
+            if "_run_task.sh" in cron:
+                _n = sum(1 for ln in cron.splitlines()
+                         if "_run_task.sh" in ln and not ln.lstrip().startswith("#"))
+                _ok("cron 已引用统一 runner", "%d 条任务" % _n)
+            elif "_run_qa.sh" in cron:
+                _bad("cron 仍在调历史 runner _run_qa.sh",
+                     "请运行 setup_host_tasks.sh 重新登记（会自动清理旧标记）")
+            else:
+                _bad("cron 未引用统一 runner",
+                     "**所有定时任务都已停摆**（文件在、但没人调）—— "
+                     "运行 setup_host_tasks.sh 重新登记")
+        except Exception:
+            _ok("cron 引用检查 —— 已跳过（无 crontab）")
+
+        # 2b) crontab 里**不允许出现未转义的 `%`**
+        #     ⚠️ crontab 对命令部分的裸 `%` 有特殊语义：**第一个裸 `%` 之后的
+        #     全部内容会被当作 stdin 喂给命令**，而不是命令的一部分。实测后果：
+        #         tar czf back-$(date +%F).tar.gz ... ; find ... -delete
+        #      被截成 `tar czf back-$(date +` → 备份文件名残缺、
+        #      后半句（清理 7 天前归档）被整段吞掉 → 磁盘慢慢涨满且无人察觉。
+        #     这类错误**完全静默**（cron 丢弃输出），故必须在部署前拦下。
+        try:
+            def _has_unescaped_pct(cmd):
+                """命令里是否存在**未被反斜杠转义**的 `%`。
+
+                ⚠️ 刻意不用正则的 lookbehind（`(?<!\\\\)%`）——
+                   本项目运行环境的 re 模块对 `(?<!\\)` 直接抛
+                   `re.error: missing ), unterminated subpattern`（实测），
+                   会让整个板块静默跳过。手写扫描跨平台行为确定。
+                """
+                i = 0
+                while i < len(cmd):
+                    if cmd[i] == "\\":
+                        i += 2          # 跳过被转义的字符
+                        continue
+                    if cmd[i] == "%":
+                        return True
+                    i += 1
+                return False
+
+            bad_pct = []
+            for ln in cron.splitlines():
+                s = ln.strip()
+                if not s or s.startswith("#"):
+                    continue
+                # 只看命令部分：前 5 个字段是时间，其后才是命令
+                parts = s.split(None, 5)
+                if len(parts) < 6:
+                    continue
+                if _has_unescaped_pct(parts[5]):
+                    bad_pct.append(s[:60])
+            if bad_pct:
+                _bad("crontab 存在未转义的 %%",
+                     "%% 之后的内容会被当作 stdin，命令会被截断（首个：%s）" % bad_pct[0])
+            else:
+                _ok("crontab 无未转义 %%")
+        except Exception:
+            pass
+
+        # 3) runner 与 common 的交易日判定必须同语义
+        #    ⚠️ runner 为了在 `*/5` 路径上省掉 import 开销，用纯 shell 复现了
+        #    common.is_trading_day 的语义（读同一份 data/holidays.txt）。
+        #    两份实现若漂移，会出现「runner 认为开市、脚本认为休市」这类
+        #    自相矛盾的行为，且只在特定日期暴露 —— 故在此提前拦下。
+        try:
+            with open(runner, encoding="utf-8", errors="replace") as f:
+                _body = f.read()
+            if "holidays.txt" in _body and "--trading" in _body:
+                _ok("runner 交易日守卫在位（读同一份 holidays.txt）")
+            else:
+                _bad("runner 缺少交易日守卫",
+                     "缺少 holidays.txt 判定或 --trading 开关")
+        except Exception:
+            pass
 
 
 def check_log_rotation():
@@ -951,12 +1172,50 @@ def check_log_rotation():
         return
     _ok("logrotate 配置存在", cfg)
 
+    # ⚠️ 2026-09-20 修正：此前只断言「配置存在」，而**存在 ≠ 可解析**。
+    #    实测血案：该文件被 CRLF 污染后，logrotate 在第一条指令处直接报
+    #        "lines must begin with a keyword or a filename"
+    #    而 logrotate.timer 丢弃 stderr → 「文件在、timer 在跑、日志却从未轮转」
+    #    完全静默。原来那版检查恰好会在这里**误报通过**，等于没查。
+    #
+    #    另一个坑：logrotate -d（debug/干跑）**恒返回 0**，即使配置报错 ——
+    #    它的退出码不反映解析结果。真正的判据是 stderr 里有没有 `error:`
+    #    （以及缺少 state 文件时的 WARNING，那是正常的，不能当失败）。
     try:
-        r = _sp.run(["logrotate", "-d", cfg], capture_output=True, text=True, timeout=30, encoding='utf-8', errors='replace')
-        if r.returncode == 0:
-            _ok("logrotate 配置可解析")
+        # ⚠️ 必须以 **root** 跑 logrotate -d（若当前不是 root 则用 sudo）。
+        #    原因：本配置含 `su root root` 指令，logrotate 以非 root 用户运行时
+        #    需要切换 euid，而受限环境下会直接失败：
+        #        error: error switching euid from 1001 to 0 ... Operation not permitted
+        #    这是**权限不足**，不是配置错误 —— 但退出码/ stderr 都像配置问题，
+        #    极易误判。实际执行轮转的是系统 logrotate.timer（以 root 跑），
+        #    所以只有以 root 验证才反映真实情况。
+        _lr_cmd = ["logrotate", "-d", cfg]
+        if os.geteuid() != 0:
+            try:
+                _sp.run(["sudo", "-n", "true"], capture_output=True, timeout=10)
+                _lr_cmd = ["sudo", "-n", "logrotate", "-d", cfg]
+            except Exception:
+                pass
+        r = _sp.run(_lr_cmd, capture_output=True, text=True,
+                    timeout=30, encoding='utf-8', errors='replace')
+        err = (r.stderr or "")
+        err_lines = [ln for ln in err.splitlines()
+                     if ln.lstrip().startswith("error:")]
+        if err_lines:
+            _bad("logrotate 配置有误", err_lines[0][:120])
         else:
-            _bad("logrotate 配置有误", (r.stderr or "").strip()[:100])
+            _ok("logrotate 配置可解析", "logrotate -d 无 error")
+
+        # 顺带断言配置本体是 LF —— CRLF 正是上面那条 error 的根因
+        try:
+            if b"\r\n" in open(cfg, "rb").read():
+                _bad("logrotate 配置含 CRLF",
+                     "logrotate 解析器不容忍 CR（会报 lines must begin with a keyword）；"
+                     "重新 install 为 LF 版本")
+            else:
+                _ok("logrotate 配置为 LF 行尾")
+        except Exception:
+            pass
     except Exception as e:
         _bad("logrotate 校验失败", str(e)[:80])
 
@@ -996,15 +1255,20 @@ def check_backup():
     if not os.path.isdir(root):
         _bad("无备份目录", "%s 不存在（关键数据无保护）" % root)
         return
-    # ⚠️ 必须排除恢复前的安全副本（_pre-restore-*）——
-    #    它是 restore_data.sh 在恢复前自动存的「可回退」副本，
-    #    不是日常快照：参与排序会**顶替真实快照**，
-    #    让「新鲜度」判断失真（实测踩到）。
+    # ⚠️ 只认「日期命名」的快照目录（YYYY-MM-DD，backup_data.sh 的固定命名）。
+    #
+    #    历史教训：以前是「排除已知的非快照前缀」，先加了 `_pre-restore-*`，
+    #    后来又冒出 `pre-patch-*`（运维临时备份），照样被当成「最新快照」——
+    #    它只有 5 个文件，于是 preflight 报「快照缺关键文件」，
+    #    看起来像备份坏了，其实是**选错了目录**，属误报。
+    #    黑名单永远补不完，故改为白名单：命名不符的一律不参与。
+    import re as _re_snap
+    _date_dir = _re_snap.compile(r"^\d{4}-\d{2}-\d{2}$")
     snaps = sorted(d for d in os.listdir(root)
-                   if os.path.isdir(os.path.join(root, d))
-                   and not d.startswith("_pre-restore"))
+                   if _date_dir.match(d)
+                   and os.path.isdir(os.path.join(root, d)))
     if not snaps:
-        _bad("无任何备份快照", "backup_data.sh 可能未运行")
+        _bad("无任何备份快照", "backup_data.sh 可能未运行（未找到 YYYY-MM-DD 快照目录）")
         return
 
     latest = os.path.join(root, snaps[-1])
@@ -1122,9 +1386,10 @@ def check_backup():
     #   这类故障**完全静默**：cron 照跑、退出码 0、日志被丢弃，
     #   只有用户发现"没人回我"才会暴露。故必须在部署前校验。
     #
-    #   正确形态（由 scripts/deploy/setup_qa_24x7.sh 生成）：
-    #     */2 * * * * .../deploy/_run_qa.sh   # 内含「拉取→分析」两步
-    #   该 runner 会加载 .env（否则缺飞书凭据）与 local_config.env。
+    #   正确形态（2026-09-20 起，合并为单一 runner）：
+    #     */2 * * * * .../deploy/_run_task.sh --qa qa-poll   # --qa 内含「拉取→分析」
+    #   --qa 分支会加载 .env（否则缺飞书凭据）与 local_config.env，
+    #   并按「先溜队列 → 再拉取 → 再处理」执行，保证新提问在同一轮内被回复。
     # -----------------------------------------------------------------------
     print("  群问答链路：")
     try:
@@ -1133,20 +1398,62 @@ def check_backup():
                       timeout=15, encoding="utf-8", errors="replace")
         cron_txt = r3.stdout or ""
 
-        # 1) QA runner 是否注册
-        if "_run_qa.sh" in cron_txt:
-            _ok("已注册群问答 runner（_run_qa.sh）")
-        elif "qa_oneshot.py" in cron_txt:
+        # 1) QA 任务是否注册
+        if "qa_oneshot.py" in cron_txt:
             # 高危：qa_oneshot 需要 --chat-id/--text，cron 里裸调必然报错
             _bad("群问答 cron 配置错误（用了 qa_oneshot.py）",
                  "qa_oneshot.py 的 --chat-id/--text 是**必填**，cron 裸调会每轮报错退出；"
-                 "应由 setup_qa_24x7.sh 生成 _run_qa.sh（内含「拉取→分析」）")
+                 "应由 setup_host_tasks.sh 登记 qa-poll（_run_task.sh --qa-poll）")
+        elif "_run_qa.sh" in cron_txt:
+            _bad("群问答仍在用历史 runner _run_qa.sh",
+                 "已合并为 _run_task.sh --qa-poll；两 runner 并存会让队列被重复消费")
+        elif "--qa-poll" in cron_txt:
+            # ⚠️ 光断言「选项在不在」还不够 —— 必须同时确认**参数顺序正确**。
+            #    实测血泪：曾把 --qa 写在任务名之后，runner 的解析遇到任务名即
+            #    break，于是 `--qa` 被当成 python 的选项 →
+            #        python: unknown option --qa（退出码 2）
+            #    即「cron 里明明有 --qa」「任务却每轮静默失败」，这一项会误判通过。
+            _qa_ok = False
+            for ln in cron_txt.splitlines():
+                if "--qa-poll" not in ln or ln.lstrip().startswith("#"):
+                    continue
+                # 从后往前找，才拿得到**最后一处** runner 引用
+                # （crontab 里是绝对路径，故用 endswith；
+                #  写成 parts.index("_run_task.sh") 会抛 ValueError，
+                #  而外层 except 会把它静默吞掉 → 检查等于从未生效）
+                parts = ln.split()
+                i_runner = -1
+                for idx in range(len(parts) - 1, -1, -1):
+                    if parts[idx].endswith("_run_task.sh"):
+                        i_runner = idx
+                        break
+                if i_runner < 0 or i_runner + 1 >= len(parts):
+                    continue
+                # ⚠️ 判据必须是「选项**紧跟在 runner 之后**」。
+                #    只判断「在 runner 之后」不够：写成
+                #        _run_task.sh qa-poll --qa-poll
+                #    索引同样满足 opt > runner，会被误判为正常 —— 而它实际是坏的
+                #    （runner 解析遇到任务名即 break，选项被透传给 python →
+                #      unknown option --qa-poll，任务每轮静默失败）。
+                #    正确形态：`_run_task.sh [--trading] [--lock] --qa-poll qa-poll`
+                if parts[i_runner + 1] == "--qa-poll":
+                    _qa_ok = True
+            if _qa_ok:
+                _ok("已注册群问答任务（_run_task.sh --qa-poll）")
+            else:
+                _bad("群问答任务参数顺序错误",
+                     "--qa-poll 必须排在 _run_task.sh **之后、任务名之前**；"
+                     "写在任务名之后会被 runner 透传给 python → unknown option")
+        elif "--qa " in cron_txt or "--qa" in cron_txt:
+            _bad("群问答用了已废弃的 --qa 选项",
+                 "选项已更名，且需排在任务名之前：_run_task.sh --qa-poll qa-poll")
         else:
-            _bad("未注册群问答 runner",
+            _bad("未注册群问答任务",
                  "**用户 @机器人 提问将无人回复**（队列无人消费）")
 
-        # 2) 拉取器是否被 runner 调用（防"只分析不拉取"）
-        runner = os.path.join(SCRIPTS, "deploy", "_run_qa.sh")
+        # 2) runner 是否真的含完整链路（防"只分析不拉取"）
+        #    ⚠️ 现在断言的是**统一 runner**的 --qa 分支，而非独立脚本。
+        runner = os.path.join(SCRIPTS, "deploy", "_run_task.sh")
         if os.path.isfile(runner):
             try:
                 with open(runner, encoding="utf-8", errors="replace") as f:
@@ -1166,7 +1473,7 @@ def check_backup():
                 _ok("runner 内容检查 —— 已跳过（%s）" % str(e)[:40])
         else:
             _bad("缺少 runner 脚本",
-                 "scripts/deploy/_run_qa.sh 不存在 —— 运行 setup_qa_24x7.sh 生成")
+                 "scripts/deploy/_run_task.sh 不存在 —— 请从仓库同步（不再是生成物）")
     except Exception:
         _ok("群问答链路检查 —— 已跳过（无 crontab）")
 
@@ -1345,12 +1652,92 @@ def check_mcp_tools():
         #    Key 由 `.env` 提供（_load_env_files 已加载），故服务器上可判定；
         #    本机裸跑 preflight 时未配置属正常，只提示不判失败。
         if os.environ.get("PLATFORM_API_KEYS"):
-            _ok("MCP 鉴权已配置（PLATFORM_API_KEYS 非空）")
+            _ok("MCP 已配置 API Keys")
         elif os.path.isdir("/opt/kol-skills-platform"):
             _bad("MCP 未配置任何 API Key",
                  "端点对任何来源都无鉴权（kol_add_prediction 等写接口暴露）")
         else:
             _ok("MCP 鉴权 —— 已跳过（本机未配置 Key，属正常）")
+
+        # 4b) ⚠️ 鉴权**模式**：warn 不等于有鉴权（2026-09-20 新增）
+        #
+        #    这里的教训是：「配置了 Key」与「Key 真的会拦住人」是两回事。
+        #    warn（默认）模式下，无凭据/伪造凭据的请求**照样放行**，只写一行日志。
+        #    于是「preflight 说鉴权已配置」给人一种已受保护的错觉，
+        #    而公网上任何 19 个工具（含 kol_add_prediction 写接口、llm_ask 计费接口）
+        #    都可被匿名调用。
+        #
+        #    判定策略：不直接判失败（warn 是刻意的过渡态，且有 Nginx 层可控），
+        #    但要在 preflight 输出里**明确揭示敞口**，并给出切换条件。
+        _mode = (os.environ.get("PLATFORM_MCP_AUTH_MODE") or "warn").strip().lower()
+        if _mode in ("enforce", "strict"):
+            _ok("MCP 鉴权模式=%s（公网必须带 Key）" % _mode)
+        else:
+            # 只有在「确实对外暴露」时才升级为醒目提示：本机绑定 + warn 无风险
+            _exposed = False
+            try:
+                import glob as _g2
+                for _cf in _g2.glob("/etc/nginx/sites-available/*"):
+                    try:
+                        _t = open(_cf, encoding="utf-8", errors="replace").read()
+                    except Exception:
+                        continue
+                    if "/mcp" in _t and "proxy_pass" in _t:
+                        _exposed = True
+                        break
+            except Exception:
+                pass
+            if _exposed:
+                # 用 ⚠️ 而非 ❌：warn 是**刻意的过渡态**（客户端尚未能带 Key，
+                # 贸然切 enforce 会 401 打断服务）。判失败会让 preflight 长期常红，
+                # 反而失去信号价值。这里每次运行都提醒，但不影响退出码。
+                _warn("MCP 鉴权模式=warn，而端点已对外暴露",
+                      "**当前任何人都能匿名调用全部工具**（含 kol_add_prediction 写接口、"
+                      "llm_ask 计费接口）。切换前置：先给客户端配好 Key 并跑 "
+                      "bash scripts/deploy/verify_mcp_public.sh 确认，"
+                      "再把 PLATFORM_MCP_AUTH_MODE 改为 enforce")
+            else:
+                _ok("MCP 鉴权模式=warn（仅本机绑定，暂不构成暴露）")
+
+        # 4c) DNS-rebinding 白名单必须含对外域名，否则反代一律 421
+        #     症状极具迷惑性：端口在听、本机 curl 200、日志正常，
+        #     只有走真实域名才失败 —— 故在此断言。
+        try:
+            import glob as _g3
+            _domains = []
+            for _cf in _g3.glob("/etc/nginx/sites-available/*"):
+                try:
+                    _t = open(_cf, encoding="utf-8", errors="replace").read()
+                except Exception:
+                    continue
+                if "/mcp" not in _t:
+                    continue
+                for _ln in _t.splitlines():
+                    if _ln.strip().startswith("server_name"):
+                        # ⚠️ nginx 的 server_name 行**以分号结尾**，故最后一个域名
+                        #    会带上 `;`（实测得到 "_;" 这种值）。
+                        #    不剥离就会误报「白名单缺域名 _;」——
+                        #    这是检查自身的 bug，不是配置问题。
+                        for _d in _ln.split()[1:]:
+                            _d = _d.rstrip(";").strip()
+                            if _d and _d != "_":
+                                _domains.append(_d)
+            if _domains:
+                _msrc = os.path.join(SCRIPTS, "api", "mcp_server.py")
+                _missing = []
+                if os.path.isfile(_msrc):
+                    _mt = open(_msrc, encoding="utf-8", errors="replace").read()
+                    for _d in _domains:
+                        if _d not in _mt:
+                            _missing.append(_d)
+                if _missing:
+                    _bad("MCP Host 白名单缺域名",
+                         "%s —— 经反代会被 SDK 返回 421 Invalid Host header"
+                         % ", ".join(_missing[:3]))
+                else:
+                    _ok("MCP Host 白名单含对外域名", "%d 个" % len(_domains))
+        except Exception:
+            pass
 
     except Exception as e:
         # 连不上 → 可能本机没跑 MCP；服务器上则视为失败
@@ -1512,14 +1899,19 @@ def main():
         check_live()
 
     print("\n" + "=" * 66)
-    print("通过 %d 项，失败 %d 项" % (len(PASS), len(FAIL)))
+    print("通过 %d 项，失败 %d 项，待办 %d 项" % (len(PASS), len(FAIL), len(WARNS)))
+    if WARNS:
+        print("\n待办 / 已知敞口（不计失败，但需跟进）：")
+        for n, d in WARNS:
+            print("  ⚠️  %s  %s" % (n, d))
     if FAIL:
         print("\n失败明细：")
         for n, d in FAIL:
             print("  ❌ %s  %s" % (n, d))
         print("\n🔴 自检未通过 —— 请勿部署")
         return 1
-    print("🟢 自检通过，可以部署")
+    print("🟢 自检通过，可以部署"
+          + ("（有 %d 项待办，见上）" % len(WARNS) if WARNS else ""))
     return 0
 
 

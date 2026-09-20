@@ -375,7 +375,7 @@ def one_round(first: bool = False) -> int:
     if ok_items:
         lines += ["", "正常项：%s" % "、".join(ok_items)]
     lines += ["", "排查建议：",
-              "1. `ssh root@203.0.113.20` 后执行 `docker ps --filter name=kolplatform`",
+              "1. `ssh root@203.0.113.10` 后执行 `docker ps --filter name=kolplatform`",
               "2. 容器不在：`cd /opt/kol-skills-platform && bash scripts/deploy/start.sh --restart`",
               "3. 容器在但不响应：`docker logs --tail 50 kolplatform-rest`",
               "4. 证书问题：`certbot renew --force-renewal`"]
