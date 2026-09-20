@@ -26,40 +26,26 @@
 
 ---
 
-## 二、一键安装（无需下载 zip）
+## 二、一键安装（无需下载 zip，所有平台统一命令）
 
-发一条命令给客户即可。`<platform>` 取 `workbuddy` / `codex` / `hermes` / `claude-code` / `bee`。
-
-```bash
-# 直接从 GitHub 拉取并运行（把 kol-xxx 换成客户自己的 Key）
-bash <(curl -fsSL https://raw.githubusercontent.com/flytestai/tradeskill/main/install.sh) <platform> <API_KEY>
-```
-
-### 各平台示例
+发下面这一条命令给客户即可——**不需要指定平台**，脚本会自动检测本机已安装的平台
+（WorkBuddy / Hermes / Bee / Codex / Claude Code）并全部接入。把 `kol-xxx` 换成客户的密钥。
 
 ```bash
-# WorkBuddy
-bash <(curl -fsSL https://raw.githubusercontent.com/flytestai/tradeskill/main/install.sh) workbuddy kol-xxxx
-
-# Codex（OpenAI Codex CLI）
-bash <(curl -fsSL https://raw.githubusercontent.com/flytestai/tradeskill/main/install.sh) codex kol-xxxx
-
-# Hermes
-bash <(curl -fsSL https://raw.githubusercontent.com/flytestai/tradeskill/main/install.sh) hermes kol-xxxx
-
-# Claude Code / Cursor
-bash <(curl -fsSL https://raw.githubusercontent.com/flytestai/tradeskill/main/install.sh) claude-code kol-xxxx
-
-# Bee 蜜蜂
-bash <(curl -fsSL https://raw.githubusercontent.com/flytestai/tradeskill/main/install.sh) bee kol-xxxx
+# 统一命令：只传密钥，自动装到本机所有可用平台
+bash <(curl -fsSL https://raw.githubusercontent.com/flytestai/tradeskill/main/install.sh) kol-xxx
 ```
 
 也可以先下载脚本再运行：
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/flytestai/tradeskill/main/install.sh -o install.sh
-bash install.sh workbuddy kol-xxxx
+bash install.sh kol-xxx
 ```
+
+安装时脚本会自动：
+- **WorkBuddy / Hermes / Bee**：直接写入各自配置目录；
+- **Codex / Claude Code**：检测到 `codex` / `claude` 命令就自动注册，检测不到则跳过并提示手动配置。
 
 ---
 
