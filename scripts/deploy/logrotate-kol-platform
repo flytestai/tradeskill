@@ -8,13 +8,22 @@
 #     · _run_task.sh 无轮转逻辑
 #     · supervisor.py 里虽有 rotate_logs_if_needed()，但那是 **Windows 侧**的
 #       supervisor 在用，Linux 上跑的是 _run_task.sh，不经过它
-#   实测增长：_backend.log 已达 156K / 2325 行（约 60MB/年），
-#             _host_task.log 约 18MB/年 —— 不轮转会永久累积。
-#   系统其它服务（nginx 等）都用 logrotate，故这里与之一致。
+#   实测增长：_backend.log 约 60MB/年、_host_task.log 约 18MB/年 ——
+#             不轮转会永久累积。系统其它服务（nginx 等）都用 logrotate，故这里与之一致。
+#
+# ⚠️ 本文件必须是 **LF 行尾**（2026-09-20 实测血案）
+#   logrotate 的配置解析器**不容忍 CR**：带 CRLF 时它会在第一条指令处报
+#       error: /etc/logrotate.d/kol-platform:19 lines must begin with
+#              a keyword or a filename (possibly in double quotes)
+#   而 logrotate.timer 把 stderr 丢弃，于是「配置存在、timer 也在跑、
+#   但日志从未被轮转」这件事**完全静默** —— preflight 能发现它，正是
+#   因为它显式跑了 `logrotate -d` 并检查退出码，而不是只看文件在不在。
+#   本文件由仓库以 LF 分发（.gitattributes 增加 *.logrotate eol=lf 兜底），
+#   部署请用 `install` 或 `cp`，**不要**在 Windows 上编辑后直接上传。
 #
 # 用法：
-#   sudo cp scripts/deploy/logrotate-kol-platform /etc/logrotate.d/kol-platform
-#   sudo logrotate -d /etc/logrotate.d/kol-platform     # 干跑验证
+#   sudo install -m 644 scripts/deploy/logrotate-kol-platform /etc/logrotate.d/kol-platform
+#   sudo logrotate -d /etc/logrotate.d/kol-platform     # 干跑验证（preflight 用的就是它）
 #   sudo logrotate -f /etc/logrotate.d/kol-platform     # 立即轮转一次
 
 /opt/kol-skills-platform/data/*.log
