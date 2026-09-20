@@ -174,6 +174,98 @@ cp -a /etc/nginx/sites-available/skill-platform "$DEST_SYS/nginx-skill-platform.
 cp -a /etc/fail2ban/jail.local "$DEST_SYS/fail2ban-jail.local" 2>/dev/null || true
 cp -a /etc/fail2ban/filter.d/sshd-closed.conf "$DEST_SYS/fail2ban-sshd-closed.conf" 2>/dev/null || true
 
+# ---- 运行环境依赖（2026-09-20 新增，血泪教训）-----------------------------
+#
+# ⚠️ 为什么必须单独备份这一类
+#   此前"系统配置"只覆盖了 /etc 下的系统文件。但 2026-09-20 服务器重建时
+#   发现，真正让服务**发不出消息、拉不到数据**的，是另一类东西 ——
+#   「运行环境依赖」：**凭据**与**第三方 CLI**。它们不在代码里、也不在
+#   业务数据里，恰恰最容易在迁移时被漏掉。
+#
+#   实测事故（重建后）：
+#     · 飞书凭据丢失 → 盘前播报/群问答回复全部发不出去
+#     · lark-cli 未安装 → 群消息拉取完全不可用（大V言论同步断流）
+#     · lark-cli 未授权 → 拉取需要 user 身份，重新扫码才能恢复
+#   而这些问题**当天不会报错**，要等到下一个定时任务触发才暴露。
+#
+#   故：把「凭据 + CLI 配置 + git 配置」纳入备份，并在 preflight 里校验。
+mkdir -p "$DEST_SYS/runtime"
+
+# 1) 应用凭据：.env（含 FEISHU_APP_ID/SECRET、PLATFORM_API_KEYS、LLM 密钥）
+#    它已在 kol/ 目录下备份，此处标注其重要性，避免恢复时只看到"配置文件"
+#    而忽略"这是凭据"。
+if [ -f "$KOL_DIR/.env" ]; then
+    cp -a "$KOL_DIR/.env" "$DEST_SYS/runtime/kol.env"
+    chmod 600 "$DEST_SYS/runtime/kol.env" 2>/dev/null || true
+fi
+
+# 2) lark-cli 配置与授权
+#    ⚠️ 分两部分：
+#      · config.json —— 应用 ID/品牌（**不含** appSecret，它在 keychain）
+#      · 授权 token —— 在 keychain / 本地存储里
+#    两者都备份：config.json 可直接迁移；token 若能迁移则省去重新扫码。
+for d in "$HOME/.lark-cli" "/root/.lark-cli"; do
+    [ -d "$d" ] || continue
+    ( cd "$(dirname "$d")" && tar czf "$DEST_SYS/runtime/lark-cli-$(basename $(dirname $d) | tr -d '/').tar.gz" \
+        "$(basename "$d")" 2>/dev/null ) || true
+done
+
+# 3) OCI 凭据（用于 OCI API：容量探测、实例管理）
+for d in "$HOME/.oci" "/root/.oci"; do
+    [ -d "$d" ] || continue
+    ( cd "$(dirname "$d")" && tar czf "$DEST_SYS/runtime/oci-creds-$(basename $(dirname $d)).tar.gz" \
+        "$(basename "$d")" 2>/dev/null ) || true
+done
+
+# 4) git 配置（代码目录的 remote + 用户信息）
+if [ -d "$KOL_DIR/.git" ]; then
+    git -C "$KOL_DIR" remote -v > "$DEST_SYS/runtime/git-remotes.txt" 2>/dev/null || true
+    git -C "$KOL_DIR" config --local --list > "$DEST_SYS/runtime/git-config.txt" 2>/dev/null || true
+    git -C "$KOL_DIR" rev-parse HEAD > "$DEST_SYS/runtime/git-head.txt" 2>/dev/null || true
+fi
+
+# 5) 记录当前环境的"依赖清单"（重建时照着装）
+{
+    echo "# 运行环境依赖快照（重建时照此安装）"
+    echo "# 生成时间: $(date '+%F %T')"
+    echo
+    echo "## 必需的系统包"
+    for c in docker nginx git python3 sqlite3 curl jq node npm lark-cli certbot; do
+        p="$(command -v "$c" 2>/dev/null || echo '')"
+        if [ -n "$p" ]; then
+            v="$("$c" --version 2>&1 | head -1 | tr -d '\n' | cut -c1-60)"
+            echo "  $c  ->  $p   [$v]"
+        else
+            echo "  $c  ->  (未安装)"
+        fi
+    done
+    echo
+    echo "## Python 环境"
+    echo "  python: $("$KOL_DIR/.venv-host/bin/python" --version 2>&1)"
+    echo "  venv:   $KOL_DIR/.venv-host"
+    echo "  关键包:"
+    "$KOL_DIR/.venv-host/bin/python" -m pip list 2>/dev/null | grep -iE "flask|requests|cryptography|tzdata" | sed 's/^/    /'
+    echo
+    echo "## 凭据文件（重要！）"
+    for f in "$KOL_DIR/.env" "$HOME/.lark-cli/config.json" "$HOME/.oci/config"; do
+        [ -f "$f" ] && echo "  ✓ $f"
+    done
+    echo
+    echo "## 恢复步骤要点"
+    echo "  1. apt 安装: docker.io nginx git python3 python3-venv sqlite3 curl jq"
+    echo "  2. 安装 uv 并用它建 venv: uv venv --python 3.11 .venv-host"
+    echo "     (venv 无 pip，装依赖要用 uv pip install --python .venv-host/bin/python)"
+    echo "  3. Node 20 + lark-cli: curl -fsSL https://deb.nodesource.com/setup_20.x | bash -"
+    echo "     apt install nodejs && npm install -g @larksuite/cli"
+    echo "  4. 还原 .env（含 FEISHU_APP_ID/SECRET）—— 否则飞书发送不可用"
+    echo "  5. 还原 ~/.lark-cli 配置 → lark-cli auth login（Device Flow，需人工点链接）"
+    echo "  6. 还原 ~/.oci → OCI 容量探测可用"
+    echo "  7. git init + remote set-url origin <repo>"
+} > "$DEST_SYS/runtime/DEPENDENCIES.txt" 2>/dev/null || true
+
+runtime_n=$(ls -1 "$DEST_SYS/runtime" 2>/dev/null | wc -l)
+echo "  运行环境依赖: $runtime_n 项 -> $DEST_SYS/runtime"
+
 # SSL 证书 + certbot 续期记录（2026-09-19 第十轮补充）
 #
 # 为什么需要：证书丢了，HTTPS 立刻中断；而重新签发受 Let's Encrypt 速率

@@ -1109,6 +1109,76 @@ def check_backup():
     except Exception as e:
         _ok("Deploy Key 检查 —— 已跳过（%s）" % str(e)[:40])
 
+    # -----------------------------------------------------------------------
+    # 运行环境依赖（2026-09-20 新增，血泪教训）
+    #
+    # ⚠️ 为什么必须单独检查这一类
+    #   2026-09-20 服务器重建后，服务「能跑但发不出消息、拉不到数据」。
+    #   根因不是代码或数据，而是**凭据与第三方 CLI** 没跟着迁移：
+    #     · 飞书凭据（.env 的 FEISHU_APP_ID/SECRET）丢失
+    #       → 盘前播报 / 群问答回复全部发不出去
+    #     · lark-cli 未安装
+    #       → 群消息拉取完全不可用（大V言论同步断流）
+    #     · lark-cli 未授权（user 身份）
+    #       → 拉取依赖 user 身份，需重新 Device Flow 授权
+    #
+    #   这类东西**不在代码里、也不在业务数据里**，是最容易在迁移时漏掉的，
+    #   而且**当天不会报错**：要等下一个定时任务触发才暴露（盘前播报是
+    #   次日上午 08:45 才知道）。故必须在部署前主动校验。
+    # -----------------------------------------------------------------------
+    print("  运行环境依赖：")
+    # 1) 飞书凭据
+    feishu_ok = False
+    for envf in (os.path.join(SKILL_DIR, ".env"),
+                 os.path.join(SKILL_DIR, "data", "local_config.env")):
+        if not os.path.isfile(envf):
+            continue
+        try:
+            with open(envf, encoding="utf-8") as f:
+                txt = f.read()
+            if "FEISHU_APP_ID=" in txt and "FEISHU_APP_SECRET=" in txt:
+                # 确认不是空值
+                for line in txt.splitlines():
+                    if line.startswith("FEISHU_APP_SECRET=") and line.split("=", 1)[1].strip():
+                        feishu_ok = True
+        except Exception:
+            pass
+    if feishu_ok:
+        _ok("飞书应用凭据已配置（发送通道可用）")
+    else:
+        _bad("缺少飞书应用凭据 FEISHU_APP_ID/SECRET",
+             "**所有飞书推送将失败**（盘前播报/盘中/收盘/提醒/群问答回复）—— "
+             "在 open.feishu.cn 应用凭证页可查到")
+
+    # 2) lark-cli（拉取群消息必需）
+    try:
+        import shutil as _sh
+        lark = _sh.which("lark-cli")
+        if lark:
+            _ok("lark-cli 已安装", lark)
+            # 3) lark-cli 授权状态（user 身份决定能否拉取）
+            try:
+                import subprocess as _sp2
+                r2 = _sp2.run([lark, "auth", "status"], capture_output=True,
+                              text=True, timeout=30, encoding="utf-8", errors="replace")
+                import json as _json2
+                d2 = _json2.loads(r2.stdout or "{}")
+                ident = d2.get("identities") or {}
+                if (ident.get("user") or {}).get("status") == "ready":
+                    _ok("lark-cli 用户身份已授权（拉取可用）")
+                else:
+                    _bad("lark-cli 用户身份未授权",
+                         "群消息拉取不可用（大V言论同步断流）—— 需 `lark-cli auth login` "
+                         "走 Device Flow 授权")
+            except Exception as e:
+                _ok("lark-cli 授权状态检查 —— 已跳过（%s）" % str(e)[:40])
+        else:
+            _bad("未安装 lark-cli",
+                 "**群消息拉取将不可用**（大V言论同步断流）—— "
+                 "npm install -g @larksuite/cli（需先装 Node 20+）")
+    except Exception as e:
+        _ok("lark-cli 检查 —— 已跳过（%s）" % str(e)[:40])
+
 
 def check_mcp_tools():
     """MCP 工具**真实调用** —— 只测「端口通不通」曾漏掉一次全量故障。
