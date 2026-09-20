@@ -28,6 +28,25 @@ fi
 # 把输入里的 \n 转成真实换行（bash 双引号不会自动解释 \n）
 MSG=$(printf '%b' "$MSG")
 
+# @相对路径：读取文件内容作为消息体。
+# market_summary.py 的长播报用 "@data/_market_summary_xxx.txt" 传内容，
+# 避免中文/换行经命令行参数被 shell 破坏。相对路径基于 SKILL_DIR 解析。
+case "$MSG" in
+    @*)
+        _file="${MSG#@}"
+        case "$_file" in
+            /*) ;;
+            *) _file="$SKILL_DIR/$_file" ;;
+        esac
+        if [ -f "$_file" ]; then
+            MSG="$(cat "$_file")"
+        else
+            echo "[ERROR] @文件不存在: $_file" >&2
+            exit 1
+        fi
+        ;;
+esac
+
 # 跨平台定位 lark-cli：
 #   1) 显式环境变量 LARK_CLI（Linux systemd EnvironmentFile 用）
 #   2) Windows：蜜蜂 npm-global 下的原生 exe（避免 POSIX 包装脚本的 node 子进程不退出）
