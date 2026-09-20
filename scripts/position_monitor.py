@@ -15,7 +15,7 @@ wu2198 仓位变化监控 — 第一时间捕捉加仓/减仓信号
 """
 import sqlite3, os, sys, time, argparse, subprocess
 
-from common import find_bash
+from common import find_bash, send_card
 
 SKILL_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DB_PATH = os.path.join(SKILL_DIR, "data", "kol_opinions.db")
@@ -211,11 +211,10 @@ def notify_once(args):
             #    而仓位告警是**全局**的（按 kol_name 追踪，不属于任何来源群）——
             #    若有人期望它发到复盘群，就会表现为「消息跑到别的群」。
             #    故这里允许用 POSITION_ALERT_CHAT_ID 显式指定，未配置时保持原默认。
-            _alert_chat = _env_value("POSITION_ALERT_CHAT_ID", "")
-            _cmd = [BASH, os.path.join(SKILL_DIR, "scripts", "notify_group.sh"), msg]
-            if _alert_chat:
-                _cmd.append(_alert_chat)
-            subprocess.run(_cmd, capture_output=True, timeout=30, cwd=SKILL_DIR)
+            _alert_chat = _env_value("POSITION_ALERT_CHAT_ID", "") or _env_value("VIP_PUSH_CHAT_ID", "")
+            ok, err = send_card(msg, chat_id=_alert_chat or None, title="仓位变化")
+            if not ok:
+                print("[WARN] 仓位告警卡片发送失败: %s" % err)
         except Exception as e:
             print("[WARN] 仓位告警发送失败: %s" % e)
         print("[ALERT] " + msg.replace("\n", " | "))

@@ -49,6 +49,9 @@ if [ "$ST" = "above" ] || [ -z "$MSG" ]; then
     exit 0
 fi
 
-# 跌破/突破 → 发提醒到群（荔枝种植交流群）
-bash "$SKILL_DIR/scripts/notify_group.sh" "$MSG"
+# 跌破/突破 → 发卡片提醒到群（荔枝种植交流群）
+GROUP_ID="$(grep '^VIP_PUSH_CHAT_ID=' "$SKILL_DIR/data/local_config.env" 2>/dev/null | head -1 | cut -d= -f2-)"
+PY_BIN="${SKILL_PYTHON:-python3}"
+command -v "$PY_BIN" >/dev/null 2>&1 || PY_BIN=python
+printf '%b' "$MSG" | "$PY_BIN" "$SKILL_DIR/scripts/send_card.py" --chat-id "$GROUP_ID" --title "价格提醒"
 echo "[已提醒] $KEY -> $ST"
