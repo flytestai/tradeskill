@@ -1110,6 +1110,67 @@ def check_backup():
         _ok("Deploy Key 检查 —— 已跳过（%s）" % str(e)[:40])
 
     # -----------------------------------------------------------------------
+    # 群问答链路（2026-09-20 新增，血泪教训）
+    #
+    # ⚠️ 为什么必须检查
+    #   重建后发现「有人 @机器人 提问，但永远没人回复」。根因是 cron 配错：
+    #     · 配的是 qa_oneshot.py 且**无参数** —— 而它 --chat-id/--text 是必填
+    #       → 每 2 分钟报错退出（30 次/小时全是无效功，且被 >/dev/null 吞掉）
+    #     · 真正拉取 @消息的 sync_litchi_auto.py **根本不在 cron 里**
+    #       → 没人拉消息 → 队列永远是空的 → 问答链路静默断裂
+    #
+    #   这类故障**完全静默**：cron 照跑、退出码 0、日志被丢弃，
+    #   只有用户发现"没人回我"才会暴露。故必须在部署前校验。
+    #
+    #   正确形态（由 scripts/deploy/setup_qa_24x7.sh 生成）：
+    #     */2 * * * * .../deploy/_run_qa.sh   # 内含「拉取→分析」两步
+    #   该 runner 会加载 .env（否则缺飞书凭据）与 local_config.env。
+    # -----------------------------------------------------------------------
+    print("  群问答链路：")
+    try:
+        import subprocess as _sp3
+        r3 = _sp3.run(["crontab", "-l"], capture_output=True, text=True,
+                      timeout=15, encoding="utf-8", errors="replace")
+        cron_txt = r3.stdout or ""
+
+        # 1) QA runner 是否注册
+        if "_run_qa.sh" in cron_txt:
+            _ok("已注册群问答 runner（_run_qa.sh）")
+        elif "qa_oneshot.py" in cron_txt:
+            # 高危：qa_oneshot 需要 --chat-id/--text，cron 里裸调必然报错
+            _bad("群问答 cron 配置错误（用了 qa_oneshot.py）",
+                 "qa_oneshot.py 的 --chat-id/--text 是**必填**，cron 裸调会每轮报错退出；"
+                 "应由 setup_qa_24x7.sh 生成 _run_qa.sh（内含「拉取→分析」）")
+        else:
+            _bad("未注册群问答 runner",
+                 "**用户 @机器人 提问将无人回复**（队列无人消费）")
+
+        # 2) 拉取器是否被 runner 调用（防"只分析不拉取"）
+        runner = os.path.join(SCRIPTS, "deploy", "_run_qa.sh")
+        if os.path.isfile(runner):
+            try:
+                with open(runner, encoding="utf-8", errors="replace") as f:
+                    body = f.read()
+                misses = []
+                if "sync_litchi_auto.py" not in body:
+                    misses.append("sync_litchi_auto.py（拉取@消息）")
+                if "qa_analyzer.py" not in body:
+                    misses.append("qa_analyzer.py（分析回复）")
+                if ".env" not in body:
+                    misses.append(".env（飞书凭据）")
+                if misses:
+                    _bad("runner 缺少关键步骤", "、".join(misses))
+                else:
+                    _ok("runner 含完整链路（加载.env → 拉取@消息 → 分析回复）")
+            except Exception as e:
+                _ok("runner 内容检查 —— 已跳过（%s）" % str(e)[:40])
+        else:
+            _bad("缺少 runner 脚本",
+                 "scripts/deploy/_run_qa.sh 不存在 —— 运行 setup_qa_24x7.sh 生成")
+    except Exception:
+        _ok("群问答链路检查 —— 已跳过（无 crontab）")
+
+    # -----------------------------------------------------------------------
     # 运行环境依赖（2026-09-20 新增，血泪教训）
     #
     # ⚠️ 为什么必须单独检查这一类
