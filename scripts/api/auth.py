@@ -8,6 +8,9 @@
 - 多租户时用 `key:tenant:scope1|scope2` 形式表达权限，预留扩展
 - 同时支持 `X-API-Key` 与 `Authorization: Bearer <key>` 两种传递方式
   （后者便于 WorkBuddy 等走 OAuth Bearer 的客户端复用）
+- 除环境变量里的 Key 外，还支持**文件型 Key 存储**（data/api_keys.json，
+  SHA-256 哈希落盘，由 scripts/api_keys.py 签发/吊销），实现多租户多密钥
+  动态管理：新增/吊销无需重启，最迟 30 秒生效
 
 用法（Flask）
 -------------
@@ -19,7 +22,10 @@
 from __future__ import annotations
 
 import functools
+import hashlib
+import json
 import os
+import time
 
 try:
     from . import config
@@ -53,7 +59,44 @@ def _parse_keys():
     return table
 
 
-_KEYS = _parse_keys()
+_KEYS = _parse_keys()   # 环境变量里的 Key（明文，引导/管理员用）
+
+
+# ---------------------------------------------------------------------------
+# 文件型 Key 存储（多租户多密钥）
+# ---------------------------------------------------------------------------
+KEY_FILE = os.path.join(config.SKILL_DIR, "data", "api_keys.json")
+_FILE_TTL = 30.0  # 秒：文件 Key 缓存时长，签发/吊销后最迟 30 秒生效，无需重启
+_file_cache = {"ts": 0.0, "rows": []}
+
+
+def _hash_key(key: str) -> str:
+    return hashlib.sha256((key or "").encode("utf-8")).hexdigest()
+
+
+def _load_file_keys(force: bool = False) -> list:
+    """读取 data/api_keys.json（带 TTL 缓存，损坏时退化为空，不影响环境变量 Key）。"""
+    now = time.time()
+    if not force and (now - _file_cache.get("ts", 0.0)) < _FILE_TTL:
+        return _file_cache["rows"]
+    rows = []
+    try:
+        with open(KEY_FILE, encoding="utf-8") as f:
+            d = json.load(f)
+        if isinstance(d, list):
+            rows = d
+    except FileNotFoundError:
+        rows = []
+    except Exception:
+        rows = []
+    _file_cache["ts"] = now
+    _file_cache["rows"] = rows
+    return rows
+
+
+def _any_keys() -> bool:
+    """是否配置了任何 Key（环境变量或文件），决定是否启用鉴权。"""
+    return bool(_KEYS) or bool(_load_file_keys())
 
 
 def extract_key(headers) -> str:
@@ -76,7 +119,7 @@ def extract_key(headers) -> str:
 
 def resolve(headers) -> dict:
     """校验并返回租户上下文 {tenant, scopes, authenticated}。"""
-    if not _KEYS:
+    if not _any_keys():
         # 未配置密钥 → 不校验（仅本机开发；生产必须配置）
         return {"tenant": config.DEFAULT_TENANT, "scopes": {"*"}, "authenticated": False}
 
@@ -87,16 +130,35 @@ def resolve(headers) -> dict:
 
 
 def resolve_key(key: str) -> dict:
-    """按 Key 字符串校验（供 MCP 中间件等非 Flask 场景复用）。"""
-    if not _KEYS:
+    """按 Key 字符串校验（供 MCP 中间件等非 Flask 场景复用）。
+
+    依次匹配：1) 环境变量明文 Key；2) 文件型 Key（SHA-256 哈希）。
+    """
+    if not _any_keys():
         return {"tenant": config.DEFAULT_TENANT, "scopes": {"*"}, "authenticated": False}
     key = (key or "").strip()
     if not key:
         raise AuthError("缺少 API Key（请通过 X-API-Key 或 Authorization: Bearer 提供）")
+
+    # 1) 环境变量明文 Key
     info = _KEYS.get(key)
-    if not info:
-        raise AuthError("API Key 无效")
-    return {"tenant": info["tenant"], "scopes": info["scopes"], "authenticated": True}
+    if info:
+        return {"tenant": info["tenant"], "scopes": info["scopes"], "authenticated": True}
+
+    # 2) 文件型 Key（哈希匹配）
+    h = _hash_key(key)
+    for row in _load_file_keys():
+        if row.get("revoked"):
+            continue
+        if row.get("key_hash") == h:
+            return {
+                "tenant": row.get("tenant") or config.DEFAULT_TENANT,
+                "scopes": set(row.get("scopes") or ["*"]),
+                "authenticated": True,
+                "key_id": row.get("id", ""),
+                "label": row.get("label", ""),
+            }
+    raise AuthError("API Key 无效")
 
 
 # ---------------------------------------------------------------------------

@@ -227,7 +227,7 @@ class RequireAuthMiddleware:
         if scope.get("type") != "http":
             return await self.app(scope, receive, send)
 
-        if not config.API_KEYS:
+        if not auth._any_keys():
             # 未配置任何 Key → 无处可校验（启动时已告警）
             return await self.app(scope, receive, send)
 
@@ -338,7 +338,7 @@ def run_http(mcp, host: str, port: int) -> int:
             app = mcp.streamable_http_app(streamable_http_path=path,
                                           transport_security=_ts)
             app.add_middleware(RequireAuthMiddleware, mode=mode)
-            if not config.API_KEYS:
+            if not auth._any_keys():
                 print("[mcp][auth] ⚠️ 未配置 PLATFORM_API_KEYS —— "
                       "MCP 端点无任何鉴权，请仅在可信网络暴露", file=sys.stderr)
             else:

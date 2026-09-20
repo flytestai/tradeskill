@@ -88,3 +88,4 @@ data/sync_errors.log.1
 data/sync_errors.log.*
 scripts/deploy/*.bak-*
 scripts/deploy/_a1_watch_state.json
+data/api_keys.json
