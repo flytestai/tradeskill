@@ -131,7 +131,7 @@ def _query_ndx_eastmoney():
     """东方财富公开行情备份；字段不可用时返回 None，不伪造数据。"""
     params = urllib.parse.urlencode({
         "secid": "100.NDX",
-        "fields": "f43,f44,f45,f46,f47,f48,f60,f107,f169,f170",
+        "fields": "f43,f44,f45,f46,f47,f48,f57,f58,f60,f107,f169,f170",
     })
     req = urllib.request.Request(
         EASTMONEY_QUOTE_URL + "?" + params,
@@ -1767,7 +1767,23 @@ def send(msg, dry_run=False, tag="summary"):
             print("[WARN] 汇总发送失败: %s" % ((r.stderr or r.stdout or "").strip()[:200]))
             return False
 
-        # 没有原生 exe 时保留文件方式兜底，兼容旧环境。
+        # 没有原生 exe 时：优先纯 Python 直连发 Card 2.0（私信），与原生路径一致；
+        # 卡片不可用（未配置凭证/发送异常）时回退 Markdown 文件方式。
+        if user_id and tag.startswith(("premarket", "intraday", "pm_", "card_")):
+            try:
+                sys.path.insert(0, os.path.join(SKILL_DIR, "scripts"))
+                from feishu_client import send as _fs_send, is_configured as _fs_ok
+                if _fs_ok():
+                    _card = build_premarket_card(msg)
+                    _fs_send(user_id, json.dumps(_card, ensure_ascii=False),
+                             msg_type="interactive", receive_id_type="open_id")
+                    print("[OK] 汇总已发送（卡片）")
+                    return True
+                print("[WARN] feishu_client 未配置，卡片回退 Markdown")
+            except Exception as _e:
+                print("[WARN] 卡片发送失败，回退 Markdown: %s" % str(_e)[:150])
+
+        # 回退 Markdown 文件方式
         tmp_rel = os.path.join("data", "_market_summary_%s.txt" % tag).replace("\\", "/")
         tmp_path = os.path.join(SKILL_DIR, tmp_rel.replace("/", os.sep))
         with open(tmp_path, "w", encoding="utf-8") as f:
