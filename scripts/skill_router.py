@@ -168,7 +168,35 @@ def _search_news(query: str, limit: int = 5):
         for it in items[:limit]:
             if isinstance(it, dict):
                 out.append({"title": it.get("title") or it.get("标题") or "",
-                            "content": (it.get("content") or it.get("摘要") or "")[:SUMMARY_MAX],
+                            "content": (it.get("summary") or it.get("content") or it.get("摘要") or "")[:SUMMARY_MAX],
+                            "time": it.get("publish_time") or it.get("time") or ""})
+        return out
+    except Exception:
+        return []
+
+
+def _search(channel: str, skill_id: str, query: str, limit: int = 5):
+    """搜索类技能通用调用（news/announcement/report 共用 /comprehensive/search 端点）。"""
+    import secrets
+    body = json.dumps({"channels": [channel], "app_id": "AIME_SKILL",
+                       "query": query}, ensure_ascii=False).encode("utf-8")
+    h = {"Content-Type": "application/json", "X-Claw-Call-Type": "normal",
+         "X-Claw-Skill-Id": skill_id,
+         "X-Claw-Skill-Version": _skill_version(skill_id),
+         "X-Claw-Plugin-Id": "none", "X-Claw-Plugin-Version": "none",
+         "X-Claw-Trace-Id": secrets.token_hex(32)}
+    try:
+        req = urllib.request.Request(COMPREHENSIVE_URL, data=body, headers=h, method="POST")
+        with urllib.request.urlopen(req, timeout=SLOW_TIMEOUT) as r:
+            d = json.loads(r.read().decode("utf-8"))
+        items = d.get("datas") or d.get("data") or []
+        if isinstance(items, dict):
+            items = items.get("list") or []
+        out = []
+        for it in items[:limit]:
+            if isinstance(it, dict):
+                out.append({"title": it.get("title") or it.get("标题") or "",
+                            "content": (it.get("summary") or it.get("content") or it.get("摘要") or "")[:SUMMARY_MAX],
                             "time": it.get("publish_time") or it.get("time") or ""})
         return out
     except Exception:
@@ -208,6 +236,9 @@ def route(question: str) -> list:
     返回 [(label, kind, payload), ...]
       kind = "index" | "stock" | "finance" | "industry" | "research"
              | "macro" | "etf" | "basic" | "news" | "kol" | "level"
+             | "astock" | "cb" | "fund" | "futures" | "hkstock"
+             | "sector" | "usstock" | "announcement" | "report"
+             | "event" | "business" | "management"
     """
     q = (question or "").strip()
     plan = []
@@ -241,8 +272,16 @@ def route(question: str) -> list:
         if is_decision or any(w in q for w in
                               ("研报", "评级", "目标价", "机构", "券商", "预测")):
             plan.append(("研报·" + name, "research", name))
-        if any(w in q for w in ("上市", "发行价", "主营", "公司", "做什么")):
+        if any(w in q for w in ("上市", "发行价", "公司", "做什么")):
             plan.append(("资料·" + name, "basic", name))
+        if any(w in q for w in ("业绩预告", "质押", "解禁", "调研", "监管", "增发", "处罚")):
+            plan.append(("事件·" + name, "event", (name, code)))
+        if any(w in q for w in ("主营", "主营业务", "客户", "供应商", "合同", "参控股", "股权投资")):
+            plan.append(("经营·" + name, "business", name))
+        if any(w in q for w in ("股东", "股权", "股本", "实控人", "前十大")):
+            plan.append(("股权·" + name, "management", name))
+        if any(w in q for w in ("公告", "财报", "分红", "回购", "增持", "减持")):
+            plan.append(("公告·" + name, "announcement", name))
 
     # ---- 行业/板块 ----
     if any(w in q for w in ("行业", "板块", "赛道", "产业链")):
@@ -258,6 +297,29 @@ def route(question: str) -> list:
     # ---- ETF ----
     if "ETF" in q.upper() or "etf" in q:
         plan.append(("ETF筛选", "etf", q))
+
+    # ---- 选股/筛选类（A股/港股/美股/可转债/基金/期货/板块）----
+    if (any(w in q for w in ("选股", "筛选股", "选A股", "A股选", "龙头股", "白马股",
+                             "荐股", "股票筛选"))
+            or ("筛选" in q and "股" in q)):
+        plan.append(("A股选股", "astock", q))
+    if any(w in q for w in ("可转债", "转债", "转股溢价")):
+        plan.append(("可转债筛选", "cb", q))
+    if any(w in q for w in ("基金", "公募", "基金经理", "定投", "指数基金")):
+        plan.append(("基金筛选", "fund", q))
+    if any(w in q for w in ("期货", "期权", "商品期货", "股指期货")):
+        plan.append(("期货期权", "futures", q))
+    if any(w in q for w in ("港股", "港股通")):
+        plan.append(("港股筛选", "hkstock", q))
+    if any(w in q for w in ("板块筛选", "选板块", "行业筛选", "强势板块")):
+        plan.append(("板块筛选", "sector", q))
+    if any(w in q for w in ("美股", "选美股")):
+        plan.append(("美股筛选", "usstock", q))
+    # ---- 公告 / 研报全文（search 端点；个股定向时在个股块里已加）----
+    if any(w in q for w in ("公告", "财报", "分红", "回购")) and not stocks:
+        plan.append(("公告", "announcement", _extract_topic(q) or q))
+    if any(w in q for w in ("研报", "研究报告")) and not stocks:
+        plan.append(("研报全文", "report", _extract_topic(q) or q))
 
     # ---- 资讯（政策/事件/公司新闻）----
     if any(w in q for w in ("新闻", "政策", "消息", "事件", "利好", "利空",
@@ -341,6 +403,11 @@ def _fmt_generic(datas, label, fields=None):
     return _one(datas, "", fields)
 
 
+def _fmt_selector(datas, label, rows=3):
+    """选股/筛选类技能：展示前 N 条结果（字段名原样，与 skill_agent 口径一致）。"""
+    return _fmt_datas(datas, "", rows=rows, fields=_FIELDS)
+
+
 def _execute(step, deadline):
     """执行单个技能步骤，返回 (label, text)。"""
     label, kind, payload = step
@@ -420,6 +487,56 @@ def _execute(step, deadline):
                 c = (it.get("content") or "")[:SUMMARY_MAX]
                 lines.append("- %s%s" % (t, ("：" + c) if c else ""))
             return label, "相关资讯：\n" + "\n".join(lines)
+
+        if kind in ("astock", "cb", "fund", "hkstock", "sector", "usstock"):
+            _sel_map = {"astock": "astock_selector", "cb": "cb_selector",
+                        "fund": "fund_selector", "hkstock": "hkstock_selector",
+                        "sector": "sector_selector", "usstock": "usstock_selector"}
+            d = _call(sid.get(_sel_map[kind], ""), payload, 5, timeout=SLOW_TIMEOUT)
+            return label, _fmt_selector(d, payload)
+
+        if kind == "futures":
+            d = _call(sid.get("futures_query", "hithink-futures-query"),
+                      payload, 5, timeout=SLOW_TIMEOUT)
+            return label, _fmt_selector(d, payload)
+
+        if kind == "event":
+            name, code = payload
+            d = _call(sid.get("event", "hithink-event-query"),
+                      "%s业绩预告解禁质押" % (name or code), 5)
+            return label, _fmt_generic(d, "事件·" + name)
+
+        if kind == "business":
+            d = _call(sid.get("business", "hithink-business-query"),
+                      "%s主营业务构成客户供应商" % payload, 5)
+            return label, _fmt_generic(d, "经营·" + payload)
+
+        if kind == "management":
+            d = _call(sid.get("management", "hithink-management-query"),
+                      "%s股东股权结构实控人" % payload, 5)
+            return label, _fmt_generic(d, "股权·" + payload)
+
+        if kind == "announcement":
+            items = _search("announcement", "announcement-search", payload, 5)
+            if not items:
+                return None, ""
+            lines = []
+            for it in items:
+                t = (it.get("title") or "")[:80]
+                c = (it.get("content") or "")[:SUMMARY_MAX]
+                lines.append("- %s%s" % (t, ("：" + c) if c else ""))
+            return label, "相关公告：\n" + "\n".join(lines)
+
+        if kind == "report":
+            items = _search("report", "report-search", payload, 5)
+            if not items:
+                return None, ""
+            lines = []
+            for it in items:
+                t = (it.get("title") or "")[:80]
+                c = (it.get("content") or "")[:SUMMARY_MAX]
+                lines.append("- %s%s" % (t, ("：" + c) if c else ""))
+            return label, "相关研报：\n" + "\n".join(lines)
 
     except Exception:
         return None, ""

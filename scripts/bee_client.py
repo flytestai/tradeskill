@@ -79,6 +79,14 @@ SKILL_IDS = {
     "event": "hithink-event-query",
     "business": "hithink-business-query",
     "management": "hithink-management-query",
+    "astock_selector": "hithink-astock-selector",
+    "cb_selector": "hithink-cb-selector",
+    "fund_selector": "hithink-fund-selector",
+    "futures_query": "hithink-futures-query",
+    "futures_selector": "hithink-futures-selector",
+    "hkstock_selector": "hithink-hkstock-selector",
+    "sector_selector": "hithink-sector-selector",
+    "usstock_selector": "hithink-usstock-selector",
     "announcement": "announcement-search",
 }
 
