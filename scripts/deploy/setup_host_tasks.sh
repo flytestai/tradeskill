@@ -76,6 +76,9 @@ fi
 
 [ -x "$VENV/bin/python" ] || { echo "  ❌ 未找到 $VENV，请先运行 setup_host_sync.sh"; exit 1; }
 
+echo "=== 0. 强制时区 Asia/Shanghai ==="
+bash "$DEPLOY_DIR/scripts/deploy/force_tz.sh"
+
 echo "=== 1. 安装任务运行器（唯一入口）==="
 RUNNER="$DEPLOY_DIR/scripts/deploy/_run_task.sh"
 SRC="$(cd "$(dirname "$0")" && pwd)/_run_task.sh"
