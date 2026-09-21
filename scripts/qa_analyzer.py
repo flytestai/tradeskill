@@ -445,6 +445,7 @@ def main() -> int:
 
 
 def _main_impl(args) -> int:
+    queue = load_queue()
     if not queue:
         if args.json:
             print(json.dumps({"ok": True, "pending": 0, "processed": []},

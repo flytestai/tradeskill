@@ -70,6 +70,31 @@ def is_answered(sender_id, text, answered=None):
     return question_key(sender_id, text) in answered
 
 
+def is_answered_recently(sender_id, text, answered=None, window_seconds=1800):
+    """同一用户同一问题，仅当在最近 window_seconds 秒内被回答过才视为重复。
+
+    行情会变：用户隔一段时间重问同一个问题，应重新取数分析并回答，
+    而不是被历史去重记录永远挡住。window 用于兜底「同一消息被重复拉取」
+    的边界（水位前移 1 分钟可能重拉最后一条），30 分钟远超该边界。
+    """
+    if answered is None:
+        answered = load()
+    key = question_key(sender_id, text)
+    rec = answered.get(key)
+    if not rec:
+        return False
+    at = (rec.get("answered_at") or "").strip()
+    if not at:
+        return True
+    try:
+        from datetime import datetime, timezone, timedelta
+        bj = timezone(timedelta(hours=8))
+        t = datetime.strptime(at, "%Y-%m-%d %H:%M:%S").replace(tzinfo=bj)
+        return (datetime.now(bj) - t).total_seconds() < window_seconds
+    except Exception:
+        return True
+
+
 def mark_answered(sender_id, text, sender="", answered_at=""):
     d = load()
     key = question_key(sender_id, text)

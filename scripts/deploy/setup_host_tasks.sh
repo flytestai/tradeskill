@@ -176,7 +176,7 @@ emit "0 10 15 12 *"  "holidays-remind"   always  "--bash" "scripts/deploy/holida
 #      必须防重入，否则两个进程同抢一个队列会**重复回复**、并发调 LLM 会 429
 #    · --qa-poll 内置「先溜队列→再拉取→再分析」的三步顺序，见 _run_task.sh
 #    · 末尾**不接脚本名**：--qa-poll 分支自带完整链路（多传参数会被忽略）
-emit "*/2 * * * *"   "qa-poll"           always  "--qa-poll"
+emit "*/1 * * * *"   "qa-poll"           always  "--qa-poll"
 
 crontab "$TMP"
 rm -f "$TMP"

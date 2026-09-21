@@ -293,8 +293,8 @@ def run_once(dry_run=False):
         message_id = m.get("message_id", "")
         if any(kw in text for kw in TEST_KEYWORDS):
             continue
-        if qa_dedup.is_answered(sender_id, text, answered):
-            continue  # 已回答过的问题不再入队
+        if qa_dedup.is_answered_recently(sender_id, text, answered):
+            continue  # 近期已回答过的问题不再入队（超过窗口则重新回答）
         item = {
             "message_id": message_id,
             "sender": sender_name,
