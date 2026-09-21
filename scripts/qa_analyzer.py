@@ -1,23 +1,23 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""群问答 AI 分析引擎：队列 → 取数据 → Kimi 分析 → 发回群里。
+"""群问答 AI 分析引擎：队列 → 取数据 → LLM 分析 → 发回群里。
 
 背景与定位
 ----------
 原先「荔枝群 @机器人 问答」的 AI 分析由**蜜蜂运行时**承担 —— 那一步依赖
 本机 Agent 环境。迁移到服务器后，服务器没有 Agent 运行时，因此本脚本
-用 **Kimi（llm_client）** 接替分析环节，实现全自动闭环：
+用 **LLM（llm_client）** 接替分析环节，实现全自动闭环：
 
     sync_qa_auto.py（拉取 @消息入队）
             ↓
-    qa_analyzer.py（本脚本：取数 → Kimi → 发回群）
+    qa_analyzer.py（本脚本：取数 → LLM → 发回群）
             ↓
     group_reply.py（发送 + @提问人 + 免责声明 + 去重）
 
 设计要点
 --------
-1. **先取平台数据再问 Kimi**：把行情/言论/关键位作为 context 注入，
-   让回答有事实依据，而不是泛泛而谈（实测 Kimi 会主动指出口径不符等问题）。
+1. **先取平台数据再问 LLM**：把行情/言论/关键位作为 context 注入，
+   让回答有事实依据，而不是泛泛而谈（实测 LLM 会主动指出口径不符等问题）。
 2. **复用 group_reply.py**：@提问人、免责声明、去重逻辑都在那边，避免重复实现。
 3. **幂等**：group_reply 内部按「提问人+问题+回答」去重，重复调用不会刷屏。
 4. **失败不丢队列**：只有发送成功才 `qa_queue.py done`，否则下轮重试。
@@ -73,7 +73,7 @@ LOG = os.path.join(SKILL_DIR, "data", "_qa_analyzer.log")
 #       AI 规划     20.5s（kimi-k3，14 个技能）
 #       技能执行    ~15s（十几项 × 1~3s）
 #       ---- 小计  ~39s，留 ~16s 余量
-#   再加上 Kimi 生成 35.4s ≈ 合计 75s，距 Flask 上限 120s 有 45s 安全边际。
+#   再加上 LLM 生成 35.4s ≈ 合计 75s，距 Flask 上限 120s 有 45s 安全边际。
 #   （实测未限制时为 116s，仅剩 4s 余量，极易因技能条数波动而触顶。）
 #
 # 注意：规则路由已先提供基础数据，故 AI 增强即使超时也只损失「额外维度」，
@@ -138,7 +138,7 @@ def mark_done(message_id: str) -> None:
 
 
 # --------------------------------------------------------------------------
-# 取上下文数据（让 Kimi 有事实依据）
+# 取上下文数据（让 LLM 有事实依据）
 # --------------------------------------------------------------------------
 
 #: 问句里的标的提取（含常见指数与 6 位代码）
@@ -312,7 +312,7 @@ def process(item: dict, dry_run: bool = False) -> tuple:
     log("  处理：%s | %s" % (sender or "?", question[:60]))
 
     # 0) 设置类指令直通：持仓监控 / 一次性价格提醒 / 关键位。
-    #    群里 @机器人「设置…」时**不走 AI 分析**（build_context + Kimi），
+    #    群里 @机器人「设置…」时**不走 AI 分析**（build_context + LLM），
     #    而是按固定格式确定性解析直接设置；格式不对解析不了时，再交给 AI
     #    把自然语言转成脚本（price_alerts / level_monitor / position_monitor）
     #    的设置格式去执行。详见 scripts/setup_command.py。
@@ -342,19 +342,19 @@ def process(item: dict, dry_run: bool = False) -> tuple:
     if ctx:
         log("    上下文: %d 字" % len(ctx))
 
-    # 2) Kimi 分析
+    # 2) LLM 分析
     try:
         from llm_client import analyze_question, is_configured, LLMError
         if not is_configured():
             return False, "未配置 LLM_API_KEY"
         answer = analyze_question(question, ctx)
     except LLMError as e:
-        return False, "Kimi 调用失败: %s" % str(e)[:150]
+        return False, "LLM 调用失败: %s" % str(e)[:150]
     except Exception as e:
         return False, "分析异常: %s" % str(e)[:150]
 
     if not answer or not answer.strip():
-        return False, "Kimi 返回空回答"
+        return False, "LLM 返回空回答"
 
     # 防御：推理模型偶发把 max_tokens 耗在 reasoning 上，正文只剩 "**" 之类残缺。
     # 过短回答视为失败，保留队列下轮重试（换 qwen-plus 后一般不会再发生）。
@@ -425,7 +425,7 @@ def _release_lock(ts):
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser(description="群问答 Kimi 分析引擎")
+    ap = argparse.ArgumentParser(description="群问答 LLM 分析引擎")
     ap.add_argument("--dry-run", action="store_true", help="只分析不发送")
     ap.add_argument("--limit", type=int, default=0, help="单次最多处理几条（0=不限）")
     ap.add_argument("--json", action="store_true", help="JSON 输出")
