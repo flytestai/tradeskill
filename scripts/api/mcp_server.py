@@ -335,8 +335,15 @@ def run_http(mcp, host: str, port: int) -> int:
                       file=sys.stderr)
 
             print("[mcp] 允许的 Host：%s" % ", ".join(_allowed))
+            # 2026-09-21 fix: extend session idle timeout to survive
+            # high-loss cross-border links (avoids session churn / reconnect
+            # storms). Default 1800s; override via PLATFORM_MCP_SESSION_IDLE_TIMEOUT
+            # (seconds, 0 disables the timeout).
+            _idle = (os.environ.get("PLATFORM_MCP_SESSION_IDLE_TIMEOUT") or "").strip()
+            _idle_t = float(_idle) if _idle else 1800.0
             app = mcp.streamable_http_app(streamable_http_path=path,
-                                          transport_security=_ts)
+                                          transport_security=_ts,
+                                          session_idle_timeout=_idle_t)
             app.add_middleware(RequireAuthMiddleware, mode=mode)
             if not auth._any_keys():
                 print("[mcp][auth] ⚠️ 未配置 PLATFORM_API_KEYS —— "
