@@ -278,7 +278,7 @@ def alert_status() -> dict:
 
 
 # --------------------------------------------------------------------------
-# LLM（Kimi）能力
+# LLM 能力
 # --------------------------------------------------------------------------
 
 def llm_status() -> dict:
@@ -295,7 +295,7 @@ def llm_status() -> dict:
 #
 # ⚠️ 为什么需要（结构性风险）
 #   各阶段超时是**独立**的，叠加起来会突破上层限制：
-#       Kimi 生成   LLM_TIMEOUT = 120s
+#       LLM 生成   LLM_TIMEOUT = 120s
 #       上下文构建  AI_ENHANCE_BUDGET = 55s
 #       ───────────────────────────────
 #       理论最坏 175s，再加读文件/序列化开销 → 逼近甚至超过 nginx 的 180s。
@@ -305,7 +305,7 @@ LLM_ASK_BUDGET = int(os.environ.get("QA_ASK_BUDGET", "125"))
 
 
 def llm_ask(question: str, context: str = "", auto_context: bool = True) -> dict:
-    """调用 Kimi 回答问题。
+    """调用 LLM 回答问题。
 
     :param auto_context: 为 True（默认）且未显式提供 context 时，
         自动按问题内容取平台数据（行情/关键位/大V言论）注入，
@@ -402,7 +402,7 @@ def capabilities() -> list:
         {"name": "quote", "desc": "行情查询（可指定 http/local 通道）", "scopes": ["market:read"]},
         {"name": "bee_health", "desc": "蜜蜂通道健康检查", "scopes": ["system:read"]},
         {"name": "alert_status", "desc": "提醒与告警状态", "scopes": ["kol:read"]},
-        {"name": "llm_ask", "desc": "调用 Kimi 回答问题（可附平台数据上下文）", "scopes": ["llm:use"]},
+        {"name": "llm_ask", "desc": "调用 LLM 回答问题（可附平台数据上下文）", "scopes": ["llm:use"]},
         {"name": "llm_summarize", "desc": "对内容做归纳解读", "scopes": ["llm:use"]},
         {"name": "llm_status", "desc": "LLM 配置状态", "scopes": ["system:read"]},
         {"name": "qa_queue_status", "desc": "群问答队列状态", "scopes": ["kol:read"]},

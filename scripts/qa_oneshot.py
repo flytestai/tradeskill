@@ -5,7 +5,7 @@
 为什么需要
 ----------
 平台上原本有**两个机器人都在轮询同一个飞书群**：
-  · kol 的 sync_litchi_auto.py（群问答，走 Kimi 分析）
+  · kol 的 sync_litchi_auto.py（群问答，走 LLM 分析）
   · trade365 的 bot.py（交易命令，纯后端计算）
 两者都只判断「消息里有没有 @」，**不校验 @ 的是谁** ——
 用户 @ 一次，两个机器人会**各回一条**。
@@ -41,7 +41,7 @@ sys.path.insert(0, SCRIPTS)
 QUEUE = os.path.join(SKILL_DIR, "data", "group_qa_queue.json")
 
 #: 单条问题的总处理预算（秒）。trade365 bot 的轮询间隔是 5 秒，
-#: 但问答本身（取数+Kimi）通常 40~100 秒，故这里给足 240 秒。
+#: 但问答本身（取数+LLM）通常 40~100 秒，故这里给足 240 秒。
 BUDGET_SEC = int(os.environ.get("QA_ONESHOT_BUDGET", "240"))
 
 

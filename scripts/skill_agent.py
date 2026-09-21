@@ -396,7 +396,7 @@ def plan(question: str) -> dict:
         out = chat(prompt, system=PLANNER_SYSTEM, purpose="plan",
                    timeout=PLAN_TIMEOUT, retries=1)
     except Exception as e:
-        # ⚠️ 规划失败要**可见**：最常见原因是 Kimi 组织级 3 RPM 限流，
+        # ⚠️ 规划失败要**可见**：最常见原因是 LLM 组织级 3 RPM 限流，
         #    表现为连续多个问题都返回 0 个技能（静默降级成规则路由）。
         try:
             sys.stderr.write("[plan] 规划失败（将回落规则路由）: %s\n" % str(e)[:150])
@@ -754,7 +754,7 @@ CONTEXT_EXTRA_PER_ROUND = _cfg_int("CONTEXT_EXTRA_PER_ROUND", 4)
 #
 #   历史沿革：
 #     · 原注释「实测 k2.6 约 5s，k3 约 21s，故 30s 对 k3 有充足余量」
-#       是针对 Kimi 的测量。
+#       是针对 LLM 的测量。
 #     · 2026-09-20 切换到阿里百炼 glm-5.3 后重新实测：
 #         规划稳态 11.6~14.7s，**冷启动 25.2s**
 #       → 30s 余量过小（冷启动占 84%），一旦超时会**静默回落规则路由**

@@ -23,8 +23,8 @@
     GET  /api/v1/market/summary      行情汇总
     GET  /api/v1/market/quote        行情查询
     GET  /api/v1/system/alerts       提醒状态
-    GET  /api/v1/llm/status          LLM(Kimi) 配置状态
-    POST /api/v1/llm/ask             调用 Kimi 回答问题
+    GET  /api/v1/llm/status          LLM 配置状态
+    POST /api/v1/llm/ask             调用 LLM 回答问题
     POST /api/v1/llm/summarize       对内容做归纳解读
     GET  /api/v1/system/qa-queue     群问答队列状态
 
@@ -266,7 +266,7 @@ def market_quote(ctx):
 # --------------------------------------------------------------------------
 
 # --------------------------------------------------------------------------
-# LLM（Kimi）
+# LLM
 # --------------------------------------------------------------------------
 
 @app.get("/api/v1/llm/status")

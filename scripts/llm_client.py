@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""LLM 客户端：统一封装 Kimi（Moonshot）等 OpenAI 兼容接口。
+"""LLM 客户端：统一封装 OpenAI 兼容接口（默认阿里云百炼 DashScope）。
 
 用途
 ----
@@ -11,17 +11,17 @@
 
 为什么单独抽一层
 ----------------
-- 便于换供应商（Kimi / OpenAI / 其他 OpenAI 兼容端点只需改 base_url）
+- 便于换供应商（百炼 / OpenAI / 其他 OpenAI 兼容端点只需改 base_url）
 - 统一超时、重试、错误处理与用量记录
 - **关键**：请求体以 UTF-8 字节流发送。实测在 Git Bash 下用 shell 拼接
   中文 JSON 会编码损坏（"上证指数" 变成乱码），必须在 Python 内构造 bytes。
 
 配置（环境变量优先，其次 data/local_config.env）
 ------------------------------------------------
-  LLM_PROVIDER      kimi | openai | custom（默认 kimi）
+  LLM_PROVIDER      bailian | openai | custom（默认 bailian）
   LLM_API_KEY       API Key（必填）
   LLM_BASE_URL      覆盖默认端点
-  LLM_MODEL         模型名（默认 kimi-k3）
+  LLM_MODEL         模型名（默认 qwen-plus）
   LLM_TIMEOUT       秒，默认 120
   LLM_MAX_TOKENS    默认 4000（kimi-k3 是推理模型，思考过程也占 token）
 
@@ -57,8 +57,6 @@ except Exception:
 
 #: 各供应商的默认端点与模型
 PRESETS = {
-    "kimi":     {"base": "https://api.moonshot.cn/v1", "model": "kimi-k3"},
-    "moonshot": {"base": "https://api.moonshot.cn/v1", "model": "kimi-k3"},
     "openai":   {"base": "https://api.openai.com/v1", "model": "gpt-4o-mini"},
     # 阿里云百炼 DashScope（OpenAI 兼容模式）—— 2026-09-19 新增
     #
@@ -92,25 +90,25 @@ def _cfg(key: str, default: str = "") -> str:
 
 
 def provider() -> str:
-    return (_cfg("LLM_PROVIDER", "kimi") or "kimi").lower()
+    return (_cfg("LLM_PROVIDER", "bailian") or "bailian").lower()
 
 
 def api_key() -> str:
-    return _cfg("LLM_API_KEY") or _cfg("MOONSHOT_API_KEY") or _cfg("KIMI_API_KEY")
+    return _cfg("LLM_API_KEY")
 
 
 def base_url() -> str:
     explicit = _cfg("LLM_BASE_URL")
     if explicit:
         return explicit.rstrip("/")
-    return PRESETS.get(provider(), PRESETS["kimi"])["base"]
+    return PRESETS.get(provider(), PRESETS["bailian"])["base"]
 
 
 def model() -> str:
     explicit = _cfg("LLM_MODEL")
     if explicit:
         return explicit
-    return PRESETS.get(provider(), PRESETS["kimi"])["model"]
+    return PRESETS.get(provider(), PRESETS["bailian"])["model"]
 
 
 def timeout_s() -> int:
@@ -188,7 +186,7 @@ def chat(prompt: str, system: str = "", history: list = None,
                         传其他值会报 "invalid temperature"。
     """
     if not is_configured():
-        raise LLMError("未配置 LLM_API_KEY（Kimi 密钥）")
+        raise LLMError("未配置 LLM_API_KEY")
 
     msgs = []
     if system:
@@ -354,7 +352,7 @@ def check() -> int:
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser(description="LLM 客户端（Kimi）")
+    ap = argparse.ArgumentParser(description="LLM 客户端")
     ap.add_argument("prompt", nargs="?", help="提问内容")
     ap.add_argument("--system", default=SYSTEM_FINANCE, help="系统提示词")
     ap.add_argument("--check", action="store_true", help="检查配置与连通性")

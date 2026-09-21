@@ -541,7 +541,7 @@ def check_timeout_budget():
       · llm_ask 整体     125s（LLM_ASK_BUDGET）
       · 上下文构建        55s（AI_ENHANCE_BUDGET）
       · 单次规划          30s（PLAN_TIMEOUT）
-      · Kimi 生成        120s（LLM_TIMEOUT）
+      · LLM 生成        120s（LLM_TIMEOUT）
     若「上下文构建 + 生成」可同时跑满，就会超 180s → nginx 返回 504，
     而每层自己都「没超时」，排查时极难定位。
     故此处断言各常量之间存在正确的大小关系。
@@ -1765,7 +1765,7 @@ def check_planner():
       · **去重** —— 模型会重复列同一技能（实测 news-search ×2、macro-query ×2），
         不去重就会把同一数据源抓两遍。
 
-      · **失败可见** —— 规划失败最常见原因是 Kimi 组织级 3 RPM 限流；
+      · **失败可见** —— 规划失败最常见原因是 LLM 组织级 3 RPM 限流；
         若静默返回空技能列表，日志里看不出发生过什么。
     """
     print("\n[17/17] 规划链路")
@@ -1858,7 +1858,7 @@ def check_planner():
             n1, n2 = len(p1.get("skills") or []), len(p2.get("skills") or [])
             if n1 == 0 and n2 == 0:
                 # ⚠️ 不该判为失败：规划返回空最常见的原因是
-                #    Kimi 组织级 3 RPM 限流，而 qa_analyzer 已把
+                #    LLM 组织级 3 RPM 限流，而 qa_analyzer 已把
                 #    **规则路由作为打底**，最坏情况仍有基础数据。
                 #    把它判失败会让「连跑几个检查」必然触发 429 而误报。
                 _ok("规划实跑返回空（限流），已回落规则路由兜底")

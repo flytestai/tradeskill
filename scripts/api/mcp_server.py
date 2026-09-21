@@ -516,12 +516,12 @@ def build_server():
         """当前告警触发状态与已配置的价格提醒。"""
         return services.alert_status()
 
-    # ---------------- LLM（Kimi）能力 ----------------
+    # ---------------- LLM 能力 ----------------
 
     @mcp.tool()
     @_guard
     def llm_ask(question: str, context: str = "") -> dict:
-        """调用 Kimi 大模型回答问题。
+        """调用 LLM 大模型回答问题。
 
         适用于需要自然语言推理的场景（如「这个位置还能建仓吗」）。
         context 可放入平台数据（行情/言论/关键位），让回答更贴合实际。
@@ -546,7 +546,7 @@ def build_server():
     @mcp.tool()
     @_guard
     def llm_status() -> dict:
-        """查看 LLM（Kimi）配置状态（provider/model/是否已配置）。"""
+        """查看 LLM 配置状态（provider/model/是否已配置）。"""
         return services.llm_status()
 
     @mcp.tool()
