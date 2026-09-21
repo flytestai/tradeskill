@@ -1753,17 +1753,11 @@ def send(msg, dry_run=False, tag="summary"):
         if native and user_id:
             # 飞书幂等键上限 50 字符：tag 截断，保证不超限。
             idem = "ms_%s_%s" % (tag[:16], day)
-            # 盘前/盘中等播报统一使用 Card 2.0；只有普通汇总类走 Markdown。
-            card_tags = ("premarket", "intraday", "pm_", "card_")
-            card = build_premarket_card(msg) if tag.startswith(card_tags) else None
-            if card is not None:
-                args = [native, "im", "+messages-send", "--user-id", user_id,
-                        "--as", "bot", "--idempotency-key", idem,
-                        "--msg-type", "interactive", "--content", json.dumps(card, ensure_ascii=False), "--json"]
-            else:
-                args = [native, "im", "+messages-send", "--user-id", user_id,
-                        "--as", "bot", "--idempotency-key", idem,
-                        "--markdown", msg, "--json"]
+            # 全部播报（盘前/盘中/午间/收盘）统一发 Card 2.0 卡片。
+            card = build_premarket_card(msg)
+            args = [native, "im", "+messages-send", "--user-id", user_id,
+                    "--as", "bot", "--idempotency-key", idem,
+                    "--msg-type", "interactive", "--content", json.dumps(card, ensure_ascii=False), "--json"]
             r = subprocess.run(args, capture_output=True, text=True, timeout=45, cwd=SKILL_DIR, encoding='utf-8', errors='replace')
             try:
                 data = json.loads(r.stdout or "{}")
@@ -1776,8 +1770,8 @@ def send(msg, dry_run=False, tag="summary"):
             return False
 
         # 没有原生 exe 时：优先纯 Python 直连发 Card 2.0（私信），与原生路径一致；
-        # 卡片不可用（未配置凭证/发送异常）时回退 Markdown 文件方式。
-        if user_id and tag.startswith(("premarket", "intraday", "pm_", "card_")):
+        # 卡片不可用（未配置凭证/发送异常）时回退文件方式（notify_feishu.sh 发卡片）。
+        if user_id:
             try:
                 sys.path.insert(0, os.path.join(SKILL_DIR, "scripts"))
                 from feishu_client import send as _fs_send, is_configured as _fs_ok
@@ -1787,11 +1781,11 @@ def send(msg, dry_run=False, tag="summary"):
                              msg_type="interactive", receive_id_type="open_id")
                     print("[OK] 汇总已发送（卡片）")
                     return True
-                print("[WARN] feishu_client 未配置，卡片回退 Markdown")
+                print("[WARN] feishu_client 未配置，回退文件方式发送")
             except Exception as _e:
                 print("[WARN] 卡片发送失败，回退 Markdown: %s" % str(_e)[:150])
 
-        # 回退 Markdown 文件方式
+        # 回退文件方式（经 notify_feishu.sh 发送卡片）
         tmp_rel = os.path.join("data", "_market_summary_%s.txt" % tag).replace("\\", "/")
         tmp_path = os.path.join(SKILL_DIR, tmp_rel.replace("/", os.sep))
         with open(tmp_path, "w", encoding="utf-8") as f:

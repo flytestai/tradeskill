@@ -1,13 +1,15 @@
 #!/bin/bash
-# 通过飞书机器人给用户发送提醒消息（Markdown 富文本，更美观）
+# 通过飞书机器人给用户发送提醒消息（Card 2.0 卡片）
 #
 # 用法:
-#   bash notify_feishu.sh "Markdown 提醒内容"
+#   bash notify_feishu.sh "提醒内容" [卡片标题]
+#   bash notify_feishu.sh @消息文件路径 [卡片标题]
 #
 # 说明:
 #   - 飞书应用 cli_a92579c6ddf9dcb5 的机器人，给用户253172 发私聊
-#   - 使用 --markdown 发送，支持 **加粗**、换行、emoji 等富文本样式
-#   - 同步发送，timeout 兜底（lark-cli 偶发"发送后进程不退出"，-k 3 强制杀）
+#   - 统一走 send_card.py（common.send_card）发送 Card 2.0 交互式卡片，
+#     与群消息共用同一套卡片构造与双通道（feishu_client 直连 → lark-cli 回退）
+#   - 卡片标题：优先取第 2 个参数；否则从正文首行【】中提取；再兜底「提醒」
 set -u
 
 SKILL_DIR="$(cd "$(dirname "$0")/.." && pwd)"
@@ -18,10 +20,12 @@ USER_OPEN_ID="$(grep '^USER_OPEN_ID=' "$ENV_FILE" 2>/dev/null | head -1 | cut -d
 if [ -z "$USER_OPEN_ID" ]; then
     echo "[CONFIG] 未配置 USER_OPEN_ID（data/local_config.env），私信推送将失败" >&2
 fi
+
 MSG="${1:-}"
+TITLE="${2:-}"
 
 if [ -z "$MSG" ]; then
-    echo "用法: bash notify_feishu.sh \"Markdown 提醒内容\"" >&2
+    echo "用法: bash notify_feishu.sh \"提醒内容\" [卡片标题]" >&2
     exit 1
 fi
 
@@ -47,49 +51,17 @@ case "$MSG" in
         ;;
 esac
 
-# 跨平台定位 lark-cli：
-#   1) 显式环境变量 LARK_CLI（Linux systemd EnvironmentFile 用）
-#   2) Windows：蜜蜂 npm-global 下的原生 exe（避免 POSIX 包装脚本的 node 子进程不退出）
-#   3) PATH 中的 lark-cli（Linux: /usr/local/bin/lark-cli）
-resolve_lark() {
-    if [ -n "${LARK_CLI:-}" ] && [ -x "${LARK_CLI}" ]; then
-        printf '%s' "$LARK_CLI"; return 0
-    fi
-    if command -v cygpath >/dev/null 2>&1 && [ -n "${APPDATA:-}" ]; then
-        _p="$(cygpath -u "$APPDATA" 2>/dev/null)/bee_ai_test/agent-runtime/npm-global/node_modules/@larksuite/cli/bin/lark-cli.exe"
-        [ -f "$_p" ] && { printf '%s' "$_p"; return 0; }
-    fi
-    command -v lark-cli 2>/dev/null
-}
-# ---------------------------------------------------------------------------
-# 通道选择：优先「纯 Python 直连飞书 API」，回退 lark-cli
-#
-# 为什么优先 Python 通道：
-#   目标服务器容器**无法创建线程** → Node 启动即崩 → lark-cli 在容器内不可用。
-#   feishu_client.py 用 urllib 直连 OpenAPI（纯同步、无线程），容器内可正常工作。
-#   若未配置 FEISHU_APP_ID/SECRET，再回退 lark-cli（宿主机场景）。
-# ---------------------------------------------------------------------------
-SKILL_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+# 卡片标题：优先显式参数；否则从正文首行【】提取；兜底「提醒」
+if [ -z "$TITLE" ]; then
+    TITLE="$(printf '%s\n' "$MSG" | sed -n '1s/.*【\([^】]*\)】.*/\1/p')"
+    [ -z "$TITLE" ] && TITLE="提醒"
+fi
+
 PY_BIN="${SKILL_PYTHON:-python3}"
 command -v "$PY_BIN" >/dev/null 2>&1 || PY_BIN=python
 
-if [ -n "${FEISHU_APP_ID:-}" ] && [ -n "${FEISHU_APP_SECRET:-}" ]; then
-    echo "$MSG" | "$PY_BIN" "$SKILL_DIR/scripts/feishu_client.py" \
-        --to "$USER_OPEN_ID" --type open_id --text-stdin >/dev/null 2>&1
-    rc=$?
-    if [ $rc -eq 0 ]; then exit 0; fi
-    echo "[WARN] Python 飞书通道失败(rc=$rc)，尝试 lark-cli 回退" >&2
-fi
-
-LARK="$(resolve_lark)"
-if [ -z "$LARK" ]; then
-    echo "[CONFIG] 无可用发送通道：未配置 FEISHU_APP_ID/SECRET，且未找到 lark-cli" >&2
-    exit 1
-fi
-
-timeout -k 3 20 "$LARK" im +messages-send \
-    --user-id "$USER_OPEN_ID" \
-    --as bot \
-    --markdown "$MSG" >/dev/null 2>&1
+# 统一走 send_card.py 发 Card 2.0（内部已含 feishu_client → lark-cli 双通道）
+printf '%s' "$MSG" | "$PY_BIN" "$SKILL_DIR/scripts/send_card.py" \
+    --user-id "$USER_OPEN_ID" --title "$TITLE"
 rc=$?
 exit $rc

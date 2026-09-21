@@ -267,8 +267,58 @@ def run_checks() -> list:
 # 告警
 # --------------------------------------------------------------------------
 
+_CARD_PALETTE = [("blue-50", "blue-100"), ("grey-50", "grey-200"), ("violet-50", "violet-100")]
+
+
+def _card_json(text: str) -> dict:
+    """把告警 Markdown 转成 Card 2.0（schema 2.0）；标题从正文首行【】提取。"""
+    title = "服务告警"
+    body_lines = (text or "").splitlines()
+    if body_lines:
+        first = body_lines[0]
+        a = first.find("【")
+        b = first.find("】", a + 1)
+        if a >= 0 and b > a:
+            title = first[a + 1:b]
+        if first.startswith(("🚨", "✅", "🔔", "⚠️", "❌")):
+            body_lines = body_lines[1:]
+    sections, current = [], []
+    for line in body_lines:
+        if not line.strip():
+            if current:
+                sections.append("\n".join(current).strip())
+                current = []
+            continue
+        current.append(line)
+    if current:
+        sections.append("\n".join(current).strip())
+    elements = []
+    for idx, section in enumerate(sections):
+        if not section:
+            continue
+        bg, bd = _CARD_PALETTE[idx % len(_CARD_PALETTE)]
+        elements.append({
+            "tag": "interactive_container", "width": "fill", "has_border": True,
+            "border_color": bd, "corner_radius": "8px", "background_style": bg,
+            "padding": "12px 12px 12px 12px", "vertical_spacing": "4px",
+            "elements": [{"tag": "markdown", "content": section.replace("\n", "<br>")}],
+        })
+    return {
+        "schema": "2.0", "config": {"wide_screen_mode": True},
+        "header": {
+            "title": {"tag": "plain_text", "content": title},
+            "subtitle": {"tag": "plain_text",
+                         "content": datetime.now().strftime("%Y-%m-%d %H:%M:%S")},
+            "template": "red" if "🚨" in (text or "") else "blue",
+            "icon": {"tag": "standard_icon", "token": "myai_colorful"},
+        },
+        "body": {"direction": "vertical", "padding": "12px 12px 20px 12px",
+                 "vertical_spacing": "8px", "elements": elements},
+    }
+
+
 def send_feishu(text: str) -> tuple:
-    """通过 lark-cli（bot 身份）私信告警。返回 (成功, 说明)。"""
+    """通过 lark-cli（bot 身份）私信发送 Card 2.0。返回 (成功, 说明)。"""
     import shutil
     lark = os.environ.get("LARK_CLI") or shutil.which("lark-cli")
     if not lark:
@@ -285,9 +335,11 @@ def send_feishu(text: str) -> tuple:
         return False, "未配置 USER_OPEN_ID"
 
     try:
+        card = _card_json(text)
         r = subprocess.run(
             [lark, "im", "+messages-send", "--user-id", open_id,
-             "--as", "bot", "--markdown", text],
+             "--as", "bot", "--msg-type", "interactive",
+             "--content", json.dumps(card, ensure_ascii=False), "--json"],
             capture_output=True, text=True, timeout=45, encoding="utf-8", errors="replace")
         if r.returncode == 0:
             return True, "已发送"
