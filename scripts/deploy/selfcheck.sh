@@ -197,6 +197,25 @@ fi
 #     · insufficient balance / quota  → 需要充值（严重，需人工）
 #     · 限流（max organization ...）  → 瞬时，自愈，不告警
 # ---------------------------------------------------------------------------
+# 2026-09-22 修复：self-monitor 每 10 分钟一轮，原先每轮都真实调用 LLM 拨测：
+#   · 烧 token（~7 token/次 x 144 次/天）
+#   · 拨测超时（90s）会误报「服务器自检异常」并发飞书（本次事故根因）
+# 改为：SKIP_LLM_PROBE=1 时只做零成本配置检查（不发真实请求）；
+#   真实拨测交给独立低频任务（daily-llm-probe，每天一次）。
+SKIP_LLM_PROBE="${SKIP_LLM_PROBE:-1}"
+if [ "$SKIP_LLM_PROBE" = "1" ]; then
+    _llm_out="$(cd "$KOL_DIR" && set -a && . ./.env 2>/dev/null && set +a && \
+        timeout 15 "$PY" - <<'PYEOF' 2>/dev/null
+import sys
+sys.path.insert(0, "scripts")
+try:
+    import llm_client
+    print("OK" if llm_client.is_configured() else "NOT_CONFIGURED")
+except Exception as e:
+    print("IMPORT_FAIL", str(e)[:80])
+PYEOF
+    )"
+else
 _llm_out="$(cd "$KOL_DIR" && set -a && . ./.env 2>/dev/null && set +a && \
     timeout 90 "$PY" - <<'PYEOF' 2>/dev/null
 import sys
@@ -217,6 +236,8 @@ except Exception as e:
     print("CALL_FAIL", str(e)[:300])
 PYEOF
 )"
+
+fi
 
 case "$_llm_out" in
     OK) ;;
