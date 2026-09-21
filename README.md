@@ -8,7 +8,7 @@
 > ⚠️ 先厘清一个常见困惑：**「为什么装了 skill 却看不到？」**
 >
 > `kol-platform` 是 **MCP 服务器（工具型）**，不是 `SKILL.md` 指令型技能。它出现在各平台的
-> **MCP 连接/工具**里，而不是「技能/Skill」列表里。只要 MCP 配置连上了，19 个工具就对 Agent 可见。
+> **MCP 连接/工具**里，而不是「技能/Skill」列表里。只要 MCP 配置连上了，工具就对 Agent 可见。
 > 本仓库根目录的 `SKILL.md`（`kol-opinion-analyzer`）是**服务器端**分析机器人的技能说明书，与客户接入无关。
 
 ---
@@ -88,12 +88,27 @@ python3 scripts/api_keys.py issue --label 张三 --tenant default --scopes '*'
 
 ## 五、19 个工具一览
 
-| 分类 | 工具 |
-|------|------|
-| 大V言论 | `kol_list` `kol_records` `kol_summary` `kol_accuracy` `kol_predictions` `kol_add_prediction` `kol_compare` `kol_backtest` |
-| 行情市场 | `quote` `levels` `market_summary` |
-| 平台状态 | `bee_health` `alert_status` `qa_queue_status` `capabilities` `selfcheck` |
-| LLM 辅助 | `llm_ask` `llm_summarize` `llm_status` |
+| 分类 | 工具 | 说明 |
+|------|------|------|
+| 大V言论 | `kol_list` | 列出已收录的大V及记录数 |
+| | `kol_records` | 查询大V言论（近N天/全部/VIP） |
+| | `kol_summary` | 大V数据概览（总量/VIP/最新仓位/关联资产） |
+| | `kol_accuracy` | 预测准确率报告（命中/偏差/错误明细） |
+| | `kol_predictions` | 列出预测记录 |
+| | `kol_add_prediction` | 新增一条预测记录 |
+| | `kol_compare` | 多KOL观点对比 |
+| | `kol_backtest` | 跟单回测 |
+| 行情市场 | `quote` | 行情查询（可指定 http/local 通道） |
+| | `levels` | 关键点位监控（列表/距现价） |
+| | `market_summary` | 盘前/盘中行情汇总 |
+| 平台状态 | `bee_health` | 蜜蜂通道健康检查 |
+| | `alert_status` | 提醒与告警状态 |
+| | `qa_queue_status` | 群问答队列状态 |
+| | `capabilities` | 列出平台全部能力 |
+| | `selfcheck` | 平台自检 |
+| LLM 辅助 | `llm_ask` | 调用 Kimi 回答问题（可附平台数据上下文） |
+| | `llm_summarize` | 对内容做归纳解读 |
+| | `llm_status` | LLM 配置状态 |
 
 各工具的参数 schema 在对应平台连接成功后会直接展示，无需额外文档。
 
