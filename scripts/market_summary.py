@@ -1661,6 +1661,14 @@ def _native_lark_cli():
                          "node_modules", "@larksuite", "cli", "bin", "lark-cli.exe")
         if os.path.exists(p):
             return p
+    # Linux/macOS: fallback to PATH lark-cli (e.g. /usr/bin/lark-cli)
+    try:
+        import shutil
+        p = shutil.which("lark-cli")
+        if p:
+            return p
+    except Exception:
+        pass
     return ""
 
 
