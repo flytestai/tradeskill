@@ -315,7 +315,7 @@ def main():
 
     if ok:
         answered_at = datetime.now(timezone(timedelta(hours=8))).strftime("%Y-%m-%d %H:%M:%S")
-        qa_dedup.mark_answered(args.sender_id, question, args.sender, answered_at)
+        qa_dedup.mark_answered(chat_id, args.sender_id, question, args.sender, answered_at)
         # 回答完成后取消问题消息上的「敲键盘」表情
         if args.message_id:
             react.remove_typing(args.message_id)

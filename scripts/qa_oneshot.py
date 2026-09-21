@@ -93,6 +93,14 @@ def main() -> int:
             _log("队列写入失败")
             return 1
 
+    # 1.5) 加敲键盘表情（让用户知道机器人正在处理；回答成功后由 group_reply 取消）
+    if not args.dry_run and item.get("message_id"):
+        try:
+            import react
+            react.add_typing(item["message_id"])
+        except Exception as e:
+            _log("加敲键盘表情失败: %s" % str(e)[:120])
+
     # 2) 处理队列（qa_analyzer 会在发送成功后自动 done 掉该项）
     cmd = [sys.executable, os.path.join(SCRIPTS, "qa_analyzer.py")]
     if args.dry_run:

@@ -24,8 +24,8 @@ def _norm(s):
     return re.sub(r"\s+", "", s or "").lower()
 
 
-def question_key(sender_id, text):
-    raw = "%s|%s" % (sender_id or "", _norm(text))
+def question_key(chat_id, sender_id, text):
+    raw = "%s|%s|%s" % (chat_id or "", sender_id or "", _norm(text))
     return hashlib.md5(raw.encode("utf-8")).hexdigest()
 
 
@@ -64,13 +64,13 @@ def load():
     return d if isinstance(d, dict) else {}
 
 
-def is_answered(sender_id, text, answered=None):
+def is_answered(chat_id, sender_id, text, answered=None):
     if answered is None:
         answered = load()
-    return question_key(sender_id, text) in answered
+    return question_key(chat_id, sender_id, text) in answered
 
 
-def is_answered_recently(sender_id, text, answered=None, window_seconds=1800):
+def is_answered_recently(chat_id, sender_id, text, answered=None, window_seconds=1800):
     """同一用户同一问题，仅当在最近 window_seconds 秒内被回答过才视为重复。
 
     行情会变：用户隔一段时间重问同一个问题，应重新取数分析并回答，
@@ -79,7 +79,7 @@ def is_answered_recently(sender_id, text, answered=None, window_seconds=1800):
     """
     if answered is None:
         answered = load()
-    key = question_key(sender_id, text)
+    key = question_key(chat_id, sender_id, text)
     rec = answered.get(key)
     if not rec:
         return False
@@ -95,10 +95,11 @@ def is_answered_recently(sender_id, text, answered=None, window_seconds=1800):
         return True
 
 
-def mark_answered(sender_id, text, sender="", answered_at=""):
+def mark_answered(chat_id, sender_id, text, sender="", answered_at=""):
     d = load()
-    key = question_key(sender_id, text)
+    key = question_key(chat_id, sender_id, text)
     d[key] = {
+        "chat_id": chat_id or "",
         "sender_id": sender_id or "",
         "sender": sender or "",
         "question": (text or "")[:500],
