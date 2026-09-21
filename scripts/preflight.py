@@ -628,8 +628,10 @@ def check_group_isolation():
         _bad("缺少 _title_for_chat（标题未按群自适应）")
         return
 
-    v_litchi = titler("***REMOVED***")
-    v_review = titler("***REMOVED***")
+    # ⚠️ 群 chat_id 从 local_config.env（gitignored）读取，不在源码写死真实 ID。
+    _env_val = getattr(gr, "_env_value", None) or (lambda k, d: _os.environ.get(k, d))
+    v_litchi = titler(_env_val("VIP_PUSH_CHAT_ID", "") or "oc_litchi_placeholder")
+    v_review = titler(_env_val("REVIEW_CHAT_ID", "") or "oc_review_placeholder")
     v_unknown = titler("oc_unknown_xyz")
 
     if v_litchi != v_review:

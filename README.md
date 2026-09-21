@@ -82,9 +82,7 @@ python3 scripts/api_keys.py issue --label 张三 --tenant default --scopes '*'
   ```
 - 密钥只存 **SHA-256 哈希**，新增/吊销**免重启**，最迟 30 秒生效。
 - 建议**一人/一平台一把独立密钥**，便于审计与单独吊销。
-
-当前管理员密钥（环境变量）：
-`***REMOVED***`
+- ⚠️ **密钥绝不明文写入仓库**：管理员密钥只存于服务器 `.env`（已 gitignore），本仓库不包含任何真实密钥。
 
 ---
 
@@ -118,15 +116,8 @@ curl -s -o /dev/null -w '%{http_code}\n' \
 
 ---
 
-## 七、服务端信息（给管理员）
+## 七、服务端信息（仅管理员可见）
 
-| 项 | 值 |
-|----|----|
-| 服务器 | ***REMOVED***（Ubuntu 22.04，操作用户 ubuntu） |
-| 代码目录 | `/opt/kol-skills-platform` |
-| REST | `kol-platform.service` → 127.0.0.1:8020 |
-| MCP | `kol-platform-mcp.service` → 127.0.0.1:8021 |
-| 公网入口 | `https://skill.flytest.com.cn/mcp`（Nginx → 8021） |
-| 鉴权模式 | `enforce`（公网必须带 Key） |
-
-重启服务：`sudo systemctl restart kol-platform kol-platform-mcp`
+> 服务器 IP、端口、账号、代码目录等部署信息**不公开在仓库**，
+> 统一存放于服务器本地 `SERVER-INFO.txt`（已 gitignore，不入库）。
+> 管理员请直接登录服务器查看该文件。
