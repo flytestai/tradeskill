@@ -356,6 +356,12 @@ def process(item: dict, dry_run: bool = False) -> tuple:
     if not answer or not answer.strip():
         return False, "Kimi 返回空回答"
 
+    # 防御：推理模型偶发把 max_tokens 耗在 reasoning 上，正文只剩 "**" 之类残缺。
+    # 过短回答视为失败，保留队列下轮重试（换 qwen-plus 后一般不会再发生）。
+    _core = re.sub(r"[\s*#>\-`|·]+", "", answer)
+    if len(_core) < 10:
+        return False, "回答过短（正文 %d 字），疑似被截断，保留队列下轮重试" % len(_core)
+
     log("    回答: %d 字" % len(answer))
 
     if dry_run:
@@ -370,6 +376,54 @@ def process(item: dict, dry_run: bool = False) -> tuple:
     return _send_reply(item, answer)
 
 
+_LOCK_FILE = os.path.join(SKILL_DIR, "data", "_qa_analyzer.lock")
+_LOCK_STALE_SEC = 600
+
+
+def _acquire_lock():
+    """单实例文件锁：防止并发 qa_analyzer 重复消费同一队列 → 重复回复。"""
+    ts = str(time.time())
+    try:
+        fd = os.open(_LOCK_FILE, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        os.write(fd, ts.encode())
+        os.close(fd)
+        return ts
+    except FileExistsError:
+        try:
+            with open(_LOCK_FILE) as f:
+                last = float(f.read().strip() or "0")
+        except Exception:
+            last = 0.0
+        if last <= 0 or time.time() - last < _LOCK_STALE_SEC:
+            return None
+        try:
+            os.remove(_LOCK_FILE)
+        except Exception:
+            return None
+        try:
+            fd = os.open(_LOCK_FILE, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            os.write(fd, ts.encode())
+            os.close(fd)
+            return ts
+        except FileExistsError:
+            return None
+    except Exception:
+        return ts
+
+
+def _release_lock(ts):
+    try:
+        with open(_LOCK_FILE, "r") as f:
+            raw = f.read().strip()
+    except Exception:
+        return
+    if ts is not None and raw == ts:
+        try:
+            os.remove(_LOCK_FILE)
+        except Exception:
+            pass
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="群问答 Kimi 分析引擎")
     ap.add_argument("--dry-run", action="store_true", help="只分析不发送")
@@ -377,7 +431,20 @@ def main() -> int:
     ap.add_argument("--json", action="store_true", help="JSON 输出")
     args = ap.parse_args()
 
-    queue = load_queue()
+    # 单实例锁：qa_analyzer 单次可能跑 2-3 分钟（LLM 分析），而 _run_task.sh 的
+    # qa 分支会在同一轮里调用它两次（溜队列 + 处理后）。若上一轮没跑完就起第二轮，
+    # 会并发消费同一队列 → 用户被重复回复。抢不到锁直接跳过本轮。
+    lock_ts = _acquire_lock()
+    if lock_ts is None:
+        log("⚠️ 已有 qa_analyzer 在运行，跳过本轮")
+        return 0
+    try:
+        return _main_impl(args)
+    finally:
+        _release_lock(lock_ts)
+
+
+def _main_impl(args) -> int:
     if not queue:
         if args.json:
             print(json.dumps({"ok": True, "pending": 0, "processed": []},
