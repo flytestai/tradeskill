@@ -1779,13 +1779,13 @@ def send(msg, dry_run=False, tag="summary"):
         print(msg)
         print("--------------------------")
         return True
-    day = datetime.now(timezone(timedelta(hours=8))).strftime("%Y%m%d")
+    day = datetime.now(timezone(timedelta(hours=8))).strftime("%Y%m%d%H")
     user_id = _config_value("USER_OPEN_ID")
     native = _native_lark_cli()
     try:
         # 盘前播报统一私信，不再发送到群聊；优先使用 Card 2.0 分区卡片。
         if native and user_id:
-            # 飞书幂等键上限 50 字符：tag 截断，保证不超限。
+            # 飞书幂等键上限 50 字符：tag 截断，保证不超限；带小时防止同日多次触发被飞书去重。
             idem = "ms_%s_%s" % (tag[:16], day)
             # 全部播报（盘前/盘中/午间/收盘）统一发 Card 2.0 卡片。
             card = build_premarket_card(msg)
