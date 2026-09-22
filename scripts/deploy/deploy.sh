@@ -77,6 +77,7 @@ PY_CHANGED=$(echo "$CHANGED" | grep -E '\.py$' || true)
 if [ -n "$PY_CHANGED" ]; then
   COMPILE_FAIL=0
   for f in $PY_CHANGED; do
+    [ -f "$f" ] || continue  # 已删除/改名的文件跳过，避免误报
     if ! "$PYBIN" -m py_compile "$f" >>"$LOG" 2>&1; then
       log "COMPILE_FAILED: $f"
       COMPILE_FAIL=1
