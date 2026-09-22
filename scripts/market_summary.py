@@ -1325,7 +1325,7 @@ def quant_evaluation(quote, valuation, high_info, levels, etf, risk_info=None, v
     }
 
 
-def build_premarket_message(intraday=False):
+def build_premarket_message(intraday=False, afternoon=False):
     """构建交易日盘前播报，区分纳指指数信号与 ETF 实际交易评估。"""
     now = datetime.now(timezone(timedelta(hours=8)))
     quote = query_ndx_quote()
@@ -1441,7 +1441,7 @@ def build_premarket_message(intraday=False):
         risk_line = "⚠️ **波动风险**：ATR/波动率数据暂缺，建议控制仓位"
 
     lines = [
-        "📣 **【盘中播报】**" if intraday else "📣 **【盘前播报】**",
+        "📣 **【收盘播报】**" if afternoon else ("📣 **【盘中播报】**" if intraday else "📣 **【盘前播报】**"),
         "",
         "🌙 **纳斯达克100（NDX）**",
         "📈 **行情**：%s（%s）" % (fmt_optional(price), fmt_optional(pct, "%")),
@@ -1612,11 +1612,13 @@ def is_trading_day():
     return d.strftime("%Y-%m-%d") not in load_holidays(SKILL_DIR)
 
 
-def build_message(lunch=False, premarket=False, intraday=False):
+def build_message(lunch=False, premarket=False, intraday=False, afternoon=False):
     if premarket:
         return build_premarket_message(intraday=False)
     if intraday:
         return build_premarket_message(intraday=True)
+    if afternoon:
+        return build_premarket_message(intraday=True, afternoon=True)
 
     now = datetime.now(timezone(timedelta(hours=8)))
     day = now.strftime("%Y-%m-%d")
@@ -1743,7 +1745,9 @@ def build_premarket_card(msg):
         })
     now = datetime.now(timezone(timedelta(hours=8))).strftime("%Y-%m-%d %H:%M")
     # 标题按内容自动识别，避免盘中播报显示成「盘前播报」。
-    if "【盘中播报】" in (msg or ""):
+    if "【收盘播报】" in (msg or ""):
+        card_title = "收盘播报"
+    elif "【盘中播报】" in (msg or ""):
         card_title = "盘中播报"
     elif "【午间汇总】" in (msg or ""):
         card_title = "午间汇总"
@@ -1859,17 +1863,18 @@ def main():
     ap.add_argument("--premarket", action="store_true", help="交易日盘前播报（默认 08:45）")
     ap.add_argument("--intraday", action="store_true", help="交易日盘中播报（默认 10:00，基于早盘行情）")
     ap.add_argument("--lunch", action="store_true", help="午间汇总（11:35 前发言）")
+    ap.add_argument("--afternoon", action="store_true", help="尾盘收盘播报（默认 14:30）")
     ap.add_argument("--dry-run", action="store_true", help="只打印，不发群")
     args = ap.parse_args()
 
-    chosen = [x for x in (args.premarket, args.intraday, args.lunch) if x]
+    chosen = [x for x in (args.premarket, args.intraday, args.lunch, args.afternoon) if x]
     if len(chosen) > 1:
-        ap.error("--premarket / --intraday / --lunch 只能选一个")
+        ap.error("--premarket / --intraday / --lunch / --afternoon 只能选一个")
     if not is_trading_day():
         print("[SKIP] 非交易日，跳过")
         return
 
-    period = "premarket" if args.premarket else "intraday" if args.intraday else ("lunch" if args.lunch else "close")
+    period = "premarket" if args.premarket else "intraday" if args.intraday else ("lunch" if args.lunch else ("afternoon" if args.afternoon else "close"))
     key = "%s|%s" % (datetime.now(timezone(timedelta(hours=8))).strftime("%Y-%m-%d"), period)
     if already_sent(key):
         print("[SKIP] %s 已发送过，跳过（防重复）" % key)
@@ -1880,7 +1885,7 @@ def main():
     #    若这里不把异常打出来，故障会完全没有痕迹。
     try:
         msg = build_message(lunch=args.lunch, premarket=args.premarket,
-                            intraday=args.intraday)
+                            intraday=args.intraday, afternoon=args.afternoon)
     except Exception as e:
         import traceback
         print("[ERROR] 播报构建失败（%s）：%s" % (type(e).__name__, e))

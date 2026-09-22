@@ -125,6 +125,7 @@ emit() {
 emit "30 8 * * 1-5"    "level-refresh"   trading  ""       "scripts/level_refresh.py"
 emit "45 8 * * 1-5"    "premarket"       trading  ""       "scripts/market_summary.py" "--premarket"
 emit "0 11 * * 1-5"    "intraday"        trading  ""       "scripts/market_summary.py" "--intraday"
+emit "30 14 * * 1-5" "afternoon" trading "" "scripts/market_summary.py" "--afternoon"
 emit "5 15 * * 1-5"    "summary-close"   trading  ""       "scripts/market_summary.py"
 emit "55 14 * * 1-5"   "sync-preclose"   trading  ""       "scripts/sync_feishu_auto.py" "--force"
 emit "0 16 * * 1-5"    "sync-afterclose" trading  ""       "scripts/sync_feishu_auto.py" "--force"
