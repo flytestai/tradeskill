@@ -1,0 +1,32 @@
+name: CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  syntax:
+    name: 语法检查
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: 编译全部 Python 文件（语法校验）
+        run: |
+          python3 -m compileall -q .
+          echo "✅ Python 语法检查通过"
+
+      - name: 校验 shell 脚本（bash -n）
+        run: |
+          for f in $(find . -name '*.sh' -not -path './.venv*'); do
+            bash -n "$f" || { echo "❌ bash 语法错误: $f"; exit 1; }
+          done
+          echo "✅ shell 脚本语法检查通过"
