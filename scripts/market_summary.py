@@ -867,15 +867,36 @@ def short_quant_evaluation(quote, high_info, levels, etf, risk_info=None, volume
 
     trend = min(35, slope_s + price_vs_ma5 + ma20_s + momentum_s)
 
+    # 2026-09-22 调整（用户决策）：超短线不在意溢价 —— 溢价执行从 25 分降为 10 分，
+    # 腾出的 15 分改为「趋势突破」：MA5 上行 + 价格站上 MA5（追势结构确认）。
     execution = 0
     if premium is not None:
-        execution += 25 if premium <= 3 else 18 if premium <= 5 else 10 if premium <= 8 else 5
+        execution += 10 if premium <= 5 else 6 if premium <= 8 else 3
     if premium is not None and premium_avg5 is not None:
         if premium <= premium_avg5 - 1:
-            execution += 3
+            execution += 2
         elif premium <= premium_avg5:
             execution += 1
-    execution = min(execution, 25)
+    execution = min(execution, 10)
+
+    # 趋势突破 15 分（超短线追势核心）：MA5 斜率上行 + 价格站上 MA5 + 量能确认
+    # 量能确认用原始 volume 字段预判（vol_eval 在本块之后才计算）
+    _vol_ratio = (volume or {}).get("ratio") or (volume or {}).get("vol_ratio")
+    try:
+        _vol_ratio = float(_vol_ratio) if _vol_ratio is not None else None
+    except (TypeError, ValueError):
+        _vol_ratio = None
+    vol_eval_breakout = _vol_ratio is not None and _vol_ratio >= 1.2
+    breakout = 0
+    if ma5_slope is not None and etf_price is not None and etf_ma is not None:
+        if ma5_slope >= 0.5 and etf_price >= etf_ma:
+            breakout = 12
+            if vol_eval_breakout is True:
+                breakout = 15
+        elif etf_price >= etf_ma:
+            breakout = 8
+    elif etf_price is not None and etf_ma is not None and etf_price >= etf_ma:
+        breakout = 6
 
     position = 6
     if price and support20 and price / support20 <= 1.03:
@@ -886,11 +907,8 @@ def short_quant_evaluation(quote, high_info, levels, etf, risk_info=None, volume
         position = 10
     position = min(position, 15)
 
+    # 2026-09-22 调整：超短线风险分不再由溢价驱动（溢价只影响 execution 低分）
     risk = 5
-    if premium is not None and premium > 8:
-        risk = 0
-    elif premium is not None and premium > 5:
-        risk = 2
     if daily_pct is not None and abs(daily_pct) > 2:
         risk = min(risk, 2)
     if risk_info:
@@ -952,11 +970,11 @@ def short_quant_evaluation(quote, high_info, levels, etf, risk_info=None, volume
         volume_score = 4
 
     scores = {"动量": overseas, "ETF趋势": trend, "溢价执行": execution,
-              "关键位": position, "量能": volume_score,
+              "趋势突破": breakout, "关键位": position, "量能": volume_score,
               "技术": rsi_adj + ma_adj + macd_adj + boll_adj, "风险": risk}
-    # 各维度上限：动量25+趋势35+溢价28+关键位15+量能18+技术16+风险5 = 142，归一化到 100。
+    # 各维度上限：动量25+趋势35+溢价10+突破15+关键位15+量能18+技术16+风险5 = 139，归一化到 100。
     raw_total = sum(scores.values())
-    total = min(100, max(0, round(raw_total / 142 * 100)))
+    total = min(100, max(0, round(raw_total / 139 * 100)))
     if total >= 70:
         action, layers = "加仓", "1～2层（20%～40%）"
     elif total >= 55:
@@ -965,9 +983,14 @@ def short_quant_evaluation(quote, high_info, levels, etf, risk_info=None, volume
         action, layers = "观望", "0～1层（0%～20%）"
     else:
         action, layers = "减仓", "0层（防守）"
-    if risk < 2:
+    # 2026-09-22 调整（趋势跟随优先）：趋势突破结构确认（breakout>=12）时，
+    # 风险门槛放宽一档，允许追势仓；纯溢价原因不再压 action。
+    _trend_follow = breakout is not None and breakout >= 12
+    if risk < 2 and not _trend_follow:
         action, layers = "观望", "0～1层（0%～20%）"
-    elif risk < 4 and action == "加仓":
+    elif risk < 2 and _trend_follow and action in ("加仓", "试仓"):
+        action, layers = "试仓", "1层（20%）"
+    elif risk < 4 and action == "加仓" and not _trend_follow:
         action, layers = "试仓", "1层（20%）"
     short_risk_cap = 2 if risk >= 4 else 1 if risk >= 2 else 0
     # 弱势破位（跌破MA20 且 MA20 下行）：超短线不允许加仓，最多观望。
@@ -995,7 +1018,9 @@ def short_quant_evaluation(quote, high_info, levels, etf, risk_info=None, volume
     elif short_broken:
         reasons.append("跌破MA20且MA20下行（弱势破位）")
     if premium is not None and premium > 5:
-        reasons.append("溢价偏高但超短线不作绝对否决")
+        reasons.append("溢价%.1f%%偏高（超短线不计入风险，仅降低执行分）" % premium)
+    if breakout is not None and breakout >= 12:
+        reasons.append("趋势突破结构确认（MA5上行+站上MA5%s）" % ("+放量" if vol_eval_breakout else ""))
     if price and support20 and price / support20 <= 1.03:
         reasons.append("接近短线支撑")
     if not reasons:
@@ -1259,20 +1284,25 @@ def quant_evaluation(quote, valuation, high_info, levels, etf, risk_info=None, v
     elif above_ma60 is False and ma60_slope is not None and ma60_slope <= 0:
         reasons.append("中期结构偏弱（MA60下行且跌破）")
 
-    hard_veto = (premium is not None and premium > 5) or (
+    # 2026-09-22 调整（用户决策）：溢价不再一票否决，仅保留ETF趋势弱+破MA5的否决。
+    # 高溢价改为「仓位上限」约束（波段最多 2 层），并在理由中提示，不再压成观望。
+    hard_veto = (
         etf_price is not None and etf_ma is not None and etf_price < etf_ma and
         etf_trend5 is not None and etf_trend5 < 0)
     if hard_veto and action == "加仓":
         action, layers = "观望", "0～1层（0%～20%）"
         reasons.append("执行条件未满足，暂不追价")
-    if premium is not None and premium > 8:
-        action, layers = "观望", "0～1层（0%～20%）"
+    _premium_high = premium is not None and premium > 8
 
     risk_cap = 5 if risk_score >= 8 else 3 if risk_score >= 6 else 2 if risk_score >= 4 else 1
     # 中期结构限制：MA60 下行且价格在其下方时，波段不重仓，避免在中期弱势中加仓。
     mid_weak = (above_ma60 is False and ma60_slope is not None and ma60_slope <= 0)
     if mid_weak:
         risk_cap = min(risk_cap, 2)
+    # 2026-09-22 调整（用户决策）：高溢价不再一票否决，改为波段仓位上限 2 层。
+    if _premium_high:
+        risk_cap = min(risk_cap, 2)
+        reasons.append("溢价率%.1f%%偏高（波段仓位上限2层，注意溢价回落风险）" % premium)
     desired_layers = 5 if total >= 80 else 3 if total >= 65 else 2 if total >= 50 else 1 if total >= 35 else 0
     if desired_layers > risk_cap:
         action = "观望" if risk_cap <= 2 else "试仓"
@@ -1280,7 +1310,7 @@ def quant_evaluation(quote, valuation, high_info, levels, etf, risk_info=None, v
         reasons.append("ATR/波动率或中期结构触发仓位上限")
     swing_layer_count = min(desired_layers, risk_cap)
 
-    add_condition = "评分≥65、溢价率回落至5%以下、ETF站上MA5且近20日转强"
+    add_condition = "评分≥65、ETF站上MA5且近20日转强（趋势跟随优先，溢价只约束仓位）"
     reduce_condition = "评分<35，或跌破短线支撑/中期支撑失守"
     return {
         "total": total,
