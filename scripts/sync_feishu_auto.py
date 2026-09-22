@@ -503,6 +503,10 @@ def strip_vip_markers(text):
     return t.strip()
 
 
+#: VIP 配图窗口（分钟）：VIP 文本后 N 分钟内出现的机器人图片视为该条 VIP 的配图，
+#  需一起转发到荔枝群/复盘群（2026-09-22 修复：此前图片因 is_vip=0 被过滤掉）。
+VIP_IMAGE_WINDOW = int(_env_value("VIP_IMAGE_WINDOW", "10"))
+
 VIP_CARD_TITLE = "👑 VIP 尊享・仅 TA 的真爱粉可见"
 
 
@@ -527,10 +531,13 @@ def _send_image(image_path, ct, chat_id, idem_prefix, log_label):
             log_error("%s图片转发跳过（本地文件不存在）: %s" % (log_label, image_path))
             return "skip"
         rel = image_path.replace("\\", "/")
-        idem_key = "%s_img_" % idem_prefix + content_hash(image_path + "|" + (ct or ""))
+        # 2026-09-22 fix: --idempotency-key combined with --image makes
+        # the sent image message marked deleted by Feishu (observed twice
+        # at 09:08/09:24 auto sends, while manual no-idem send survives).
+        # Image dedup is already done in DB layer via image_key hash.
         cmd = ('timeout -k 3 60 lark-cli im +messages-send '
-               '--chat-id %s --idempotency-key %s --as bot --image "%s"'
-               % (chat_id, idem_key, rel))
+               '--chat-id %s --as bot --image "%s"'
+               % (chat_id, rel))
         ok = False
         last_err = ""
         for attempt in range(3):
@@ -598,14 +605,29 @@ def forward_all_to_group(conn, chat_id, watermark_file, idem_prefix, log_label, 
         "SELECT content, record_date, is_vip, image_path FROM kol_records WHERE kol_name='wu2198' AND record_date > ? ORDER BY record_date ASC",
         (wm,)).fetchall()
     last_ct = wm
+    last_vip_ct = None
     for content, ct, is_vip, image_path in rows:
         if content and is_test_message(content):
             last_ct = ct
             continue
         if vip_only and not is_vip:
-            # 荔枝群只接收 VIP；公开微博直接跳过，但水位仍需前移，避免重复检查。
-            last_ct = ct
-            continue
+            # 2026-09-22 修复：VIP 消息后紧跟的图片（wu 常在 VIP 文本后 1~2 条发图，
+            # 时间差通常 < 5 分钟）属于该条 VIP 的配图，必须一起转发。
+            # 判定：图片行 且 与最近一条 VIP 行时间差 <= VIP_IMAGE_WINDOW 分钟。
+            is_vip_image = False
+            if image_path and last_vip_ct:
+                try:
+                    t1 = datetime.strptime(str(ct)[:16], "%Y-%m-%d %H:%M")
+                    t2 = datetime.strptime(str(last_vip_ct)[:16], "%Y-%m-%d %H:%M")
+                    is_vip_image = abs((t1 - t2).total_seconds()) <= VIP_IMAGE_WINDOW * 60
+                except Exception:
+                    is_vip_image = False
+            if not is_vip_image:
+                # 荔枝群只接收 VIP；公开微博直接跳过，但水位仍需前移，避免重复检查。
+                last_ct = ct
+                continue
+        if is_vip:
+            last_vip_ct = ct
         result = push_to_group(content or "", ct, is_vip=bool(is_vip), image_path=image_path or "",
                                chat_id=chat_id, idem_prefix=idem_prefix, log_label=log_label)
         if result == "skip":
