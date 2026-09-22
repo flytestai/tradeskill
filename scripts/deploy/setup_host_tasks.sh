@@ -146,6 +146,8 @@ emit "*/5 * * * *"   "react-cleanup"     always  ""       "scripts/react.py" "cl
 emit "0 */6 * * *"   "auth-keepalive"    always  ""       "scripts/auth_keepalive.py"
 emit "*/10 * * * *"  "self-monitor"      always  "--bash" "scripts/deploy/selfcheck.sh"
 emit "*/5 * * * *"   "trade365-selfheal" always  "--bash" "/opt/trade365-bot/_run_trade365.sh"
+# 内存告警：内存可用/swap 越阈值时飞书通知（脚本内部防轰炸，见 memory_alert.py）
+emit "*/5 * * * *"   "memory-alert"      always  "--lock" "scripts/deploy/memory_alert.py"
 
 # ---- 公网 MCP 链路验收（每日一次）----
 # ⚠️ 为什么需要独立任务：MCP 公网链路有 4 层各自独立的坑（Nginx 路由 /
