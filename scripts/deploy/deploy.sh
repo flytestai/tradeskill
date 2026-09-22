@@ -70,6 +70,26 @@ if [ -n "$CHANGED" ]; then
   log "changed files: $(echo "$CHANGED" | tr '\n' ' ')"
 fi
 
+# ---- 语法门禁（fail-fast）：只编译本次改动涉及的 .py，语法错直接回滚、不重启服务 ----
+PYBIN="$REPO/.venv-host/bin/python"
+[ -x "$PYBIN" ] || PYBIN="$(command -v python3)"
+PY_CHANGED=$(echo "$CHANGED" | grep -E '\.py$' || true)
+if [ -n "$PY_CHANGED" ]; then
+  COMPILE_FAIL=0
+  for f in $PY_CHANGED; do
+    if ! "$PYBIN" -m py_compile "$f" >>"$LOG" 2>&1; then
+      log "COMPILE_FAILED: $f"
+      COMPILE_FAIL=1
+    fi
+  done
+  if [ "$COMPILE_FAIL" -eq 1 ]; then
+    log "syntax gate failed, rolling back to ${OLD:0:8} (no service restart)"
+    git reset --hard "$OLD"
+    notify "❌ kol-platform 自动部署失败：语法检查未通过，已回滚到 ${OLD:0:8}"
+    exit 1
+  fi
+fi
+
 FAIL=0
 if [ "$RESTART" -eq 1 ]; then
   log "restarting kol-platform.service + kol-platform-mcp.service"
@@ -82,6 +102,17 @@ fi
 sleep 3
 if ! systemctl is-active --quiet kol-platform.service; then FAIL=1; log "kol-platform.service NOT active"; fi
 if ! systemctl is-active --quiet kol-platform-mcp.service; then FAIL=1; log "kol-platform-mcp.service NOT active"; fi
+
+# 增强健康检查：仅在真正重启过服务时，额外探活 REST /healthz（进程活着 ≠ 接口能响应）
+if [ "$RESTART" -eq 1 ]; then
+  HZ_URL="${PLATFORM_HEALTH_URL:-http://127.0.0.1:8020/healthz}"
+  if ! curl -sf --max-time 5 "$HZ_URL" >/dev/null 2>&1; then
+    FAIL=1
+    log "REST /healthz 探活失败: $HZ_URL"
+  else
+    log "REST /healthz 探活通过"
+  fi
+fi
 
 if [ "$FAIL" -ne 0 ]; then
   log "DEPLOY_FAILED, rolling back to ${OLD:0:8}"

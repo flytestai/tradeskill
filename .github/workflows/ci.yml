@@ -30,3 +30,18 @@ jobs:
             bash -n "$f" || { echo "❌ bash 语法错误: $f"; exit 1; }
           done
           echo "✅ shell 脚本语法检查通过"
+
+  secret-scan:
+    name: 密钥扫描
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Gitleaks 扫描（防止硬编码密钥/口令入库）
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITLEAKS_ENABLE_COMMENTS: "false"
