@@ -167,6 +167,7 @@ if [ -f "$_host_log" ]; then
         #   查看当天「交易时段类」任务记录，若它们集中在 20:00~04:00
         #   说明 cron 用错了时区（晚 12h）。
         trade_ts="$(grep -E '(premarket|intraday|position-monitor|monitor-alerts|summary-close|level)' "$_host_log" \
+                    | grep -v 'verify-' \
                     | grep -oE '^--- [0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2}' \
                     | tail -1 | awk '{print $3}')"
         if [ -n "$trade_ts" ]; then
