@@ -64,24 +64,37 @@ def query_item(query):
     return datas[0]
 
 
+# A股指数 → 腾讯行情代码（行情直接走稳定公开API，不走蜜蜂网关）
+INDEX_TENCENT_CODES = {
+    "上证指数": "sh000001",
+    "深证成指": "sz399001",
+    "科创50": "sh000688",
+    "创业板指": "sz399006",
+}
+
+
 def query_index(index):
-    """查询指数最新价与涨跌幅，返回 (price, chg) 或 None。"""
-    it = query_item(index + "最新价")
-    if not it:
+    """查询指数最新价与涨跌幅（腾讯公开行情），返回 (price, chg) 或 None。"""
+    code = INDEX_TENCENT_CODES.get(index)
+    if not code:
         return None
     try:
-        price = float(str(it.get("最新价", "")).replace(",", ""))
-    except Exception:
-        return None
-    chg = None
-    for k in ("最新涨跌幅:前复权", "最新涨跌幅", "涨跌幅"):
-        if it.get(k) is not None:
-            try:
-                chg = float(it[k])
-                break
-            except Exception:
+        req = urllib.request.Request(
+            "https://qt.gtimg.cn/q=" + code,
+            headers={"User-Agent": "Mozilla/5.0", "Referer": "http://gu.qq.com"})
+        raw = urllib.request.urlopen(req, timeout=15).read().decode("gbk", "replace")
+        for line in raw.split("\n"):
+            if '="' not in line:
                 continue
-    return price, chg
+            p = line.split('="', 1)[1].rstrip('"').split("~")
+            if len(p) < 33:
+                return None
+            price = float(p[3])
+            chg = float(p[32]) if p[32] else None
+            return price, chg
+    except Exception as e:
+        print("[WARN] 指数%s公开行情失败: %s" % (index, e))
+    return None
 
 
 TENCENT_QUOTE_URL = "https://qt.gtimg.cn/q=usNDX"
@@ -217,40 +230,43 @@ def query_ndx_quote():
 
 
 def query_etf_volume():
-    """读取 ETF 当日成交额/成交量/量比/换手率，以及区间累计量能，用于量能判断。"""
+    """读取 ETF 当日成交额/成交量/量比/换手率（腾讯公开行情，不走蜜蜂网关）。"""
     out = {}
-    day = query_item("纳指ETF易方达今日成交额成交量") or {}
-    for key, val in day.items():
-        if not key.startswith("成交额["):
-            continue
-        try:
-            out["amount"] = float(val)
-        except (TypeError, ValueError):
-            pass
-    for key, val in day.items():
-        if not key.startswith("成交量["):
-            continue
-        try:
-            out["volume"] = float(val)
-        except (TypeError, ValueError):
-            pass
-    ratio, _ = _find_value(day, ("量比[",))
-    turnover, _ = _find_value(day, ("换手率[",))
-    amplitude, _ = _find_value(day, ("振幅[",))
-    out["volume_ratio"] = ratio
-    out["turnover"] = turnover
-    out["amplitude"] = amplitude
-
-    period = query_item("纳指ETF易方达近20日成交额成交量") or {}
-    total_amount = None
-    for key, val in period.items():
-        if key.startswith("成交额["):
+    try:
+        req = urllib.request.Request(
+            "https://qt.gtimg.cn/q=sz159696",
+            headers={"User-Agent": "Mozilla/5.0", "Referer": "http://gu.qq.com"})
+        raw = urllib.request.urlopen(req, timeout=15).read().decode("gbk", "replace")
+        p = raw.split('"')[1].split("~") if '"' in raw else []
+        if len(p) > 38:
             try:
-                total_amount = float(val)
+                vol = float(p[36])          # 成交量（手）
+                if vol > 0:
+                    out["volume"] = vol
             except (TypeError, ValueError):
                 pass
-    if total_amount is not None:
-        out["avg_amount_20d"] = total_amount / 20.0
+            try:
+                amt = float(p[37])          # 成交额（万元）
+                if amt > 0:
+                    out["amount"] = amt * 1e4
+            except (TypeError, ValueError):
+                pass
+            try:
+                out["turnover"] = float(p[38])  # 换手率（%）
+            except (TypeError, ValueError):
+                pass
+        if len(p) > 43:
+            try:
+                out["amplitude"] = float(p[43])  # 振幅（%）
+            except (TypeError, ValueError):
+                pass
+        if len(p) > 49:
+            try:
+                out["volume_ratio"] = float(p[49])  # 量比
+            except (TypeError, ValueError):
+                pass
+    except Exception as e:
+        print("[WARN] 纳指ETF量能公开行情失败: %s" % e)
     return out
 
 
@@ -685,22 +701,15 @@ def _query_ndx_etf_backup():
 
 
 def query_ndx_etf():
-    """查询易方达纳斯达克100 ETF（159696）走势、均线和溢价率。"""
-    item = None
-    queries = (
-        "纳指ETF易方达近5日、近20日行情走势、溢价率、均线、最新价、涨跌幅",
-        "纳指ETF易方达近20日行情走势、近5日行情走势、均线、溢价率",
-        "纳指ETF易方达行情、涨跌幅、溢价率",
-    )
-    for query in queries:
-        candidate = query_item(query)
-        if candidate and any(str(k).startswith("收盘价[") for k in candidate):
-            item = candidate
-            break
+    """查询易方达纳斯达克100 ETF（159696）走势、均线和溢价率。
+
+    行情直接走稳定公开API（腾讯实时 + 新浪日K），不再依赖蜜蜂网关，
+    避免网关限流(HTTP 429)导致纳指ETF整段无数据；溢价率需净值数据，
+    公开源缺失时由上层降级为「溢价率缺失/暂不判断」。
+    """
+    item = _query_ndx_etf_backup()
     if not item:
-        item = _query_ndx_etf_backup()
-        if not item:
-            return {}
+        return {}
     try:
         price = float(item.get("最新收盘价"))
     except (TypeError, ValueError):
@@ -719,19 +728,7 @@ def query_ndx_etf():
             except (TypeError, ValueError):
                 pass
     closes.sort(key=lambda x: x[0])
-    # 主查询通常只返回约 20 个交易日；单独取 60 日序列，用于计算中期关键位。
-    if len(closes) < 60:
-        long_item = query_item("纳指ETF易方达近60日收盘价") or {}
-        merged = dict((k, v) for k, v in closes)
-        for key, value in long_item.items():
-            if not key.startswith("收盘价["):
-                continue
-            try:
-                merged[key] = float(value)
-            except (TypeError, ValueError):
-                pass
-        if len(merged) > len(closes):
-            closes = sorted(merged.items(), key=lambda x: x[0])
+    # 备用源默认取 120 个交易日，已覆盖 20/60 日窗口，无需再补 60 日序列。
     # 盘前A股尚未开盘时，"最新收盘价/涨跌幅"可能为空或为0；回退到最近一个交易日收盘。
     price_is_fallback = False
     if price is None and closes:
