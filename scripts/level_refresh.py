@@ -29,6 +29,7 @@
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import json
 import os
 import subprocess
@@ -44,20 +45,30 @@ ASOF_FILE = os.path.join(SKILL_DIR, "data", "level_asof.txt")
 #: 每个指数最近一次波浪 JSON 的落盘位置（同时充当时间戳）
 WAVE_CACHE = os.path.join(SKILL_DIR, "data", "_wave_%s.json")
 
-#: elliott-index-wave 技能目录（与 kol-opinion-analyzer 同级）
-ELLIOTT_DIRS = [
-    os.environ.get("ELLIOTT_SKILL_DIR", ""),
-    os.path.join(os.path.dirname(SKILL_DIR), "elliott-index-wave"),
-    "/opt/kol-skills-platform/vendor/elliott-index-wave",
-    os.path.expanduser("~/.bee/plugins/.my-plugin/skills/elliott-index-wave"),
-]
+#: elliott-index-wave 技能目录（本仓库 skills/ 下；脚本已重构为单一 generate_report.py）
+ELLIOTT_SKILL_DIR = os.path.join(SKILL_DIR, "skills", "elliott-index-wave")
+
+_gen = None
+_gen_err = None
 
 
-def _find_elliott():
-    for d in ELLIOTT_DIRS:
-        if d and os.path.isfile(os.path.join(d, "scripts", "assess_wave.py")):
-            return d
-    return ""
+def _load_gen():
+    """懒加载 generate_report.py（内建 _multi_analyze 直连腾讯多周期K）。"""
+    global _gen, _gen_err
+    if _gen is not None or _gen_err is not None:
+        return _gen
+    path = os.path.join(ELLIOTT_SKILL_DIR, "scripts", "generate_report.py")
+    if not os.path.isfile(path):
+        _gen_err = "generate_report.py 未找到：%s" % path
+        return None
+    try:
+        spec = importlib.util.spec_from_file_location("elliott_generate_report", path)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        _gen = mod
+    except Exception as e:
+        _gen_err = "%s: %s" % (type(e).__name__, str(e)[:160])
+    return _gen
 
 
 def _today():
@@ -74,56 +85,48 @@ def _log(msg):
 
 
 def _run_wave(idx, timeout=240):
-    """跑一次波浪分析，返回结构化 JSON（或 None）。"""
-    sd = _find_elliott()
-    if not sd:
+    """跑一次波浪分析，返回结构化 JSON（或 None）。
+
+    适配 2026-09 重构后的 elliott-index-wave：原 fetch_realtime.py / assess_wave.py
+    已合并进单一 generate_report.py（内建 _multi_analyze 直连腾讯多周期K）。
+    """
+    gen = _load_gen()
+    if gen is None:
         _log("未找到 elliott-index-wave，跳过")
         return None
-    gen = os.path.join(sd, "scripts", "generate_report.py")
-    assess = os.path.join(sd, "scripts", "assess_wave.py")
-    payload = os.path.join(SKILL_DIR, "data", "_wave_payload.json")
-
-    # 1) 取数（generate_report 内部会 fetch 并预筛；用它的 --in 复用数据不便，
-    #    这里直接调 fetch_realtime 拿 payload，再交给 assess_wave）
-    fetch = os.path.join(sd, "scripts", "fetch_realtime.py")
+    symbol = gen.INDEX_CODES.get(idx)
+    if not symbol:
+        _log("%s 无行情代码，跳过" % idx)
+        return None
     try:
-        r = subprocess.run([sys.executable, fetch, "--index", idx, "--multi",
-                            "--lookback", "260"],
-                           capture_output=True, text=True, timeout=timeout,
-                           cwd=sd, encoding="utf-8", errors="replace")
-        data = (r.stdout or "").strip()
-        if not data:
-            _log("%s 取数失败: %s" % (idx, (r.stderr or "")[:150]))
-            return None
-        with open(payload, "w", encoding="utf-8") as f:
-            f.write(data)
+        multi = gen._multi_analyze(symbol, 2000)
     except Exception as e:
-        _log("%s 取数异常: %s" % (idx, str(e)[:150]))
+        _log("%s 波浪分析异常: %s" % (idx, str(e)[:150]))
+        return None
+    day = (multi or {}).get("day")
+    if not day:
+        _log("%s 波浪分析无日线结果" % idx)
         return None
 
-    # 2) 预筛 → JSON
-    # ⚠️ assess_wave.py 从 **stdin** 读 payload（不是 --in 参数）；
-    #    实测用 --in 会得到 {"error":..., "bars":...} 而非分析结果。
-    #    generate_report.py 也是这么调的：run([assess], stdin=fetch_out)
-    try:
-        with open(payload, encoding="utf-8") as f:
-            stdin_data = f.read()
-        r = subprocess.run([sys.executable, assess],
-                           input=stdin_data, capture_output=True, text=True,
-                           timeout=timeout, cwd=sd, encoding="utf-8",
-                           errors="replace")
-        out = (r.stdout or "").strip()
-        if not out:
-            _log("%s 预筛无输出: %s" % (idx, (r.stderr or "")[:150]))
-            return None
-        d = json.loads(out)
-        if isinstance(d, dict) and d.get("error"):
-            _log("%s 预筛报错: %s" % (idx, str(d.get("error"))[:150]))
-            return None
-        return d
-    except Exception as e:
-        _log("%s 预筛异常: %s" % (idx, str(e)[:150]))
-        return None
+    fib = day.get("fib") or {}
+    # 转成 level_refresh 既有的 JSON 形状，_to_levels 无需改动
+    return {
+        "invalidation_levels": {
+            "wave4_invalidation_up": day.get("top"),
+            "C_confirm_below": day.get("A"),
+            "C_reject_above": day.get("B"),
+        },
+        "c_wave_targets": {
+            "C_equals_0.618A": fib.get("0.618"),
+            "C_equals_A": fib.get("1.000"),
+            "C_equals_1.618A": fib.get("1.618"),
+        },
+        "correction": {
+            "A": {"top": {"price": day.get("top")}, "bottom": {"price": day.get("A")}},
+            "B": {"top": {"price": day.get("B")}, "bottom": {"price": day.get("A")}},
+            "C": {"top": {"price": day.get("B")}, "bottom": {"price": day.get("C")}},
+        },
+    }
 
 
 def _to_levels(wave):

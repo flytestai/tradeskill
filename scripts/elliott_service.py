@@ -11,7 +11,7 @@
 配置（环境变量）：
     ELLIOTT_SERVICE_HOST  默认 127.0.0.1
     ELLIOTT_SERVICE_PORT  默认 8022
-    ELLIOTT_CACHE_TTL     内存缓存秒数，默认 21600（6h），0=禁用
+    ELLIOTT_CACHE_TTL     内存缓存秒数，默认 600（10min），0=禁用
 
 由 systemd 单元 kol-elliott.service 常驻托管。
 """
@@ -28,7 +28,7 @@ SKILL_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 HOST = os.environ.get("ELLIOTT_SERVICE_HOST", "127.0.0.1")
 PORT = int(os.environ.get("ELLIOTT_SERVICE_PORT", "8022"))
-CACHE_TTL = int(os.environ.get("ELLIOTT_CACHE_TTL", "21600"))
+CACHE_TTL = int(os.environ.get("ELLIOTT_CACHE_TTL", "600"))
 
 
 # ---------------------------------------------------------------------------
