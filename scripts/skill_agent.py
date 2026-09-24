@@ -131,6 +131,9 @@ SKILL_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 GATEWAY = _cfg("BEE_GATEWAY_URL", "https://bee-ai.integrity.com.cn").rstrip("/")
 EP_Q2D = GATEWAY + "/skills/v1/query2data"
 EP_SEARCH = GATEWAY + "/skills/v1/comprehensive/search"
+#: 本地波浪技能服务（hithink 风格 query2data 契约，见 scripts/elliott_service.py）。
+#: 与网关技能同构：skill_id 进 CATALOG、端点/超时/版本均可配置；服务不可用时回退本地脚本。
+ELLIOTT_SERVICE_URL = _cfg("ELLIOTT_SERVICE_URL", "http://127.0.0.1:8022").rstrip("/")
 
 #: 单技能超时（秒）。不再区分快慢 —— 之前把 industry/event 判为"慢"是误判，
 #: 实际是端点用错导致的失败重试；统一给 45s 足够。
@@ -175,6 +178,10 @@ CATALOG = [
     ("news-search", "search", ["news"], "财经资讯、政策动态、行业与公司新闻、市场舆情、事件解读"),
     ("announcement-search", "search", ["announcement"], "上市公司公告：定期财报、分红派息、回购增持、资产重组"),
     ("report-search", "search", ["report"], "券商研究报告全文检索"),
+    # ---- 本地波浪服务（elliott，端点同 query2data，指向 ELLIOTT_SERVICE_URL）----
+    ("hithink-elliott-wave", "elliott", None,
+     "艾略特波浪分析：指数当前浪级定位（第几浪/A-B-C结构/C1-C2-C3子浪）、"
+     "浪型高低点、斐波那契目标位、失效位；适用上证/深证/创业板/科创50/沪深300/恒生/纳斯达克等"),
 ]
 
 #: MCP 能力（对应蜜蜂 MCP，服务器侧等价实现）
@@ -246,6 +253,11 @@ def call_skill(skill_id: str, query: str, limit: int = 10, retries: int = 1):
             break
 
     def _one(q: str):
+        if ep == "elliott":
+            return _post(ELLIOTT_SERVICE_URL + "/skills/v1/query2data",
+                         {"query": q, "page": "1", "limit": str(limit),
+                          "is_cache": "1", "expand_index": "true"},
+                         _headers(skill_id), SKILL_TIMEOUT)
         if ep == "search":
             return _post(EP_SEARCH,
                          {"channels": chan or ["news"], "app_id": "AIME_SKILL",
@@ -668,6 +680,9 @@ def execute(p: dict, question: str, deadline: float, verbose: bool = False,
     #    而真正的本地能力又在下面的 LOCAL_CATALOG 循环里跑第二遍 —— 重复且低效。
     REMOTE_IDS = {c[0] for c in CATALOG}
     skills = [x for x in planned if x.get("id") in REMOTE_IDS]
+    #: 远程技能里**实际取到数据**的 id —— 用于本地能力降级判定：
+    #:   波浪类问题若远程 hithink-elliott-wave 被选但取数失败，则仍回退本地脚本。
+    got_remote = set()
 
     for i, s in enumerate(skills):
         if time.time() > deadline:
@@ -676,6 +691,7 @@ def execute(p: dict, question: str, deadline: float, verbose: bool = False,
         txt = _fmt_rows(resp, s["id"])
         n = len(_datas(resp))
         if n:
+            got_remote.add(s["id"])
             parts.append("【%s】%s\n%s" % (s["id"], s["query"], txt))
             detail.append((s["id"], "%d 条" % n))
         else:
@@ -719,8 +735,9 @@ def execute(p: dict, question: str, deadline: float, verbose: bool = False,
 
         # 波浪：问句明确提到波浪/浪级时自动补（耗时较长，仅显式相关才跑）
         if any(w in q for w in ("波浪", "浪型", "第几浪", "几浪", "艾略特", "elliott",
-                                "浪级", "主升浪", "调整浪")) \
-                and "local:elliott_wave" not in chosen:
+                                "浪级", "主升浪", "调整浪", "C浪", "C几")) \
+                and "local:elliott_wave" not in chosen \
+                and "hithink-elliott-wave" not in got_remote:
             txt = _elliott_context(q)
             if txt:
                 parts.append("【艾略特波浪】\n" + txt); detail.append(("local:elliott_wave", "自动补充"))

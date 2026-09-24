@@ -1,0 +1,17 @@
+[Unit]
+Description=KOL Elliott Wave Skill Service (hithink-style query2data)
+After=network.target
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/opt/kol-skills-platform
+EnvironmentFile=-/opt/kol-skills-platform/.env
+EnvironmentFile=-/opt/kol-skills-platform/data/local_config.env
+Environment="TZ=Asia/Shanghai"
+Environment="ELLIOTT_SERVICE_HOST=127.0.0.1"
+Environment="ELLIOTT_SERVICE_PORT=8022"
+ExecStart=/opt/kol-skills-platform/.venv-host/bin/python /opt/kol-skills-platform/scripts/elliott_service.py
+Restart=always
+RestartSec=5
+[Install]
+WantedBy=multi-user.target
