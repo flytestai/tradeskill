@@ -23,7 +23,7 @@
   LLM_BASE_URL      覆盖默认端点
   LLM_MODEL         模型名（默认 qwen-plus）
   LLM_TIMEOUT       秒，默认 120
-  LLM_MAX_TOKENS    默认 4000（kimi-k3 是推理模型，思考过程也占 token）
+  LLM_MAX_TOKENS    默认 4000（推理模型的思考过程也占 token）
 
 用法
 ----
@@ -60,15 +60,13 @@ PRESETS = {
     "openai":   {"base": "https://api.openai.com/v1", "model": "gpt-4o-mini"},
     # 阿里云百炼 DashScope（OpenAI 兼容模式）—— 2026-09-19 新增
     #
-    # 为什么切换：Kimi 账号因余额不足被停用
-    #   （HTTP 429 / type=exceeded_current_quota_error / cash_balance 为负）。
+    # 说明：统一走 OpenAI 兼容端点，换模型改 LLM_MODEL 即可，无需改代码。
     #
     # 实测对比（同一业务问句「上证3911 / 创业板3540，B反还是C杀」）：
     #     qwen-plus       2.9s  带 MACD/KDJ 指标分析   ← 默认选它
     #     qwen-flash      1.0s  带年线/通道分析
     #     qwen3.8-max     6.5s  逻辑辩证
     #     qwen3.7-max    11.9s  最专业
-    #     kimi-k3（旧）17.7~21.5s ← 换百炼后群问答明显更快
     #
     # 该端点实测可列出 255 个模型（Qwen3/DeepSeek/GLM 等第三方）；
     # 本 preset 只固定默认模型，换模型改 LLM_MODEL 即可，无需改代码。
@@ -139,7 +137,7 @@ def timeout_s() -> int:
 
 
 def max_tokens() -> int:
-    """kimi-k3 是推理模型：思考过程 (reasoning_content) 也计入 completion tokens，
+    """推理模型：思考过程 (reasoning_content) 也计入 completion tokens，
     预算过小会导致 content 为空（实测 max_tokens=300 时回答为空）。"""
     try:
         return int(_cfg("LLM_MAX_TOKENS", "4000") or "4000")
@@ -160,7 +158,7 @@ def is_configured() -> bool:
 # ⚠️ 规划模型的选择依据**已更新**（原注释「k2.6 仅 5s、k3 需 21s」是早期测量，
 #    当时规划提示词还很短；现在技能目录+约束已 1680 字，不再适用）。
 #    2026-09-19 实测（3 次平均）：
-#        kimi-k2.6 → 21.5s      kimi-k3 → 17.7s      两者均 3/3 成功
+#        旧模型A → 21.5s        旧模型B → 17.7s        两者均 3/3 成功
 #    k3 反而更快，故规划默认改用 k3。
 #    规划单次超时由 skill_agent.PLAN_TIMEOUT 控制（默认 30s）；
 #    且规则路由已先行兜底，规划超时不会导致「零数据」。
@@ -175,12 +173,12 @@ def model_for(purpose: str = "") -> str:
     ⚠️ 这里**不能**用模块级常量硬编码模型名（2026-09-19 实测踩坑）
     ------------------------------------------------------------------
     原实现是模块级：
-        MODEL_BY_PURPOSE = {"plan": os.environ.get("LLM_MODEL_PLAN", "kimi-k3")}
+        MODEL_BY_PURPOSE = {"plan": os.environ.get("LLM_MODEL_PLAN", "old-model")}
     于是切到阿里百炼后：
         provider = bailian
         base_url = https://dashscope.aliyuncs.com/...   ✅ 已跟随
-        model    = kimi-k3                              ❌ 仍指向 Kimi 的模型
-    → 会用 Kimi 的模型名去请求百炼，必然失败；而且失败原因
+        model    = old-model                            ❌ 仍指向旧供应商的模型
+    → 会用旧供应商的模型名去请求新端点，必然失败；而且失败原因
       （模型不存在）与配置看起来"没问题"形成矛盾，极难排查。
 
     根因：模块级常量在 import 时求值一次，且**默认值写死了某个供应商的模型**。
@@ -275,7 +273,7 @@ def chat(prompt: str, system: str = "", history: list = None,
     :param prompt:      用户输入
     :param system:      系统提示词
     :param history:     历史消息 [{"role","content"}]，置于 prompt 之前
-    :param temperature: 留空用模型默认。注意 kimi 系模型**只接受 1**。
+    :param temperature: 留空用模型默认。注意部分模型**只接受 1**。
     """
     if not is_configured():
         raise LLMError("未配置 LLM_API_KEY")
@@ -292,7 +290,7 @@ def chat(prompt: str, system: str = "", history: list = None,
         "messages": msgs,
         "max_tokens": max_tokens_ or max_tokens(),
     }
-    # ⚠️ kimi 系模型只接受 temperature=1，故仅当显式传入 1 时才带上该字段。
+    # ⚠️ 部分模型只接受 temperature=1，故仅当显式传入 1 时才带上该字段。
     if temperature == 1:
         payload["temperature"] = 1
 
