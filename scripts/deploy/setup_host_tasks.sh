@@ -141,6 +141,8 @@ emit "*/1 9-16 * * 1-5" "price-alerts"         trading "--lock" "scripts/price_a
 emit "*/1 9-16 * * 1-5" "feishu-intraday-poll" trading "--lock" "scripts/sync_feishu_auto.py"
 
 # ---- 全天周期（无交易日语义 → always）----
+# VIP 消息非交易时段每小时兜底同步（盘中 9-16 之外的时间及非交易日，只要发了 VIP，水位之后未转发的全部补推到荔枝群和复盘群）
+emit "0 * * * *"     "feishu-vip-hourly-fallback" always "--lock" "scripts/sync_feishu_auto.py" "--hourly-fallback"
 # 敲键盘表情清理 / 授权保活 / 自监控 / trade365 自愈，周末与节假日都必须照跑
 emit "*/5 * * * *"   "react-cleanup"     always  ""       "scripts/react.py" "cleanup"
 emit "0 */6 * * *"   "auth-keepalive"    always  ""       "scripts/auth_keepalive.py"

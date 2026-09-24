@@ -260,6 +260,20 @@ def trading_time_guard():
     return False, "非群消息同步时段（当前 %02d:%02d）" % (now.hour, now.minute)
 
 
+def hourly_fallback_guard():
+    """非盘中时间的每小时兜底守卫（北京时间）。返回 (是否可运行, 原因)
+
+    盘中时间（交易日 9:00-16:00）已由 feishu-intraday-poll 高频轮询覆盖，
+    兜底任务在盘中时段静默跳过，避免与高频轮询重复；
+    而在非交易时段（盘后、夜间、周末、节假日），允许执行并拉取/转发 VIP。
+    """
+    from common import beijing_now
+    now = beijing_now()
+    if now.weekday() < 5 and _c_is_trading_day(SKILL_DIR) and _c_is_group_sync_time(SKILL_DIR):
+        return False, "当前处于交易日盘中高频同步时段（%02d:%02d），跳过每小时兜底" % (now.hour, now.minute)
+    return True, ""
+
+
 def to_iso(ts):
     """把水位时间转成 ISO8601（北京时间）；兼容 'YYYY-MM-DD HH:MM[:SS]' 和 ISO8601。"""
     ts = (ts or "").strip()
@@ -892,7 +906,13 @@ def run_loop(args):
 
 def run_once(args, skip_guard=False):
     """执行一次完整同步（拉取→去重→入库→VIP推送→GitHub 推送）。返回 0=正常/跳过，1=拉取失败。"""
-    if not args.force and not skip_guard:
+    if getattr(args, "hourly_fallback", False):
+        if not args.force and not skip_guard:
+            ok, reason = hourly_fallback_guard()
+            if not ok:
+                print("[SKIP] %s" % reason)
+                return 0
+    elif not args.force and not skip_guard:
         ok, reason = trading_time_guard()
         if not ok:
             print("[SKIP] %s" % reason)
@@ -1094,6 +1114,7 @@ def main():
     ap.add_argument("--chat-id", default=DEFAULT_CHAT_ID)
     ap.add_argument("--db", default=DB_PATH)
     ap.add_argument("--force", action="store_true", help="忽略盘中/交易日守卫")
+    ap.add_argument("--hourly-fallback", action="store_true", help="每小时兜底模式：在盘中时间之外运行，拉取并转发水位后未转发的 VIP 消息")
     ap.add_argument("--no-push", action="store_true", help="跳过 GitHub 推送")
     ap.add_argument("--dry-run", action="store_true", help="只预览不写库")
     ap.add_argument("--reset-watermark", action="store_true", help="重置增量水位，下次全量拉取")
