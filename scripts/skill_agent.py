@@ -199,6 +199,7 @@ LOCAL_CATALOG = [
     ("local:elliott_wave", "艾略特波浪分析（elliott-index-wave 技能）：指数当前浪级定位、"
                            "浪型高低点、失效位、备选浪型；交易日/周线双周期确认。"
                            "适用上证指数/深证成指/创业板指/科创50/沪深300/恒生/纳斯达克等"),
+    ("local:stock_data", "个股全维度数据（免费公开源直连）：实时行情/涨跌停/换手/PE/PB/流通总市值、日周月K线+60分钟K、财务（营收净利ROE现金流负债率商誉）、主力资金流、龙虎榜、融资融券；适用 A 股个股（尤其新股/次新股等网关覆盖不足的标的）"),
 ]
 
 #: 已纳入编排的指数（elliott 与关键位能力用）
@@ -536,7 +537,27 @@ def _do_local(kind: str, arg: str) -> str:
             return ""
     if kind == "local:elliott_wave":
         return _elliott_context(arg)
+    if kind == "local:stock_data":
+        return _stock_data_context(arg)
     return ""
+
+
+# ---------------------------------------------------------------------------
+# 个股全维度数据（stock_data_service.py，免费公开源直连）
+# ---------------------------------------------------------------------------
+
+def _stock_data_context(question: str) -> str:
+    """调用本地股票数据服务（免费公开源），返回格式化文本；失败静默返回空。
+
+    覆盖：实时行情/日K/60分钟K/财务/主力资金流/龙虎榜/融资融券，
+    尤其能补齐网关对新股/次新股覆盖不足的缺口。
+    """
+    m = re.search(r"\b(\d{6})\b", question or "")
+    if not m:
+        return ""
+    out = _subprocess_out(["scripts/stock_data_service.py", "--code", m.group(1),
+                           "--kind", "all"], 45)
+    return out[:3000] if out else ""
 
 
 # ---------------------------------------------------------------------------
@@ -745,6 +766,12 @@ def execute(p: dict, question: str, deadline: float, verbose: bool = False,
             txt = _elliott_context(q)
             if txt:
                 parts.append("【艾略特波浪】\n" + txt); detail.append(("local:elliott_wave", "自动补充"))
+
+        # 个股：问句含 6 位代码时自动补全维度数据（免费公开源直连，新股也能取到）
+        if re.findall(r"\b\d{6}\b", q) and "local:stock_data" not in chosen:
+            txt = _stock_data_context(q)
+            if txt:
+                parts.append("【个股数据】\n" + txt); detail.append(("local:stock_data", "自动补充"))
 
     if "mcp:list_optional_stocks" in chosen:
         txt = _subprocess_out(["scripts/db_query.py", "--list-kols"], 25)

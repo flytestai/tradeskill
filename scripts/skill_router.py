@@ -265,6 +265,7 @@ def route(question: str) -> list:
                        "能不能上车", "上车", "抄底", "追高", "止盈", "止损"))
     for name, code in stocks:
         plan.append(("行情·" + name, "stock", (name, code)))
+        plan.append(("个股数据·" + code, "stockdata", code))
         if is_decision or any(w in q for w in
                               ("估值", "市盈率", "PE", "PB", "财务", "业绩",
                                "营收", "净利", "ROE", "基本面", "贵不贵")):
@@ -440,6 +441,11 @@ def _execute(step, deadline):
             name, code = payload
             d = _call(sid.get("market", "hithink-market-query"), "%s最新价" % (name or code), 3)
             return label, _fmt_stock(d, name)
+
+        if kind == "stockdata":
+            out = _run_local(["scripts/stock_data_service.py", "--code", payload,
+                              "--kind", "all"], 40)
+            return label, out[:3000] if out else ""
 
         if kind == "finance":
             name, code = payload
