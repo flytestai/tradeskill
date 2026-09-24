@@ -111,6 +111,26 @@ def model() -> str:
     return PRESETS.get(provider(), PRESETS["bailian"])["model"]
 
 
+def _fallback_endpoints() -> list:
+    """解析备用大模型端点（LLM_FALLBACK_<N>_BASE/KEY/MODEL，N 从 1 起）。
+
+    主模型不可用时按顺序自动切换（见 chat() 的 failover 逻辑）。
+    返回 [(base, key, model), ...]；三项任缺其一视为该序号配置不完整，跳过。
+    """
+    out = []
+    for i in range(1, 10):
+        base = _cfg("LLM_FALLBACK_%d_BASE" % i, "")
+        key = _cfg("LLM_FALLBACK_%d_KEY" % i, "")
+        model = _cfg("LLM_FALLBACK_%d_MODEL" % i, "")
+        if base and key and model:
+            out.append((base.rstrip("/"), key, model))
+        elif base or key or model:
+            continue
+        else:
+            break
+    return out
+
+
 def timeout_s() -> int:
     try:
         return int(_cfg("LLM_TIMEOUT", "120") or "120")
@@ -128,7 +148,7 @@ def max_tokens() -> int:
 
 
 def is_configured() -> bool:
-    return bool(api_key())
+    return bool(api_key()) or bool(_fallback_endpoints())
 
 
 # --------------------------------------------------------------------------
@@ -174,94 +194,17 @@ def model_for(purpose: str = "") -> str:
     return m or model()
 
 
-def chat(prompt: str, system: str = "", history: list = None,
-         temperature: float = None, max_tokens_: int = None,
-         retries: int = 2, timeout: int = None, purpose: str = "") -> str:
-    """发起一次对话，返回助手回复文本。
+def _endpoints(purpose: str = "") -> list:
+    """按顺序返回可用 LLM 端点 [(base, key, model), ...]：主端点 + 备用端点。"""
+    eps = [(base_url(), api_key(), model_for(purpose))]
+    for base, key, model in _fallback_endpoints():
+        if (base, key, model) not in eps:
+            eps.append((base, key, model))
+    return eps
 
-    :param prompt:      用户输入
-    :param system:      系统提示词
-    :param history:     历史消息 [{"role","content"}]，置于 prompt 之前
-    :param temperature: 留空用模型默认。注意 kimi-k3 **只接受 1**，
-                        传其他值会报 "invalid temperature"。
-    """
-    if not is_configured():
-        raise LLMError("未配置 LLM_API_KEY")
 
-    msgs = []
-    if system:
-        msgs.append({"role": "system", "content": system})
-    if history:
-        msgs.extend(history)
-    msgs.append({"role": "user", "content": prompt})
-
-    used_model = model_for(purpose)
-    payload = {
-        "model": used_model,
-        "messages": msgs,
-        "max_tokens": max_tokens_ or max_tokens(),
-    }
-    # ⚠️ kimi-k3 与 kimi-k2.6 **都只接受 temperature=1**，传其他值会
-    #   报 "invalid temperature: only 1 is allowed"（已实测）。
-    #   故仅当显式传入 1 时才带上该字段，其余情况交给服务端默认。
-    if temperature == 1:
-        payload["temperature"] = 1
-
-    # ⚠️ 必须编码为 UTF-8 字节流（见模块 docstring 的说明）
-    body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
-    url = base_url() + "/chat/completions"
-    headers = {
-        "Content-Type": "application/json; charset=utf-8",
-        "Authorization": "Bearer " + api_key(),
-        "Accept": "application/json",
-    }
-
-    last_err = None
-    for attempt in range(retries + 1):
-        req = urllib.request.Request(url, data=body, headers=headers, method="POST")
-        try:
-            with urllib.request.urlopen(req, timeout=timeout or timeout_s()) as r:
-                data = json.loads(r.read().decode("utf-8"))
-            break
-        except urllib.error.HTTPError as e:
-            detail = e.read().decode("utf-8", "replace")[:300]
-            last_err = "HTTP %s: %s" % (e.code, detail)
-            # ⚠️ 429 承载两种【语义完全不同】的情况，必须区分（2026-09-19 实测）
-            # ------------------------------------------------------------------
-            # 【A】余额不足 / 账号停用 —— 重试永远无效，且会掩盖真实原因
-            #     实测 Moonshot：type=exceeded_current_quota_error
-            #       "account ... is suspended due to insufficient balance"
-            #     实测百炼同款语义亦可能以 429 返回（Arrearage / quota 类）。
-            #     → 直接抛出，文案里点明"欠费/停用，需充值"，让人一眼看懂。
-            #
-            # 【B】速率限制 —— 瞬时，重试有效
-            #     Moonshot 组织级限流在生产中很常见（群问答每 2 分钟一轮，
-            #     每轮「规划+汇总」两次调用）。退避 3s / 8s / 16s。
-            #
-            # 若不做区分，【A】会被当作【B】反复重试后报"调用失败"，
-            # 运维看到只会以为"限流了，等等就好" —— 而账户其实早已停用。
-            if e.code == 429:
-                low = detail.lower()
-                quota_kw = ("insufficient balance", "exceeded_current_quota",
-                            "arrearage", "suspended", "quota exceeded",
-                            "insufficient_quota", "billing")
-                if any(k in low for k in quota_kw):
-                    raise LLMError(
-                        "LLM 账户欠费/额度用尽（非限流，重试无效，需充值或换 Key）: %s"
-                        % detail[:200])
-                if attempt < retries:
-                    time.sleep(3.0 * (2 ** attempt))
-                continue
-            # 其余 4xx 多为参数/鉴权问题，重试无意义
-            if 400 <= e.code < 500:
-                raise LLMError(last_err)
-        except Exception as e:
-            last_err = "%s: %s" % (type(e).__name__, str(e)[:200])
-        if attempt < retries:
-            time.sleep(1.5 * (attempt + 1))
-    else:
-        raise LLMError("LLM 调用失败: %s" % last_err)
-
+def _extract_content(data: dict, payload: dict) -> str:
+    """从 OpenAI 兼容响应里取正文；无 choices / 空正文则抛 LLMError（触发备用切换）。"""
     choices = data.get("choices") or []
     if not choices:
         raise LLMError("响应无 choices: %s" % json.dumps(data, ensure_ascii=False)[:200])
@@ -275,6 +218,96 @@ def chat(prompt: str, system: str = "", history: list = None,
             "reasoning 长度=%d, completion_tokens=%s, max_tokens=%s"
             % (len(rc), usage.get("completion_tokens"), payload["max_tokens"]))
     return content
+
+
+def _try_endpoint(base: str, key: str, payload: dict, timeout: int, retries: int):
+    """对单个端点尝试 retries+1 次，返回 (content, err)；content 非 None 即成功。"""
+    body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+    url = base.rstrip("/") + "/chat/completions"
+    headers = {
+        "Content-Type": "application/json; charset=utf-8",
+        "Authorization": "Bearer " + key,
+        "Accept": "application/json",
+    }
+    last_err = "未尝试"
+    for attempt in range(retries + 1):
+        req = urllib.request.Request(url, data=body, headers=headers, method="POST")
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as r:
+                data = json.loads(r.read().decode("utf-8"))
+            return _extract_content(data, payload), None
+        except urllib.error.HTTPError as e:
+            detail = e.read().decode("utf-8", "replace")[:300]
+            last_err = "HTTP %s: %s" % (e.code, detail)
+            if e.code == 429:
+                # 【A】欠费/停用 → 重试无效，放弃该端点切备用
+                # 【B】瞬时限流 → 退避重试
+                low = detail.lower()
+                quota_kw = ("insufficient balance", "exceeded_current_quota",
+                            "arrearage", "suspended", "quota exceeded",
+                            "insufficient_quota", "billing")
+                if any(k in low for k in quota_kw):
+                    return None, last_err
+                if attempt < retries:
+                    time.sleep(3.0 * (2 ** attempt))
+                    continue
+            elif 400 <= e.code < 500:
+                # 鉴权/参数错误：重试无意义，放弃该端点切备用
+                return None, last_err
+            # 5xx 等：继续重试
+            if attempt < retries:
+                time.sleep(1.5 * (attempt + 1))
+        except Exception as e:
+            last_err = "%s: %s" % (type(e).__name__, str(e)[:200])
+            if attempt < retries:
+                time.sleep(1.5 * (attempt + 1))
+    return None, last_err
+
+
+def chat(prompt: str, system: str = "", history: list = None,
+         temperature: float = None, max_tokens_: int = None,
+         retries: int = 2, timeout: int = None, purpose: str = "") -> str:
+    """发起一次对话，返回助手回复文本。
+
+    支持备用大模型自动切换：主端点（LLM_PROVIDER/BASE_URL/API_KEY/MODEL）失败时，
+    依次尝试 LLM_FALLBACK_<N>_BASE/KEY/MODEL 配置的备用端点；全部失败才抛 LLMError。
+
+    :param prompt:      用户输入
+    :param system:      系统提示词
+    :param history:     历史消息 [{"role","content"}]，置于 prompt 之前
+    :param temperature: 留空用模型默认。注意 kimi 系模型**只接受 1**。
+    """
+    if not is_configured():
+        raise LLMError("未配置 LLM_API_KEY")
+
+    msgs = []
+    if system:
+        msgs.append({"role": "system", "content": system})
+    if history:
+        msgs.extend(history)
+    msgs.append({"role": "user", "content": prompt})
+
+    payload = {
+        "model": "",  # 各端点循环里覆盖
+        "messages": msgs,
+        "max_tokens": max_tokens_ or max_tokens(),
+    }
+    # ⚠️ kimi 系模型只接受 temperature=1，故仅当显式传入 1 时才带上该字段。
+    if temperature == 1:
+        payload["temperature"] = 1
+
+    _timeout = timeout or timeout_s()
+    endpoints = _endpoints(purpose)
+    errors = []
+    for base, key, model_name in endpoints:
+        payload["model"] = model_name
+        content, err = _try_endpoint(base, key, payload, _timeout, retries)
+        if content is not None:
+            return content
+        errors.append("%s(%s): %s" % (base, model_name, err))
+
+    raise LLMError("LLM 调用失败（已尝试 %d 个端点）: %s"
+                   % (len(endpoints), " | ".join(errors)))
 
 
 def chat_full(prompt: str, system: str = "", **kw) -> dict:
