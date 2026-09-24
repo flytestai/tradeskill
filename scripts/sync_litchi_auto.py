@@ -59,8 +59,9 @@ TEST_KEYWORDS = ["转发测试", "同步测试", "test", "TEST"]
 
 # 群配置：group -> (chat_id 的 env key, 水位文件名, 锁文件名, 旧水位文件名)
 GROUPS = {
-    "litchi": ("VIP_PUSH_CHAT_ID", "_litchi_watermark.json", "_litchi_loop.lock", "_mentions_state.json"),
-    "review": ("REVIEW_CHAT_ID", "_review_watermark.json", "_review_loop.lock", ""),
+    "litchi": ("VIP_PUSH_CHAT_ID", "_litchi_watermark.json", "_litchi_loop.lock", "_mentions_state.json", "group"),
+    "review": ("REVIEW_CHAT_ID", "_review_watermark.json", "_review_loop.lock", "", "group"),
+    "dm": ("USER_OPEN_ID", "_dm_watermark.json", "_dm_loop.lock", "", "p2p"),
 }
 
 # 运行时由 apply_group() 按 --group 填充
@@ -85,9 +86,14 @@ def _env_value(key, default=""):
     return default
 
 
+CURRENT_GROUP = "litchi"
+CURRENT_CHAT_TYPE = "group"
+
 def apply_group(group):
-    global DEFAULT_CHAT_ID, WATERMARK_FILE, LEGACY_WATERMARK_FILE, LOOP_LOCK_FILE
-    chat_key, wm, lock, legacy = GROUPS.get(group, GROUPS["litchi"])
+    global DEFAULT_CHAT_ID, WATERMARK_FILE, LEGACY_WATERMARK_FILE, LOOP_LOCK_FILE, CURRENT_GROUP, CURRENT_CHAT_TYPE
+    CURRENT_GROUP = group
+    chat_key, wm, lock, legacy, ctype = GROUPS.get(group, GROUPS["litchi"])
+    CURRENT_CHAT_TYPE = ctype
     DEFAULT_CHAT_ID = _env_value(chat_key, "")
     WATERMARK_FILE = os.path.join(SKILL_DIR, "data", wm)
     LEGACY_WATERMARK_FILE = os.path.join(SKILL_DIR, "data", legacy) if legacy else ""
@@ -158,14 +164,15 @@ def extract_text(msg):
     return c.strip() if isinstance(c, str) else ""
 
 
-def fetch_messages_since(chat_id, start_iso=None):
+def fetch_messages_since(target_id, start_iso=None):
     """通过 lark-cli 拉取 start_iso 之后的消息（升序，自动分页），失败返回 None。
 
-    直接调用 lark-cli（与 sync_feishu_auto.py 一致），避免 bash -c 重定向在后台循环里卡住。
+    支持 chat_id (oc_xxx) 或 user_id (ou_xxx) 用于私聊。
     """
     lark_cli = find_lark_cli()
-    cmd = [lark_cli, "im", "+chat-messages-list",
-           "--chat-id", chat_id, "--as", "user", "--order", "asc",
+    id_arg = ["--user-id", target_id] if target_id.startswith("ou_") else ["--chat-id", target_id]
+    cmd = [lark_cli, "im", "+chat-messages-list"] + id_arg + [
+           "--as", "user", "--order", "asc",
            "--page-all", "--page-limit", "200", "--no-reactions", "--json"]
     if start_iso:
         cmd += ["--start", start_iso]
@@ -259,14 +266,15 @@ def _release_lock():
 
 
 def run_once(dry_run=False):
-    chat_id = DEFAULT_CHAT_ID
-    if not chat_id:
-        print("[CONFIG] 未配置 data/local_config.env 的 VIP_PUSH_CHAT_ID", file=sys.stderr)
+    target_id = DEFAULT_CHAT_ID
+    if not target_id:
+        env_key = GROUPS.get(CURRENT_GROUP, GROUPS["litchi"])[0]
+        print(f"[CONFIG] 未配置 data/local_config.env 的 {env_key}", file=sys.stderr)
         return 1
 
     watermark = load_watermark()
     start_iso = to_iso(watermark) if watermark else None
-    messages = fetch_messages_since(chat_id, start_iso)
+    messages = fetch_messages_since(target_id, start_iso)
     if messages is None:
         print("[FAIL] 拉取失败，本轮结束")
         return 1
@@ -283,17 +291,29 @@ def run_once(dry_run=False):
         if stype in ("app", "bot"):
             continue  # 跳过机器人自己
         text = extract_text(m)
-        if not text or "@" not in text:
-            continue  # 只保留 @机器人 的消息
-        text = re.sub(r"@\S+\s*", "", text).strip()
         if not text:
             continue
+        if CURRENT_CHAT_TYPE == "group":
+            if "@" not in text:
+                continue  # 群聊只保留 @机器人 的消息
+            text = re.sub(r"@\S+\s*", "", text).strip()
+            if not text:
+                continue
+        else:
+            # 私信：全文即问题，去掉可能误输入的 @
+            text = re.sub(r"@\S+\s*", "", text).strip()
+            if not text:
+                continue
         sender_name = sender.get("name", "")
         sender_id = sender.get("id") or sender.get("open_id") or ""
+        # 私信鉴权：如果是 dm 模式，只允许目标用户（如 USER_OPEN_ID）
+        if CURRENT_CHAT_TYPE == "p2p" and target_id.startswith("ou_") and sender_id != target_id:
+            continue
         message_id = m.get("message_id", "")
+        msg_chat_id = m.get("chat_id") or target_id
         if any(kw in text for kw in TEST_KEYWORDS):
             continue
-        if qa_dedup.is_answered_recently(chat_id, sender_id, text, answered):
+        if qa_dedup.is_answered_recently(msg_chat_id, sender_id, text, answered):
             continue  # 近期已回答过的问题不再入队（超过窗口则重新回答）
         item = {
             "message_id": message_id,
@@ -301,7 +321,8 @@ def run_once(dry_run=False):
             "sender_id": sender_id,
             "text": text,
             "create_time": ct,
-            "chat_id": chat_id,
+            "chat_id": msg_chat_id,
+            "chat_type": CURRENT_CHAT_TYPE,
             "status": "pending",
         }
         if not dry_run:

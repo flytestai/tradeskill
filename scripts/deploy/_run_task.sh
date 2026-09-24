@@ -196,6 +196,7 @@ case "$MODE" in
             "$PY" scripts/qa_analyzer.py
             rc1=$?
             "$PY" scripts/sync_litchi_auto.py --group litchi
+            "$PY" scripts/sync_litchi_auto.py --group dm
             rc2=$?
             # 复盘群由 trade365 bot 统一轮询（同一飞书应用、同一群）
             # → 两边各自轮询会导致用户 @ 一次被回两条，故此处不再拉取。

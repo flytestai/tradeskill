@@ -278,9 +278,11 @@ def _send_reply(item: dict, answer: str) -> tuple:
     question = (item.get("text") or "").strip()
     chat_id = (item.get("chat_id") or "").strip()
 
+    chat_type = (item.get("chat_type") or "group").strip()
     args = ["scripts/group_reply.py",
             "--sender", sender, "--question", question,
-            "--text", answer]
+            "--text", answer,
+            "--chat-type", chat_type]
     if sender_id:
         args += ["--sender-id", sender_id]
     if mid:
