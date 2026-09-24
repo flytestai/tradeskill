@@ -585,13 +585,17 @@ def _pick_index(text: str) -> str:
     return ""
 
 
-def _extract_wave_section(md: str, limit: int = 2600) -> str:
-    """从生成的波浪报告里截取「结论 + 浪级 + 失效位」这几段，避免整篇塞进上下文。"""
+def _extract_wave_section(md: str, limit: int = 4500) -> str:
+    """从波浪报告里取上下文：报告较短时整篇返回；超长时按关键词截取关键段。"""
     if not md:
         return ""
+    # 多周期报告（v5）约 2~3KB，直接整篇给模型，信息最全
+    if len(md) <= limit:
+        return md.strip()
     keys = ("当前浪", "浪级", "结论", "主浪", "备选", "失效", "invalidation",
             "支撑", "压力", "置信", "confidence", "wave",
-            "子浪", "C浪", "A浪", "B浪", "斐波那契")
+            "子浪", "C浪", "A浪", "B浪", "斐波那契",
+            "年线", "月线", "周线", "日线", "反弹", "下杀", "方向", "目标", "关键位")
     lines = md.splitlines()
     picked, seen = [], 0
     for i, ln in enumerate(lines):
@@ -602,7 +606,7 @@ def _extract_wave_section(md: str, limit: int = 2600) -> str:
                 if lines[j].strip() and lines[j] not in picked:
                     picked.append(lines[j])
             seen += 1
-        if seen >= 12 or len("\n".join(picked)) > limit:
+        if seen >= 16 or len("\n".join(picked)) > limit:
             break
     out = "\n".join(picked).strip()
     return out[:limit] if out else md[:limit]
@@ -733,11 +737,11 @@ def execute(p: dict, question: str, deadline: float, verbose: bool = False,
             if txt:
                 parts.append("【大V观点】\n" + txt); detail.append(("local:kol_opinions", "自动补充"))
 
-        # 波浪：问句明确提到波浪/浪级时自动补（耗时较长，仅显式相关才跑）
+        # 波浪：问句明确提到波浪/浪级时自动补（本地 markdown 报告信息最全，
+        #   多周期年/月/周/日 + C1-C5 子浪，故即使远程已取数也一并补上）
         if any(w in q for w in ("波浪", "浪型", "第几浪", "几浪", "艾略特", "elliott",
                                 "浪级", "主升浪", "调整浪", "C浪", "C几")) \
-                and "local:elliott_wave" not in chosen \
-                and "hithink-elliott-wave" not in got_remote:
+                and "local:elliott_wave" not in chosen:
             txt = _elliott_context(q)
             if txt:
                 parts.append("【艾略特波浪】\n" + txt); detail.append(("local:elliott_wave", "自动补充"))

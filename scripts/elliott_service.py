@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""elliott-index-wave 波浪技能 HTTP 服务（hithink 风格 query2data 契约）。
+"""elliott-index-wave 波浪技能 HTTP 服务（hithink 风格 query2data 契约，多周期版）。
 
 把本地 elliott-index-wave 波浪分析封装成常驻 HTTP 服务，对外暴露与蜜蜂网关
 同构的 /skills/v1/query2data 端点，返回 {"datas":[...]} 结构化结果，
 供 skill_agent 当普通远程技能统一编排（skill_id 进 CATALOG、端点/超时可配置）。
 
-数据源链：腾讯 proxy.finance.qq.com 日K → 新浪日K（见 generate_report.py）。
+数据源链：腾讯 proxy.finance.qq.com 多周期K（年线/月线/周线/日线）→ 新浪日K。
 
 配置（环境变量）：
     ELLIOTT_SERVICE_HOST  默认 127.0.0.1
@@ -88,52 +88,79 @@ def _fmt(x):
     return "" if x is None else str(x)
 
 
-def _to_datas(index, symbol, r):
-    """把 generate_report._analyze 的结果转成 hithink 风格 datas（单条）。"""
+def _tf_line(r):
+    """单周期 A-B-C 摘要一行（字段名已含周期标签，故不重复前缀）。"""
+    if not r:
+        return "数据不足"
     if r.get("state") == "冲顶":
-        return [{
-            "指数": index, "指数代码": symbol,
-            "浪级定位": "仍在上行，疑似第5浪冲顶段（未见A-B-C调整结构）",
-            "参考高点": _fmt(r.get("top")), "参考高点日期": r.get("top_date", ""),
-            "最新收盘": _fmt(r.get("last_close")), "数据日期": r.get("last_date", ""),
-        }]
+        return "疑似第5浪冲顶（高点%s@%s）" % (_fmt(r["top"]), r["top_date"])
     if r.get("state") == "A进行中":
+        return "A浪进行中（顶%s→A低%s）" % (_fmt(r["top"]), _fmt(r["A"]))
+    return "%s顶后调整 A%s→%s B%s C低%s" % (
+        "3浪" if r["wave3_like"] else "5浪",
+        _fmt(r["top"]), _fmt(r["A"]), _fmt(r["B"]), _fmt(r["C"]))
+
+
+def _to_datas(index, symbol, multi):
+    """把多周期分析结果转成 hithink 风格 datas（单条，字段值均 ≤60 字符）。"""
+    day = multi.get("day")
+    year = multi.get("year")
+
+    def year_line():
+        if not year:
+            return ""
+        return "%s（高点%s@%s年，近3年%s）" % (
+            year["state"], _fmt(year["hist_high"]), year["hist_high_year"],
+            year["trend3"])
+
+    if day is None:
+        return []
+    if day.get("state") == "冲顶":
         return [{
             "指数": index, "指数代码": symbol,
+            "年线方向": year_line(),
+            "浪级定位": "仍在上行，疑似第5浪冲顶段（未见A-B-C调整结构）",
+            "参考高点": _fmt(day.get("top")), "参考高点日期": day.get("top_date", ""),
+            "最新收盘": _fmt(day.get("last_close")), "数据日期": day.get("last_date", ""),
+        }]
+    if day.get("state") == "A进行中":
+        return [{
+            "指数": index, "指数代码": symbol,
+            "年线方向": year_line(),
             "浪级定位": "见顶回落，第4浪A浪进行中（B浪未展开）",
-            "顶部": _fmt(r.get("top")), "顶部日期": r.get("top_date", ""),
-            "A浪低点": _fmt(r.get("A")), "A浪低点日期": r.get("A_date", ""),
-            "最新收盘": _fmt(r.get("last_close")), "数据日期": r.get("last_date", ""),
+            "顶部": _fmt(day.get("top")), "顶部日期": day.get("top_date", ""),
+            "A浪低点": _fmt(day.get("A")), "A浪低点日期": day.get("A_date", ""),
+            "最新收盘": _fmt(day.get("last_close")), "数据日期": day.get("last_date", ""),
         }]
 
-    c_sub = r.get("c_sub") or {}
-    c_inner = ""
-    if c_sub.get("c1"):
-        parts = ["C1 %s→%s" % (_fmt(r.get("B")), _fmt(c_sub["c1"].get("price")))]
-        if c_sub.get("c2"):
-            parts.append("C2 %s→%s" % (_fmt(c_sub["c1"].get("price")),
-                                       _fmt(c_sub["c2"].get("price"))))
-        if c_sub.get("c3"):
-            tag = "进行中" if c_sub.get("c3_ongoing") else "已现低点"
-            parts.append("C3 %s→%s(%s)" % (_fmt(c_sub["c2"].get("price")),
-                                           _fmt(c_sub["c3"].get("price")), tag))
-        c_inner = " | ".join(parts)
+    c_sub = day.get("c_sub") or {}
+    labels = []
+    for k, lbl in (("c1", "C1"), ("c2", "C2"), ("c3", "C3"),
+                   ("c4", "C4"), ("c5", "C5")):
+        if c_sub.get(k):
+            labels.append("%s %s" % (lbl, _fmt(c_sub[k]["price"])))
+    c_inner = " ".join(labels)[:58] or "C1-C2-C3 未细分"
 
-    fib = r.get("fib") or {}
+    fib = day.get("fib") or {}
+    reb = _fmt(c_sub["c4"]["price"]) if c_sub.get("c4") else _fmt(day.get("C"))
+
     return [{
         "指数": index, "指数代码": symbol,
-        "主浪判定": ("3浪顶/4浪调整" if r.get("wave3_like") else "5浪顶/4浪调整"),
-        "精确位置": "第4浪的C浪（进行中）",
-        "C浪内部": c_inner or "C1-C2-C3 未细分",
-        "A浪低点": _fmt(r.get("A")),
-        "B浪高点": _fmt(r.get("B")),
-        "C浪低点": _fmt(r.get("C")),
-        "斐波那契目标": "0.618=%s / 等长=%s / 1.618=%s" % (
-            _fmt(fib.get("0.618")), _fmt(fib.get("1.000")), _fmt(fib.get("1.618"))),
-        "失效位向上": _fmt(r.get("top")),
-        "C浪确认向下": _fmt(r.get("A")),
-        "C浪否定向上": _fmt(r.get("B")),
-        "数据日期": r.get("last_date", ""),
+        "年线方向": year_line(),
+        "月线浪级": _tf_line(multi.get("month")),
+        "周线浪级": _tf_line(multi.get("week")),
+        "主浪判定": ("3浪顶/4浪调整" if day.get("wave3_like") else "5浪顶/4浪调整"),
+        "精确位置": "第4浪的C浪（%s）" % ("C5进行中" if c_sub.get("c5") else "进行中"),
+        "A浪低点": _fmt(day.get("A")),
+        "B浪高点": _fmt(day.get("B")),
+        "C浪低点": _fmt(day.get("C")),
+        "C浪内部": c_inner,
+        "反弹参考位": "C4反弹高点%s" % reb,
+        "下杀目标": "%.2f→%.2f→%.2f" % (
+            fib.get("0.618") or 0, fib.get("1.000") or 0, fib.get("1.618") or 0),
+        "失效位": "上%s 破%s续C 站回%s转5浪" % (
+            _fmt(day.get("top")), _fmt(day.get("A")), _fmt(day.get("B"))),
+        "数据日期": day.get("last_date", ""),
     }]
 
 
@@ -149,13 +176,10 @@ def _analyze_index(index):
     symbol = gen.INDEX_CODES.get(index)
     if not symbol:
         return None
-    bars, _source = gen._fetch_daily(symbol, 260)
-    if not bars:
+    multi = gen._multi_analyze(symbol, 2000)
+    if not multi or not multi.get("day"):
         return None
-    r = gen._analyze(bars)
-    if not r:
-        return None
-    return _to_datas(index, symbol, r)
+    return _to_datas(index, symbol, multi)
 
 
 def _get_datas(query):
