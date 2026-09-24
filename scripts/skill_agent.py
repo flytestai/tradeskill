@@ -548,7 +548,9 @@ def _elliott_skill_dir() -> str:
     if os.path.isdir(sibling):
         return sibling
     # 兜底：在常见技能根目录下搜
-    for root in (os.path.expanduser("~/.bee/plugins/.my-plugin/skills"),
+    #   优先仓库内 committed 的 skills/（持久化），其次 deploy 时生成的 vendor/（gitignored）
+    for root in (os.path.join(SKILL_DIR, "skills"),
+                 os.path.expanduser("~/.bee/plugins/.my-plugin/skills"),
                  "/app/skills", "/app",
                  os.path.join(SKILL_DIR, "vendor")):
         for p in glob.glob(os.path.join(root, "**", "elliott-index-wave"), recursive=True):
@@ -576,7 +578,8 @@ def _extract_wave_section(md: str, limit: int = 2600) -> str:
     if not md:
         return ""
     keys = ("当前浪", "浪级", "结论", "主浪", "备选", "失效", "invalidation",
-            "支撑", "压力", "置信", "confidence", "wave")
+            "支撑", "压力", "置信", "confidence", "wave",
+            "子浪", "C浪", "A浪", "B浪", "斐波那契")
     lines = md.splitlines()
     picked, seen = [], 0
     for i, ln in enumerate(lines):
