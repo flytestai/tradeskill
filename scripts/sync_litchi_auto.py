@@ -61,7 +61,7 @@ TEST_KEYWORDS = ["转发测试", "同步测试", "test", "TEST"]
 GROUPS = {
     "litchi": ("VIP_PUSH_CHAT_ID", "_litchi_watermark.json", "_litchi_loop.lock", "_mentions_state.json", "group"),
     "review": ("REVIEW_CHAT_ID", "_review_watermark.json", "_review_loop.lock", "", "group"),
-    "dm": ("USER_OPEN_ID", "_dm_watermark.json", "_dm_loop.lock", "", "p2p"),
+    "dm": ("DM_CHAT_ID", "_dm_watermark.json", "_dm_loop.lock", "", "p2p"),
 }
 
 # 运行时由 apply_group() 按 --group 填充
