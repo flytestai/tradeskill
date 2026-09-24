@@ -611,6 +611,79 @@ def query_ndx_valuation():
     }
 
 
+# --------------------------------------------------------------------------
+# 纳指ETF（159696）备用数据源：蜜蜂网关不可用（429/降级失败）时，
+# 用腾讯实时行情 + 新浪日K 兜底，保证盘前播报不丢纳指ETF数据。
+# --------------------------------------------------------------------------
+
+_ETF_TENCENT_URL = "https://qt.gtimg.cn/q=sz159696"
+_ETF_SINA_KLINE_URL = ("https://quotes.sina.cn/cn/api/jsonp_v2.php/var%20_="
+                       "/CN_MarketDataService.getKLineData?symbol=sz159696"
+                       "&scale=240&ma=no&datalen={}")
+
+
+def _fetch_tencent_etf_quote():
+    """腾讯实时行情（免密钥）→ (最新价, 涨跌幅)，失败返回 (None, None)。"""
+    try:
+        req = urllib.request.Request(_ETF_TENCENT_URL, headers={
+            "User-Agent": "Mozilla/5.0", "Referer": "http://gu.qq.com"})
+        raw = urllib.request.urlopen(req, timeout=15).read().decode("gbk", "replace")
+        line = raw.strip().split("\n")[0]
+        if "=" not in line:
+            return None, None
+        p = line.split('"')[1].split("~")
+        if len(p) < 35:
+            return None, None
+        return p[3], p[32]
+    except Exception as e:
+        print("[WARN] 腾讯纳指ETF实时行情失败: %s" % e)
+        return None, None
+
+
+def _fetch_sina_etf_closes(datalen=120):
+    """新浪日K（免密钥）→ [(YYYYMMDD, 收盘价), ...]，失败返回 []。"""
+    try:
+        url = _ETF_SINA_KLINE_URL.format(datalen)
+        req = urllib.request.Request(url, headers={
+            "User-Agent": "Mozilla/5.0", "Referer": "https://finance.sina.com.cn/"})
+        text = urllib.request.urlopen(req, timeout=15).read().decode("utf-8", "replace")
+        m = re.search(r"=\s*\((\[.*\])\s*\)", text, re.S)
+        if not m:
+            print("[WARN] 新浪纳指ETF日K解析失败")
+            return []
+        arr = json.loads(m.group(1))
+        out = []
+        for d in arr:
+            try:
+                day = str(d.get("day", "")).replace("-", "")
+                close = float(d.get("close"))
+                if day and close:
+                    out.append((day, close))
+            except (TypeError, ValueError):
+                continue
+        return out
+    except Exception as e:
+        print("[WARN] 新浪纳指ETF日K失败: %s" % e)
+        return []
+
+
+def _query_ndx_etf_backup():
+    """蜜蜂网关不可用时，用腾讯+新浪拼出与接口同构的 item（溢价率缺失由上层降级）。"""
+    price, pct = _fetch_tencent_etf_quote()
+    closes = _fetch_sina_etf_closes(120)
+    if not closes:
+        return {}
+    item = {}
+    if price:
+        item["最新收盘价"] = price
+    if pct:
+        item["最新涨跌幅"] = pct
+    for day, close in closes:
+        item["收盘价[%s]" % day] = str(close)
+    print("[INFO] 纳指ETF已切换备用源(腾讯+新浪)：%d 个交易日" % len(closes))
+    return item
+
+
 def query_ndx_etf():
     """查询易方达纳斯达克100 ETF（159696）走势、均线和溢价率。"""
     item = None
@@ -625,7 +698,9 @@ def query_ndx_etf():
             item = candidate
             break
     if not item:
-        return {}
+        item = _query_ndx_etf_backup()
+        if not item:
+            return {}
     try:
         price = float(item.get("最新收盘价"))
     except (TypeError, ValueError):
@@ -681,7 +756,8 @@ def query_ndx_etf():
     if len(closes) >= 2 and closes[0][1] > 0:
         trend5_start = closes[-5][1] if len(closes) >= 5 else closes[0][1]
         trend5 = (closes[-1][1] / trend5_start - 1) * 100
-        trend20 = (closes[-1][1] / closes[0][1] - 1) * 100
+        trend20_start = closes[-20][1] if len(closes) >= 20 else closes[0][1]
+        trend20 = (closes[-1][1] / trend20_start - 1) * 100
     premiums = []
     for key, value in item.items():
         if key.startswith("折溢价["):
