@@ -163,18 +163,11 @@ if [ -f "$_host_log" ]; then
             [ "$age" -gt 1800 ] && _add "定时任务停摆：日志最新记录距今 $((age/60)) 分钟（$_host_log）"
         fi
 
-        # ★ 时区错位检测：交易时段任务的触发时刻应落在大致 08:00~16:30（北京）。
-        #   查看当天「交易时段类」任务记录，若它们集中在 20:00~04:00
-        #   说明 cron 用错了时区（晚 12h）。
-        trade_ts="$(grep -E '(premarket|intraday|position-monitor|monitor-alerts|summary-close|level)' "$_host_log" \
-                    | grep -v 'verify-' \
-                    | grep -oE '^--- [0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2}' \
-                    | tail -1 | awk '{print $3}')"
-        if [ -n "$trade_ts" ]; then
-            hh="${trade_ts%%:*}"
-            if [ "$hh" -ge 19 ] || [ "$hh" -lt 5 ] 2>/dev/null; then
-                _add "定时任务时区错位：交易类任务最近触发于北京时间 ${trade_ts}（应落在 08:00~16:30）—— 宿主机时区=$(cat /etc/timezone 2>/dev/null)，cron 忽略 CRON_TZ"
-            fi
+        # ★ 时区错位检测：系统时区必须为 Asia/Shanghai
+        #   直接由 timedatectl / /etc/localtime 校验系统时区，彻底消除日志误判。
+        local_tz="$(timedatectl show -p Timezone --value 2>/dev/null || readlink -f /etc/localtime 2>/dev/null | sed 's#.*/zoneinfo/##')"
+        if [ -n "$local_tz" ] && [ "$local_tz" != "Asia/Shanghai" ]; then
+            _add "系统时区异常：当前系统时区为 ${local_tz}（应为 Asia/Shanghai）"
         fi
     fi
 fi
