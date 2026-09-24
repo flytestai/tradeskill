@@ -66,6 +66,7 @@ def main() -> int:
     ap.add_argument("--sender-id", default="")
     ap.add_argument("--sender", default="")
     ap.add_argument("--text", required=True)
+    ap.add_argument("--context", default="", help="附加上下文（如 trade365 量化数据），与问题分开存")
     ap.add_argument("--message-id", default="")
     ap.add_argument("--dry-run", action="store_true")
     args = ap.parse_args()
@@ -80,6 +81,7 @@ def main() -> int:
         "sender": args.sender or "",
         "sender_id": args.sender_id or "",
         "text": text,
+        "context": (args.context or "").strip(),
         "chat_id": args.chat_id,
         "chat_type": "group",
         "create_time": str(int(time.time())),

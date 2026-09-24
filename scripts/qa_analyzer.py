@@ -305,6 +305,8 @@ def process(item: dict, dry_run: bool = False) -> tuple:
     sender_id = item.get("sender_id") or ""
     question = (item.get("text") or "").strip()
     chat_id = (item.get("chat_id") or "").strip()
+    # trade365 桥接附带的量化数据（与问题分开存，见 qa_oneshot --context）
+    extra_ctx = (item.get("context") or "").strip()
 
     if not question:
         return True, "空问题，跳过"      # 空问题视为已处理，避免卡队列
@@ -339,6 +341,10 @@ def process(item: dict, dry_run: bool = False) -> tuple:
     except Exception as e:
         ctx = ""
         log("    ⚠️ 取上下文失败: %s" % e)
+    # trade365 量化数据并入「数据」侧（而不是污染问题本身），
+    # 这样 LLM 把它当参考数据引用，且不会出现在 @问题行导致截断。
+    if extra_ctx:
+        ctx = (extra_ctx + "\n\n" + ctx).strip() if ctx else extra_ctx
     if ctx:
         log("    上下文: %d 字" % len(ctx))
 
