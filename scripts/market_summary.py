@@ -683,20 +683,83 @@ def _fetch_sina_etf_closes(datalen=120):
         return []
 
 
+def _fetch_sina_etf_navs(pages=2):
+    """新浪基金单位净值（免密钥）→ {YYYYMMDD: 单位净值}，失败返回 {}。
+
+    ETF 折溢价 = (价格 - 单位净值) / 单位净值 × 100；单位净值每日盘后
+    公布一次（QDII 常滞后一个交易日），与同花顺/蜜蜂网关口径一致。
+    该接口每页约 21 个交易日，默认取 2 页覆盖近 40 日，支撑
+    「近5日均值 / 历史分位」统计（2026-10-14 修复溢价率缺失时接入）。
+    """
+    merged = {}
+    url_tpl = ("https://stock.finance.sina.com.cn/fundInfo/api/openapi.php/"
+               "CaihuiFundInfoService.getNav?symbol=159696&page={page}&size=100")
+    try:
+        for page in range(1, max(1, pages) + 1):
+            req = urllib.request.Request(url_tpl.format(page=page), headers={
+                "User-Agent": "Mozilla/5.0", "Referer": "https://finance.sina.com.cn/"})
+            raw = urllib.request.urlopen(req, timeout=15).read().decode("utf-8", "replace")
+            data = json.loads(raw or "{}")
+            rows = (((data.get("result") or {}).get("data") or {}).get("data")) or []
+            if not rows:
+                break
+            for r in rows:
+                day = str(r.get("fbrq", ""))[:10].replace("-", "")
+                try:
+                    nav = float(r.get("jjjz"))
+                except (TypeError, ValueError):
+                    continue
+                if day and nav:
+                    merged[day] = nav
+        if not merged:
+            print("[WARN] 新浪纳指ETF净值为空")
+    except Exception as e:
+        print("[WARN] 新浪纳指ETF净值失败: %s" % e)
+    return merged
+
+
 def _query_ndx_etf_backup():
-    """蜜蜂网关不可用时，用腾讯+新浪拼出与接口同构的 item（溢价率缺失由上层降级）。"""
+    """蜜蜂网关不可用时，用腾讯+新浪拼出与接口同构的 item。
+
+    折溢价序列（2026-10-14 修复）：新浪单位净值 × 日K收盘价 →
+    折溢价[YYYYMMDD]；当日值 = 腾讯实时价 ÷ 最新已公布净值
+    （QDII 净值滞后一个交易日，等价于盘中实时折溢价口径）。
+    净值源失败时降级为无折溢价字段，上层显示「溢价率缺失」。
+    """
     price, pct = _fetch_tencent_etf_quote()
     closes = _fetch_sina_etf_closes(120)
     if not closes:
         return {}
+    navs = _fetch_sina_etf_navs(2)
     item = {}
     if price:
         item["最新收盘价"] = price
     if pct:
         item["最新涨跌幅"] = pct
+    if navs:
+        latest_day = sorted(navs)[-1]
+        latest_nav = navs[latest_day]
+        try:
+            base_price = float(price) if price else closes[-1][1]
+        except (TypeError, ValueError):
+            base_price = None
+        if base_price and latest_nav:
+            # 折溢价键必须最先写入：_find_value 取第一条「折溢价*」，
+            # 当日实时值放最前才能成为 premium；日期用北京时间对齐交易所口径。
+            import datetime as _dt
+            today = (_dt.datetime.utcnow() + _dt.timedelta(hours=8)).strftime("%Y%m%d")
+            item["折溢价[%s]" % today] = str(round((base_price / latest_nav - 1) * 100, 2))
     for day, close in closes:
         item["收盘价[%s]" % day] = str(close)
-    print("[INFO] 纳指ETF已切换备用源(腾讯+新浪)：%d 个交易日" % len(closes))
+        if day in navs and navs[day]:
+            item.setdefault("折溢价[%s]" % day,
+                            str(round((close / navs[day] - 1) * 100, 2)))
+    if navs:
+        n_prem = sum(1 for k in item if k.startswith("折溢价["))
+        print("[INFO] 纳指ETF备用源(腾讯+新浪+净值)：净值 %d 日，折溢价 %d 条"
+              % (len(navs), n_prem))
+    else:
+        print("[INFO] 纳指ETF已切换备用源(腾讯+新浪)：%d 个交易日（净值缺失）" % len(closes))
     return item
 
 
@@ -1618,33 +1681,48 @@ def fmt_chg(chg):
 
 
 def wu2198_texts(day, before_time=None):
-    """取 wu2198 当天（可选时间点前）发言原文列表，去 VIP 标记与语气词。"""
+    """取 wu2198 当天（可选时间点前）发言原文列表，去 VIP 标记与语气词。
+    2026-10-16：返回 [(文本, is_vip), ...]，供 raw_view_line 做 VIP 优先选取。"""
     conn = connect_db(DB_PATH)
     try:
         cur = conn.cursor()
-        sql = ("select content from kol_records "
+        sql = ("select content, is_vip from kol_records "
                "where kol_name='wu2198' and record_date like ?")
         params = [day + "%"]
         if before_time:
             sql += " and record_date <= ?"
             params.append(day + " " + before_time)
         sql += " order by record_date asc"
-        rows = [r[0] for r in cur.execute(sql, params)]
+        rows = [(r[0], bool(r[1])) for r in cur.execute(sql, params)]
     finally:
         conn.close()
 
     texts = []
-    for t in rows:
+    for t, v in rows:
         t = clean_wu2198_text(t)
         if t:
-            texts.append(t)
+            texts.append((t, v))
     return texts
 
 
-def raw_view_line(texts):
-    """AI 不可用时的兜底：取最后 2 条原文截断拼接。"""
+def raw_view_line(rows):
+    """AI 不可用/文件陈旧时的兜底：首条（早盘预判）+ 尾条 VIP 优先（收盘定调）。
+    2026-10-16：由「最后 2 条」升级——首条反映 wu 早盘对当日的定位，尾条 VIP
+    反映收盘定调，拼起来是当天观点的完整弧线；当天无 VIP 时退化为首尾两条公开。"""
+    if not rows:
+        return ""
+    vip_rows = [r for r in rows if r[1]]
+    first = (vip_rows[0] if vip_rows else rows[0])[0]
+    last = (vip_rows[-1] if vip_rows else rows[-1])[0]
+    pick = [first] if first == last else [first, last]
+    import re as _re
     out = []
-    for t in texts[-2:]:
+    for t in pick:
+        t = _re.sub(r"收到请回复.*$", "", t)
+        t = _re.sub(r"明白6{2,}.*$", "", t)
+        t = t.rstrip(" ；;，。!！")
+        if not t:
+            continue
         if len(t) > 60:
             t = t[:60] + "…"
         out.append(t)
@@ -1652,10 +1730,37 @@ def raw_view_line(texts):
 
 
 def read_view_line(lunch):
-    """读取蜜蜂任务预生成的一句话观点；不存在/为空返回 None。"""
+    """读取蜜蜂任务预生成的一句话观点；不存在/为空/**非当天生成**时返回 None。
+    2026-10-16：加 mtime 当天判定——蜜蜂管道 2026-09-17 起停摆，旧文件曾被
+    天天采信，导致「wu2198 观点一个月不变」（10-16 事故）。陈旧即回退当天 DB。"""
     fn = "_view_lunch.txt" if lunch else "_view_close.txt"
+    path = os.path.join(SKILL_DIR, "data", fn)
+    tz8 = timezone(timedelta(hours=8))
     try:
-        with open(os.path.join(SKILL_DIR, "data", fn), encoding="utf-8") as f:
+        today = datetime.now(tz8).strftime("%Y-%m-%d")
+        gen_day = datetime.fromtimestamp(os.path.getmtime(path), tz8).strftime("%Y-%m-%d")
+        if gen_day != today:
+            return None
+        with open(path, encoding="utf-8") as f:
+            t = f.read().strip()
+        return t or None
+    except Exception:
+        return None
+
+
+def read_focus_line():
+    """读取 AI 提取的明日关注（_focus_close.txt，gen_daily_view.py 收盘后生成）。
+    2026-10-16：非当天生成/内容为'无'时返回 None → 回退 alert_levels.json。
+    展示层（汇总里的「明日关注」）与告警层（alert_levels 驱动价格告警）
+    分离：AI 只影响汇总展示，不自动改告警位。"""
+    path = os.path.join(SKILL_DIR, "data", "_focus_close.txt")
+    tz8 = timezone(timedelta(hours=8))
+    try:
+        today = datetime.now(tz8).strftime("%Y-%m-%d")
+        gen_day = datetime.fromtimestamp(os.path.getmtime(path), tz8).strftime("%Y-%m-%d")
+        if gen_day != today:
+            return None
+        with open(path, encoding="utf-8") as f:
             t = f.read().strip()
         return t or None
     except Exception:
@@ -1663,7 +1768,18 @@ def read_view_line(lunch):
 
 
 def key_levels_line():
-    """从 alert_levels.json 汇总关键位（确定性，非主观判断）。"""
+    """从 alert_levels.json 汇总关键位（确定性，非主观判断）。
+    2026-10-16：该文件无自动更新管道（手工维护，上次 2026-09-19）。mtime
+    距今超过 7 天时在末尾标注生成日期，避免陈旧关键位冒充「今日关注」。"""
+    tz8 = timezone(timedelta(hours=8))
+    stale = ""
+    try:
+        age = (datetime.now(tz8) - datetime.fromtimestamp(os.path.getmtime(LEVELS_FILE), tz8)).days
+        if age > 7:
+            stale = "（%s 版，待更新）" % datetime.fromtimestamp(
+                os.path.getmtime(LEVELS_FILE), tz8).strftime("%m-%d")
+    except Exception:
+        pass
     try:
         with open(LEVELS_FILE, encoding="utf-8") as f:
             levels = json.load(f)
@@ -1675,7 +1791,7 @@ def key_levels_line():
         lv = "/".join(str(e["level"]) for e in entries if e.get("level") is not None)
         if lv:
             parts.append("%s %s" % (DISPLAY.get(name, name), lv))
-    return "；".join(parts) or "关键位待更新"
+    return ("；".join(parts) + stale) or "关键位待更新"
 
 
 def is_trading_day():
@@ -1725,6 +1841,9 @@ def build_message(lunch=False, premarket=False, intraday=False, afternoon=False)
     else:
         views = read_view_line(lunch) or raw_view_line(texts)
 
+    focus_line = read_focus_line() if not lunch else None
+    focus_line = focus_line or key_levels_line()
+
     title = "每日午间汇总" if lunch else "每日收盘汇总"
     focus_label = "下午关注" if lunch else "明日关注"
     time_label = "%s（午间）" % day if lunch else day
@@ -1736,7 +1855,7 @@ def build_message(lunch=False, premarket=False, intraday=False, afternoon=False)
         "💰 **两市成交额**：%s" % fmt_yi(turnover),
         "💸 **主力资金**：%s" % fund_text,
         "💬 **wu2198观点**：%s" % views,
-        "🎯 **%s**：%s" % (focus_label, key_levels_line()),
+        "🎯 **%s**：%s" % (focus_label, focus_line),
         "---",
         "⚠️ **免责声明**：以上内容仅为信息整理与观点复盘，仅供参考，不构成投资建议。",
     ]

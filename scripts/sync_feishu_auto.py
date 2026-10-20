@@ -25,6 +25,7 @@ wu2198 五号群 消息自动同步（合并版：飞书群拉取 + 大V发言�
   python sync_feishu_auto.py --reset-watermark  # 重置增量水位（下次重新全量拉取）
 """
 import argparse
+import fcntl
 import json
 import os
 import re
@@ -69,6 +70,10 @@ AUTH_CACHE_FILE = os.path.join(SKILL_DIR, "data", "_last_auth_check.txt")
 AUTH_CHECK_INTERVAL = 3600  # 30 秒高频轮询下，授权状态最多每小时检查一次
 LOOP_LOCK_FILE = os.path.join(SKILL_DIR, "data", "_feishu_loop.lock")
 LOOP_STALE_SEC = 180  # 循环锁超过 180 秒未心跳视为残留，可被接管
+# 全局同步互斥锁（2026-10-14）：任意时刻只允许一个同步进程在跑。
+# 盘中每分钟轮 / 兜底 / 盘前 14:55 / 收盘 16:00 强转共用这一把锁，
+# 防止整点双触发并发拉取同一批消息导致 VIP 配图双发（文本有飞书幂等 key 兜底，图片没有）。
+SYNC_ONCE_LOCK_FILE = os.path.join(SKILL_DIR, "data", "_feishu_sync_once.lock")
 
 # Git Bash 的 bash.exe 完整路径（Windows 下 subprocess 调 "bash" 会误调 WSL bash 而失败）
 BASH = find_bash()
@@ -470,7 +475,12 @@ def push_sync_async():
         finally:
             _release_push_lock()
 
-    threading.Thread(target=worker, name="github-sync", daemon=True).start()
+    _t = threading.Thread(target=worker, name="github-sync", daemon=True)
+    _t.start()
+    # 给后台推送 20 秒完成窗口（2026-10-14）：此前主进程立即退出会直接杀掉刚启动的
+    # 推送线程，GitHub 数据只能靠下一轮补推。join(20) 后多数推送能完成；超时则本轮
+    # 照旧返回，结果由下一轮兜底。daemon=True 保证推送卡死时进程仍能退出（锁 600s 自愈）。
+    _t.join(timeout=20)
     print("[SYNC] GitHub 推送已转入后台，不阻塞消息同步")
 
 
@@ -517,8 +527,9 @@ def strip_vip_markers(text):
     return t.strip()
 
 
-#: VIP 配图窗口（分钟）：VIP 文本后 N 分钟内出现的机器人图片视为该条 VIP 的配图，
-#  需一起转发到荔枝群/复盘群（2026-09-22 修复：此前图片因 is_vip=0 被过滤掉）。
+#: VIP 配图窗口（分钟）——已废弃（2026-10-14）：配图判定改为「消息序列连续性」
+#:  （VIP 文本后连续出现的图片跟随转发，出现公开文本即终止，其后的图片不再跟随），
+#:  不再按时间差猜配图。常量保留仅为兼容历史 local_config.env 配置。
 VIP_IMAGE_WINDOW = int(_env_value("VIP_IMAGE_WINDOW", "10"))
 
 VIP_CARD_TITLE = "👑 VIP 尊享・仅 TA 的真爱粉可见"
@@ -601,6 +612,46 @@ def push_to_group(text, ct, is_vip=False, image_path="", chat_id="", idem_prefix
         return False
 
 
+def _acquire_once_lock():
+    """获取全局同步互斥锁（flock 非阻塞）。成功返回 fd，被占用返回 None。
+
+    flock 是内核锁，进程退出（含异常/被 kill）自动释放，无需 stale 清理。
+    """
+    try:
+        fd = os.open(SYNC_ONCE_LOCK_FILE, os.O_CREAT | os.O_RDWR, 0o666)
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        try:
+            os.ftruncate(fd, 0)
+            os.write(fd, str(time.time()).encode())
+        except Exception:
+            pass
+        return fd
+    except OSError:
+        return None
+
+
+def _release_once_lock(fd):
+    try:
+        if fd is not None:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+            os.close(fd)
+    except Exception:
+        pass
+
+
+def _atomic_write_text(path, text):
+    """原子写文本文件：先写同目录临时文件再 os.replace，防进程中断留下半截内容。"""
+    try:
+        d = os.path.dirname(path) or "."
+        os.makedirs(d, exist_ok=True)
+        tmp = "%s.tmp.%d" % (path, os.getpid())
+        with open(tmp, "w", encoding="utf-8") as f:
+            f.write(text)
+        os.replace(tmp, path)
+    except Exception:
+        pass
+
+
 def forward_all_to_group(conn, chat_id, watermark_file, idem_prefix, log_label, vip_only=False):
     """转发 wu2198 发言；vip_only=True 时只发送 VIP，公开微博仅推进水位不转发。"""
     if not chat_id:
@@ -619,29 +670,40 @@ def forward_all_to_group(conn, chat_id, watermark_file, idem_prefix, log_label, 
         "SELECT content, record_date, is_vip, image_path FROM kol_records WHERE kol_name='wu2198' AND record_date > ? ORDER BY record_date ASC",
         (wm,)).fetchall()
     last_ct = wm
-    last_vip_ct = None
+    # 2026-10-14：VIP 配图判定改为「消息序列连续性」——VIP 文本后连续出现的图片
+    # 跟随转发，出现公开文本即终止（其后的图片不再跟随，无论时间差多小）。
+    # 旧实现按「距最近 VIP ≤ VIP_IMAGE_WINDOW 分钟」猜配图：公开消息不清窗，
+    # 公开后的图片落在窗内会被误转发，而间隔超过窗口的真配图又被漏发。
+    # 序列规则与用户预期一致：VIP→图1→图2→公开→图3，只发前三条。
+    # 初始状态按水位前最近一条文本的 is_vip 延续（覆盖跨天/跨轮拉取场景）。
+    try:
+        _prev = cur.execute(
+            "SELECT is_vip FROM kol_records WHERE kol_name='wu2198' AND record_date<=? "
+            "AND (image_path IS NULL OR image_path='') ORDER BY record_date DESC LIMIT 1",
+            (wm,)).fetchone()
+        vip_attach = bool(_prev and _prev[0])
+    except Exception:
+        vip_attach = False
     for content, ct, is_vip, image_path in rows:
-        if content and is_test_message(content):
+        # 测试消息跳过，但 VIP 消息豁免关键词过滤（2026-10-14）：
+        # 「测试/回测」是普通词汇，VIP 是付费内容，宁可多转不可漏转。
+        if content and is_test_message(content) and not is_vip:
             last_ct = ct
             continue
-        if vip_only and not is_vip:
-            # 2026-09-22 修复：VIP 消息后紧跟的图片（wu 常在 VIP 文本后 1~2 条发图，
-            # 时间差通常 < 5 分钟）属于该条 VIP 的配图，必须一起转发。
-            # 判定：图片行 且 与最近一条 VIP 行时间差 <= VIP_IMAGE_WINDOW 分钟。
-            is_vip_image = False
-            if image_path and last_vip_ct:
-                try:
-                    t1 = datetime.strptime(str(ct)[:16], "%Y-%m-%d %H:%M")
-                    t2 = datetime.strptime(str(last_vip_ct)[:16], "%Y-%m-%d %H:%M")
-                    is_vip_image = abs((t1 - t2).total_seconds()) <= VIP_IMAGE_WINDOW * 60
-                except Exception:
-                    is_vip_image = False
-            if not is_vip_image:
-                # 荔枝群只接收 VIP；公开微博直接跳过，但水位仍需前移，避免重复检查。
+        if vip_only:
+            if image_path:
+                if not vip_attach:
+                    # 不在跟图窗口内的图片（前面是公开文本或什么都没有）：跳过
+                    last_ct = ct
+                    continue
+            elif not is_vip:
+                # 公开文本：跳过，并终止跟图窗口（其后的图片不再属于前面的 VIP）
+                vip_attach = False
                 last_ct = ct
                 continue
-        if is_vip:
-            last_vip_ct = ct
+            else:
+                # VIP 文本：转发，并开启新的跟图窗口
+                vip_attach = True
         result = push_to_group(content or "", ct, is_vip=bool(is_vip), image_path=image_path or "",
                                chat_id=chat_id, idem_prefix=idem_prefix, log_label=log_label)
         if result == "skip":
@@ -651,11 +713,7 @@ def forward_all_to_group(conn, chat_id, watermark_file, idem_prefix, log_label, 
             last_ct = ct  # 转发成功
         else:
             break  # 转发失败，不推进水位，下轮重试，避免漏发
-    try:
-        with open(watermark_file, "w", encoding="utf-8") as f:
-            f.write(last_ct)
-    except Exception:
-        pass
+    _atomic_write_text(watermark_file, last_ct)
 
 
 def forward_all_to_litchi_group(conn):
@@ -905,6 +963,26 @@ def run_loop(args):
 
 
 def run_once(args, skip_guard=False):
+    """全局互斥包装（2026-10-14）：同一时刻只允许一个同步进程。
+
+    盘中每分钟轮 / 兜底 / 盘前 14:55 / 收盘 16:00 强转共用一把 flock，
+    防止整点双触发（14:55、16:00 两个 cron 同时到点）并发拉取同一批消息，
+    导致 VIP 配图双发（文本有飞书幂等 key 兜底，图片没有）。flock 进程退出
+    自动释放，无 stale 风险；--dry-run 只读预览不抢锁。
+    """
+    if args.dry_run:
+        return _run_once_inner(args, skip_guard)
+    fd = _acquire_once_lock()
+    if fd is None:
+        print("[SKIP] 另一同步进程正在运行（全局互斥锁占用），本轮跳过")
+        return 0
+    try:
+        return _run_once_inner(args, skip_guard)
+    finally:
+        _release_once_lock(fd)
+
+
+def _run_once_inner(args, skip_guard=False):
     """执行一次完整同步（拉取→去重→入库→VIP推送→GitHub 推送）。返回 0=正常/跳过，1=拉取失败。"""
     if getattr(args, "hourly_fallback", False):
         if not args.force and not skip_guard:
@@ -965,17 +1043,24 @@ def run_once(args, skip_guard=False):
             if not new_watermark or latest > new_watermark:
                 new_watermark = latest
 
-    # 3b. 提取文本/图片
+    # 3b. 提取文本/图片（图片同时标记「序列上紧跟 VIP 文本」状态）
+    # 2026-10-14：VIP 消息后连续出现的图片是该 VIP 的组成部分（用户规则：
+    # VIP→图1→图2→公开消息→图3，则只转发 VIP+图1+图2；出现公开消息即终止
+    # 跟图窗口，其后的图片不再跟随）。此前图片入库 is_vip 恒写 0，转发侧靠
+    # 时间窗猜配图，误跟与漏跟并存；现入库即按序列打真实标记。
     bot_texts = []
     bot_images = []
+    vip_attach = False   # 是否处于「VIP 文本后的跟图窗口」，遇文本即按其 VIP 属性重置
     for m in bot_msgs:
         t = extract_text(m)
         if t:
             bot_texts.append((m.get("create_time", ""), t))
+            vip_attach = is_vip_text(t)
         else:
             img_key = extract_image_key(m)
             if img_key:
-                bot_images.append((m.get("create_time", ""), m.get("message_id", ""), img_key))
+                bot_images.append((m.get("create_time", ""), m.get("message_id", ""),
+                                   img_key, vip_attach))
     print("[3/5] 机器人文本消息 %d 条 / 图片消息 %d 条" % (len(bot_texts), len(bot_images)))
 
     # 4. 入库（按 content_hash 精确去重；增量依据水位；测试消息跳过）
@@ -996,10 +1081,16 @@ def run_once(args, skip_guard=False):
         if not text:
             empty_skipped += 1
             continue
-        if is_test_message(text):
+        if is_test_message(text) and not is_vip_text(text):
+            # VIP 消息豁免关键词过滤（2026-10-14）：「测试/回测」是普通词汇，
+            # VIP 是付费内容，宁可多入库不可漏库（转发侧同样豁免）。
             test_skipped += 1
             continue
-        h = content_hash(text)
+        # 2026-10-16：VIP 消息的 hash 加入时间维度——wu 会跨天复读同一条 VIP 内容
+        # （10-13 13:12 与 10-16 12:28 曾一字不差），纯文本 hash 撞唯一索引被判重，
+        # 导致复读的 VIP 消息漏入库漏转发（10-16 12:28 事故）。加 ct 后：
+        # 同一条消息重拉（同 ct）仍会被判重挡住；跨天复读（不同 ct）正常入库转发。
+        h = content_hash(text + "|" + ct) if is_vip_text(text) else content_hash(text)
         # 精确去重：先查本次批量，再查库（走 content_hash 唯一索引，O(1)）
         if h in seen_hashes:
             dup_skipped += 1
@@ -1034,7 +1125,7 @@ def run_once(args, skip_guard=False):
         seen_img = {r[0] for r in cur.fetchall() if r[0]}
     else:
         seen_img = set()
-    for ct, mid, img_key in reversed(bot_images):
+    for ct, mid, img_key, img_vip in reversed(bot_images):
         img_hash = content_hash("[图片消息]", image_path=img_key)
         if img_hash in seen_img:
             img_dup += 1
@@ -1054,7 +1145,7 @@ def run_once(args, skip_guard=False):
                      record_date, position_size, position_action, position_note, image_path, is_vip, content_hash)
                     VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
                     (args.kol_name, "飞书群", "[图片消息]", extracted, "", ct, None, "", "飞书群图片",
-                     local_path or img_key, 0, img_hash))
+                     local_path or img_key, 1 if img_vip else 0, img_hash))
                 _commit_with_retry(conn)
             except sqlite3.IntegrityError:
                 # 图片已存在（此前可能已部分入库），按重复跳过，避免整轮同步中断
@@ -1119,7 +1210,10 @@ def main():
     ap.add_argument("--dry-run", action="store_true", help="只预览不写库")
     ap.add_argument("--reset-watermark", action="store_true", help="重置增量水位，下次全量拉取")
     ap.add_argument("--no-pull", action="store_true", help="同步前不拉取最新水位")
-    ap.add_argument("--download-images", action="store_true", help="同步时下载图片到 assets/feishu_images/")
+    ap.add_argument("--download-images", dest="download_images", action="store_true", default=True,
+                    help="同步时下载图片到 assets/feishu_images/（默认开启：VIP 跟图转发依赖本地文件）")
+    ap.add_argument("--no-download-images", dest="download_images", action="store_false",
+                    help="关闭图片下载（仅入库 image_key，VIP 配图将无法转发）")
     ap.add_argument("--kol-name", default="wu2198", help="KOL 名称（默认 wu2198）")
     ap.add_argument("--bot-name", default="自定义机器人", help="发言机器人名称（默认 自定义机器人）")
     ap.add_argument("--loop", action="store_true", help="盘中高频循环模式（每 --interval 秒同步一次）")

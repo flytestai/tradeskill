@@ -215,6 +215,35 @@ def _find_indexes(q: str) -> list:
     return found[:3]
 
 
+#: 美股 ticker（全大写 2-6 位词边界）；黑名单排除常见缩写/术语词，
+#: 避免「MA 走势」「PE 估值」「RSI 超买」之类被当成股票代码。
+US_TICKER_RE = re.compile(r"\b([A-Z]{2,6})\b")
+US_TICKER_STOP = {
+    "ETF", "ETFS", "MA", "MACD", "RSI", "BOLL", "KDJ", "WR", "PE", "PB",
+    "ROE", "ROA", "PEG", "PS", "GDP", "CPI", "PPI", "PMI", "AI", "USD",
+    "CNY", "HKD", "IPO", "FOMC", "ESG", "DIF", "DEA", "TTM", "EV", "SH",
+    "SZ", "BJ", "AH", "NA", "NG", "RE", "OK", "GO", "BY", "TO", "AND",
+    "OR", "IN", "ON", "AT", "IS", "IT", "BE", "DO", "IF", "AS", "OF",
+    "UP", "NO", "SO", "MY", "ME", "WE", "HE", "NOT", "ALL", "CAN", "GET",
+    "ROE", "EPS", "ROI", "MDD", "VAR", "CAGR", "YOY", "HOLD", "BUY",
+}
+#: 常见美股中文名 → ticker（问到中文名也能识别；仅收无歧义高频标的）
+US_STOCK_NAMES = {
+    "甲骨文": "ORCL", "苹果": "AAPL", "特斯拉": "TSLA", "英伟达": "NVDA",
+    "微软": "MSFT", "谷歌": "GOOGL", "亚马逊": "AMZN", "脸书": "META",
+    "台积电": "TSM", "英特尔": "INTC", "高通": "QCOM", "博通": "AVGO",
+    "奈飞": "NFLX", "礼来": "LLY", "摩根大通": "JPM", "可口可乐": "KO",
+    "麦当劳": "MCD", "雪佛龙": "CVX", "埃克森美孚": "XOM", "迪士尼": "DIS",
+    "耐克": "NKE", "星巴克": "SBUX", "伯克希尔": "BRK.B",
+}
+
+
+def _is_us_code(code: str) -> bool:
+    """是否美股代码（非 6 位数字即视为美股：ORCL / BRK.B 等）。"""
+    c = (code or "").strip()
+    return bool(c) and not c.isdigit()
+
+
 def _find_stocks(q: str) -> list:
     out = []
     for code in _CODE_RE.findall(q)[:3]:
@@ -222,6 +251,14 @@ def _find_stocks(q: str) -> list:
     for name, code in KNOWN_STOCKS.items():
         if name in q:
             out.append((name, code))
+    # 美股中文名（如「甲骨文」）→ ticker；6 位 A 股优先，不受影响
+    for name, ticker in US_STOCK_NAMES.items():
+        if name in q:
+            out.append((name, ticker))
+    # 美股 ticker（全大写，排除缩写词黑名单）
+    for m in US_TICKER_RE.findall(q or ""):
+        if m not in US_TICKER_STOP:
+            out.append((m, m))
     # 去重（按代码）
     seen, uniq = set(), []
     for n, c in out:
@@ -264,6 +301,19 @@ def route(question: str) -> list:
                        "能建仓", "可以建仓", "值得", "靠谱吗", "怎么样这只",
                        "能不能上车", "上车", "抄底", "追高", "止盈", "止损"))
     for name, code in stocks:
+        if _is_us_code(code):
+            # ---- 美股标的（2026-10-14 新增）：此前 _find_stocks 只认
+            # 6 位 A 股代码与白名单，ORCL/AAPL 等 ticker 不被识别，
+            # 行情/财务/技术指标全部缺失。网关实测支持美股（ORCL.N 等），
+            # 技术面走腾讯公开接口本地计算（stock_data_service 仅支持 A 股）。
+            plan.append(("美股行情·" + name, "stock", (name, code)))
+            plan.append(("美股技术·" + name, "ustechnical", (name, code)))
+            plan.append(("财务·" + name, "finance", (name, code)))
+            plan.append(("资讯·" + name, "news", "%s 美股" % (name or code)))
+            if is_decision or any(w in q for w in
+                                  ("研报", "评级", "目标价", "机构", "券商", "预测")):
+                plan.append(("研报·" + name, "research", name))
+            continue
         plan.append(("行情·" + name, "stock", (name, code)))
         plan.append(("个股数据·" + code, "stockdata", code))
         if is_decision or any(w in q for w in
@@ -409,6 +459,154 @@ def _fmt_selector(datas, label, rows=3):
     return _fmt_datas(datas, "", rows=rows, fields=_FIELDS)
 
 
+# --------------------------------------------------------------------------
+# 美股技术面（腾讯公开接口 + 本地计算；网关/本地 stockdata 不覆盖此层）
+# --------------------------------------------------------------------------
+
+_US_QUOTE_URL = "https://qt.gtimg.cn/q=us%s"
+_US_KLINE_URL = ("https://web.ifzq.gtimg.cn/appstock/app/fqkline/get"
+                 "?param=us%s,day,,,%d,qfq")
+
+
+def _to_f(x):
+    try:
+        v = float(x)
+        return v if v == v else None   # NaN 防护
+    except (TypeError, ValueError):
+        return None
+
+
+def _fetch_us_quote(ticker):
+    """腾讯美股实时行情（GBK）→ dict，失败返回 {}。
+
+    字段实测（usORCL）：p[1]名称 p[2]代码 p[3]现价 p[4]昨收 p[5]开
+    p[30]时间 p[31]涨跌额 p[32]涨跌幅 p[33]高 p[34]低 p[35]币种
+    p[39]PE(TTM) p[46]总市值(亿) p[47]英文全名。
+    """
+    try:
+        req = urllib.request.Request(_US_QUOTE_URL % ticker,
+                                     headers={"User-Agent": "Mozilla/5.0"})
+        text = urllib.request.urlopen(req, timeout=12).read().decode("gbk", "replace")
+        p = text.split('"')[1].split("~")
+        if len(p) < 48:
+            return {}
+        return {
+            "name": p[1], "code": p[2], "price": _to_f(p[3]),
+            "prev": _to_f(p[4]), "open": _to_f(p[5]), "dt": p[30],
+            "chg": _to_f(p[31]), "pct": _to_f(p[32]), "high": _to_f(p[33]),
+            "low": _to_f(p[34]), "currency": p[35], "pe": _to_f(p[39]),
+            "mcap": _to_f(p[45]), "fullname": p[46] if len(p) > 46 else "",
+        }
+    except Exception as e:
+        print("[WARN] 腾讯美股行情失败(%s): %s" % (ticker, e))
+        return {}
+
+
+def _fetch_us_kline(ticker, days=120):
+    """雅虎财经日K（前复权 adjclose）→ [(YYYYMMDD, close), ...]，失败返回 []。
+
+    腾讯美股 fqkline 实测只回 2 条（上市日+最新日），不可用；东财/新浪
+    美股K线在海外节点被拒；本服务器为海外节点，雅虎 chart API 可直连
+    且免密钥。range=6mo ≈ 126 个交易日，满足 MA60/RSI14/MACD(40+)/BOLL20/
+    60日区间所需样本；adjclose 与腾讯实时价口径一致（末条=最新收盘）。
+    """
+    try:
+        req = urllib.request.Request(
+            "https://query1.finance.yahoo.com/v8/finance/chart/%s?interval=1d&range=6mo" % ticker,
+            headers={"User-Agent": "Mozilla/5.0"})
+        raw = urllib.request.urlopen(req, timeout=15).read().decode("utf-8", "replace")
+        data = json.loads(raw or "{}")
+        r = (((data.get("chart") or {}).get("result") or [{}])[0]) or {}
+        ts = r.get("timestamp") or []
+        adj = (((r.get("indicators") or {}).get("adjclose") or [{}])[0]).get("adjclose") or []
+        closes = (((r.get("indicators") or {}).get("close") or [{}])[0]).get("close") or []
+        series = adj if len(adj) >= len(closes) else closes
+        import datetime as _dt
+        out = []
+        for t, c in zip(ts, series):
+            if c is None:
+                continue
+            day = _dt.datetime.fromtimestamp(t, _dt.timezone.utc).strftime("%Y%m%d")
+            out.append((day, float(c)))
+        return out
+    except Exception as e:
+        print("[WARN] 雅虎美股日K失败(%s): %s" % (ticker, e))
+        return []
+
+
+def _fmt_pct(x, suffix="%"):
+    return ("%.2f%s" % (x, suffix)) if isinstance(x, (int, float)) else "--"
+
+
+def _us_technical_snapshot(ticker, name=""):
+    """美股技术面快照：腾讯实时行情 + 日K本地计算 MA/RSI/MACD/BOLL/区间。
+
+    指标函数复用 market_summary（rsi14/macd/bollinger，同口径可追溯）；
+    数据源标注腾讯前复权K线，AI 引用时可区分口径。
+    """
+    q = _fetch_us_quote(ticker)
+    closes = [c for _, c in _fetch_us_kline(ticker, 120)]
+    if not q and not closes:
+        return ""
+    disp = q.get("name") or (name if (name and name != ticker) else ticker)
+    lines = []
+    if q:
+        lines.append("【美股·%s（%s）实时快照（腾讯行情）】" % (disp, q.get("code") or ticker))
+        lines.append("现价 %s（%s %s）｜涨跌 %s（%s）｜昨收 %s｜开 %s｜高 %s｜低 %s" % (
+            q.get("price"), q.get("dt"), q.get("currency"),
+            q.get("chg"), _fmt_pct(q.get("pct")), q.get("prev"),
+            q.get("open"), q.get("high"), q.get("low")))
+        extra = []
+        if q.get("pe") is not None:
+            extra.append("PE(TTM) %.2f" % q["pe"])
+        if q.get("mcap") is not None:
+            extra.append("总市值 %.1f 亿美元" % q["mcap"])
+        if q.get("fullname"):
+            extra.append(q["fullname"])
+        if extra:
+            lines.append("｜".join(extra))
+    if len(closes) >= 5:
+        try:
+            from market_summary import rsi14, macd, bollinger
+            ma5 = sum(closes[-5:]) / 5.0
+            ma20 = sum(closes[-20:]) / 20.0 if len(closes) >= 20 else None
+            ma60 = sum(closes[-60:]) / 60.0 if len(closes) >= 60 else None
+            rsi = rsi14(closes)
+            dif, dea, hist = macd(closes)
+            mid, upper, lower, bpos = bollinger(closes)
+            if ma60 is not None and ma20 is not None:
+                if ma5 > ma20 > ma60:
+                    ma_state = "多头排列"
+                elif ma5 < ma20 < ma60:
+                    ma_state = "空头排列"
+                else:
+                    ma_state = "均线缠绕"
+            else:
+                ma_state = "--"
+            mas = ["MA5 %.2f" % ma5]
+            if ma20 is not None:
+                mas.append("MA20 %.2f" % ma20)
+            if ma60 is not None:
+                mas.append("MA60 %.2f" % ma60)
+            lines.append("【技术面（雅虎日K·前复权 %d 日，本地计算）】%s｜%s" % (
+                len(closes), "｜".join(mas), ma_state))
+            if rsi is not None:
+                lines.append("RSI14 %.1f" % rsi)
+            if dif is not None and dea is not None:
+                cross = "金叉" if dif > dea else "死叉"
+                zone = "零轴上" if dif > 0 else "零轴下"
+                lines.append("MACD %s·%s｜DIF %.2f｜DEA %.2f" % (cross, zone, dif, dea))
+            if mid is not None:
+                lines.append("布林带：上轨 %.2f｜中轨 %.2f｜下轨 %.2f｜位置 %s" % (
+                    upper, mid, lower, _fmt_pct(bpos)))
+            w60 = closes[-60:]
+            hi, lo = max(w60), min(w60)
+            pos = (closes[-1] - lo) / (hi - lo) * 100 if hi > lo else None
+            lines.append("60日区间：高 %.2f｜低 %.2f｜位置 %s" % (hi, lo, _fmt_pct(pos)))
+        except Exception as e:
+            print("[WARN] 美股技术指标计算失败(%s): %s" % (ticker, e))
+    return "\n".join(lines)
+
 def _execute(step, deadline):
     """执行单个技能步骤，返回 (label, text)。"""
     label, kind, payload = step
@@ -441,6 +639,10 @@ def _execute(step, deadline):
             name, code = payload
             d = _call(sid.get("market", "hithink-market-query"), "%s最新价" % (name or code), 3)
             return label, _fmt_stock(d, name)
+
+        if kind == "ustechnical":
+            name, code = payload
+            return label, _us_technical_snapshot(code, name)
 
         if kind == "stockdata":
             out = _run_local(["scripts/stock_data_service.py", "--code", payload,

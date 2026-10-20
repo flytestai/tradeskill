@@ -42,8 +42,11 @@ _SETUP_VERBS = ("设置", "提醒", "通知", "监控", "到价", "盯",
                 "设个", "设一个", "加个", "加一条", "挂个")
 
 #: 疑问句式标志 → 是提问，不是设置，直接交给普通 AI 分析
+#: 2026-10-14 补充选择疑问词（哪些/哪个/哪只…）：「哪些个股可以进入持仓」
+#: 这类提问此前因无问号且不含表内词，绕过排除被误判为设置指令。
 _QUESTION_MARKS = ("吗", "？", "?", "会不会", "能不能", "是否", "怎么样",
-                   "怎么看", "多少", "如何", "什么时候", "何时", "几点")
+                   "怎么看", "多少", "如何", "什么时候", "何时", "几点",
+                   "哪些", "哪个", "哪只", "哪几", "有没有", "是不是", "该不该")
 
 #: 关键位类型关键词 → 归一化类型
 _LEVEL_TYPE_MAP = (
@@ -92,14 +95,43 @@ def _has_price_cond(text):
     return any(w in text for w in ("到价", "触发价", "挂单"))
 
 
+#: 持仓监控「动作」动词：与 持仓/仓位 组合出现才是设置或查询指令。
+#: 「持仓」在投资提问里高频出现（如「哪些个股可以进入持仓」），
+#: 仅裸关键词命中会把普通提问误判成设置指令（2026-10-14 荔枝群案例）。
+_PM_ACTION_VERBS = ("监控", "开启", "打开", "启动", "设置", "开个",
+                    "盯", "提醒", "查询", "看看", "看下")
+
+
+def _is_position_monitor_cmd(text):
+    """是否是「持仓/仓位监控」指令（设置或查询仓位），而非投资讨论句。
+
+    判定（满足其一）：
+      · 整词出现「持仓监控 / 仓位监控」；
+      · 含「几米」（群内查询 wu2198 仓位的惯用语，如「现在几米」）；
+      · 动作动词（监控/开启/打开/设置/盯…）与 持仓/仓位 组合，
+        如「监控仓位」「帮我盯着持仓」「仓位变化提醒我」。
+    纯讨论句（「现在持仓太重了」「哪些可以进入持仓」）返回 False，
+    交回普通 AI 分析。
+    """
+    t = text or ""
+    if "持仓监控" in t or "仓位监控" in t:
+        return True
+    if "几米" in t:
+        return True
+    if any(w in t for w in ("持仓", "仓位")) and             any(w in t for w in _PM_ACTION_VERBS):
+        return True
+    return False
+
+
 def looks_like_setup(text):
+
     """宽松闸门：是否像一条「设置」指令。False 则直接走普通 AI 分析。"""
     t = text or ""
     # 疑问句 → 是提问不是设置
     if any(w in t for w in _QUESTION_MARKS):
         return False
-    # 持仓/仓位监控：无需数字
-    if any(w in t for w in ("仓位", "持仓", "几米")):
+    # 持仓/仓位监控：无需数字，但必须是「指令」而非投资讨论
+    if _is_position_monitor_cmd(t):
         return True
     # 关键位/点位（支撑/压力/… + 数字）
     if any(w in t for w in ("支撑", "压力", "阻力", "关键位", "风控线", "目标位", "点位")) \
@@ -354,8 +386,8 @@ def handle_setup(question, sender="", sender_id="", chat_id="", dry_run=False):
     if not text or not looks_like_setup(text):
         return False, ""
 
-    # 1) 持仓/仓位监控
-    if any(w in text for w in ("仓位", "持仓", "几米")):
+    # 1) 持仓/仓位监控（动作指令，不含纯「持仓」讨论句）
+    if _is_position_monitor_cmd(text):
         return True, _exec_position_monitor(dry_run=dry_run)
 
     # 2) 价格提醒（有明确涨跌/到价条件）

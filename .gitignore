@@ -90,3 +90,8 @@ scripts/deploy/*.bak-*
 scripts/deploy/_a1_watch_state.json
 data/api_keys.json
 scripts/api/*.bak-*
+
+# 2026-10-20: 本地手工备份文件（*.bak.* / *.bak-*）不入库
+scripts/*.bak.*
+scripts/*.bak-*
+scripts/deploy/*.bak.*
